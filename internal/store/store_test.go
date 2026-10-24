@@ -27,6 +27,9 @@ func TestPortableLayout(t *testing.T) {
 	if paths.Instances != filepath.Join(base, ".minecraft", "instances") {
 		t.Fatalf("instances path = %q", paths.Instances)
 	}
+	if paths.Servers != filepath.Join(base, "MGL", "servers.json") {
+		t.Fatalf("servers path = %q", paths.Servers)
+	}
 }
 
 func TestLegacyConfigMigration(t *testing.T) {
@@ -93,6 +96,57 @@ func TestSettingsSecretsMigrateToSecretStore(t *testing.T) {
 	raw, _ = os.ReadFile(paths.Settings)
 	if strings.Contains(string(raw), "new-cf") {
 		t.Fatalf("settings.json contains the new key: %s", raw)
+	}
+}
+
+func TestAIProviderNormalization(t *testing.T) {
+	cases := []struct {
+		provider string
+		model    string
+		want     string
+	}{
+		{"orcarouter", "", "orcarouter"},
+		{"OrcaRouter", "", "orcarouter"},
+		{"orca", "", "orcarouter"},
+		{"", "orcarouter/auto", "orcarouter"},
+		{"", "orca/auto", "orcarouter"},
+		{"", "claude-opus-5-5", "anthropic"},
+		{"", "deepseek-chat", "deepseek"},
+	}
+	for _, test := range cases {
+		if got := normalizeAIProvider(test.provider, test.model); got != test.want {
+			t.Fatalf("normalizeAIProvider(%q, %q) = %q, want %q", test.provider, test.model, got, test.want)
+		}
+	}
+	if got := defaultAIModel("orcarouter"); got != "orcarouter/auto" {
+		t.Fatalf("OrcaRouter default model = %q", got)
+	}
+}
+
+func TestOrcaRouterSettingsLoad(t *testing.T) {
+	paths := PathsFor(t.TempDir())
+	if err := paths.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"aiSearchProvider":"orcarouter","aiSearchModel":"","aiSearchApiKey":"orca-secret"}`
+	if err := os.WriteFile(paths.Settings, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	secrets := secretstore.NewMemory()
+	st, err := OpenWithSecrets(paths, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := st.Settings()
+	if settings.AISearchProvider != "orcarouter" || settings.AISearchModel != "orcarouter/auto" {
+		t.Fatalf("settings = %#v", settings)
+	}
+	if settings.AISearchAPIKey != "orca-secret" {
+		t.Fatalf("key = %q", settings.AISearchAPIKey)
+	}
+	raw, _ := os.ReadFile(paths.Settings)
+	if strings.Contains(string(raw), "orca-secret") {
+		t.Fatalf("settings.json leaked the key: %s", raw)
 	}
 }
 

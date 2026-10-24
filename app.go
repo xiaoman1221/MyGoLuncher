@@ -20,8 +20,10 @@ import (
 	"MyMinecraftGoLuncher/internal/hitokoto"
 	"MyMinecraftGoLuncher/internal/httpx"
 	"MyMinecraftGoLuncher/internal/java"
+	"MyMinecraftGoLuncher/internal/lan"
 	"MyMinecraftGoLuncher/internal/launcher"
 	"MyMinecraftGoLuncher/internal/loader"
+	"MyMinecraftGoLuncher/internal/mcsm"
 	"MyMinecraftGoLuncher/internal/mirror"
 	"MyMinecraftGoLuncher/internal/modpack"
 	"MyMinecraftGoLuncher/internal/modrinth"
@@ -42,11 +44,23 @@ type App struct {
 	paths     store.Paths
 	store     *store.Store
 	accounts  *auth.Store
+	servers   *mcsm.Profiles
+	serverErr string
+	lanSvc    *lan.Service
 	mojang    *mojang.Client
 	javaMgr   *java.Manager
 	loaders   *loader.Installer
 	launcher  *launcher.Launcher
 	initError string
+
+	syncMu sync.Mutex
+
+	lanShare  lanShareState
+	lanSyncMu sync.Mutex
+
+	orcaMu      sync.Mutex
+	orcaCancel  context.CancelFunc
+	orcaLoginID int
 
 	installMu sync.Mutex
 	authMu    sync.Mutex
@@ -116,6 +130,12 @@ func NewApp() *App {
 		return a
 	}
 	a.accounts = accountStore
+	if profiles, profileErr := mcsm.OpenProfiles(paths.Servers, secrets); profileErr != nil {
+		a.serverErr = profileErr.Error()
+	} else {
+		a.servers = profiles
+	}
+	a.lanSvc = lan.New()
 	a.mojang = mojang.New(paths)
 	a.applyMirrorSources()
 	a.javaMgr = java.NewManager(paths)
@@ -126,9 +146,29 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// Peer/world discovery runs for the lifetime of the app so other launcher
+	// clients on the LAN are discovered even when the LAN page is closed.
+	a.startLanBackground()
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	a.lanShare.mu.Lock()
+	if a.lanShare.server != nil {
+		a.lanShare.server.Stop()
+		a.lanShare.server = nil
+		a.lanShare.instanceID = ""
+		a.lanShare.dirs = nil
+	}
+	a.lanShare.mu.Unlock()
+	if a.lanSvc != nil {
+		a.lanSvc.Stop()
+	}
+	a.orcaMu.Lock()
+	if a.orcaCancel != nil {
+		a.orcaCancel()
+		a.orcaCancel = nil
+	}
+	a.orcaMu.Unlock()
 	a.authMu.Lock()
 	if a.msCancel != nil {
 		a.msCancel()
@@ -1160,7 +1200,21 @@ type LaunchState struct {
 
 // LaunchInstance starts Minecraft for an instance. language is the launcher's
 // current UI language and is written to the game's options.txt.
-func (a *App) LaunchInstance(id, language string) (err error) {
+func (a *App) LaunchInstance(id, language string) error {
+	return a.launchInstance(id, language, nil)
+}
+
+// LaunchInstanceToServer starts an instance and joins a Minecraft server
+// directly. 1.20+ uses quick play; older versions use --server/--port.
+func (a *App) LaunchInstanceToServer(id, language, address string) error {
+	server, err := launcher.ParseServerAddress(address)
+	if err != nil {
+		return fmt.Errorf("服务器地址无效: %w", err)
+	}
+	return a.launchInstance(id, language, server)
+}
+
+func (a *App) launchInstance(id, language string, server *launcher.ServerAddress) (err error) {
 	if err := a.ready(); err != nil {
 		return err
 	}
@@ -1207,6 +1261,9 @@ func (a *App) LaunchInstance(id, language string) (err error) {
 	}
 	ring := &logRing{}
 	ring.add("[启动器] 正在启动 " + inst.Name + " · Java " + fmt.Sprint(rt.Major))
+	if server != nil {
+		ring.add("[启动器] 直连服务器 " + server.String())
+	}
 	uiLanguage := strings.TrimSpace(language)
 	if uiLanguage == "" {
 		uiLanguage = a.store.Settings().Language
@@ -1228,6 +1285,7 @@ func (a *App) LaunchInstance(id, language string) (err error) {
 		XUID:          launchAccount.XUID,
 		AuthlibJar:    launchAccount.AuthlibJar,
 		AuthlibServer: launchAccount.AuthlibServer,
+		Server:        server,
 		OnLine: func(line string) {
 			ring.add(line)
 			if a.ctx != nil {

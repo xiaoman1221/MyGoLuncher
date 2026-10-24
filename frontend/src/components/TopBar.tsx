@@ -22,6 +22,8 @@ const pageKeys: Record<PageKey, MessageKey> = {
   instanceSettings: 'topbar.page.instanceSettings',
   resources: 'topbar.page.resources',
   modpacks: 'topbar.page.modpacks',
+  servers: 'topbar.page.servers',
+  lan: 'topbar.page.lan',
   settings: 'topbar.page.settings',
 };
 

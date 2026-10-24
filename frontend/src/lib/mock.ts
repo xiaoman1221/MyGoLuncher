@@ -13,10 +13,12 @@ import type {
   JavaPackage,
   JavaReleaseInfo,
   JavaRuntime,
+  LanSnapshot,
   LaunchState,
   ModpackImportResponse,
   Project,
   ProjectVersion,
+  RemoteMcsmInstance,
   ResourceProject,
   ResourceSearchRequest,
   ResourceSearchResult,
@@ -25,6 +27,10 @@ import type {
   SearchRequest,
   SearchResult,
   ServerPackExportResult,
+  ServerProfile,
+  ServerProfileRequest,
+  ServerStatus,
+  ServerSyncResult,
   Settings,
   UpdateInstanceRequest,
   VersionList,
@@ -200,6 +206,91 @@ let installedJava: JavaRuntime[] = [
     source: 'managed',
   },
 ];
+
+let serverProfiles: ServerProfile[] = [{
+  id: 'demo-mcsm',
+  name: '生存服',
+  panelUrl: 'http://192.168.1.10:23333',
+  daemonId: 'daemon-1',
+  instanceUuid: 'instance-survival',
+  localInstanceId: instances[0]?.id ?? 'instance-1',
+  remoteRoot: '/',
+  syncDirs: ['mods', 'config', 'defaultconfigs', 'resourcepacks'],
+  deleteExtras: false,
+  createdAt: nowMinus(60 * 24 * 12),
+  lastSync: nowMinus(35),
+  apiKeySet: true,
+}];
+
+let serverStatuses: ServerStatus[] = [{
+  profileId: 'demo-mcsm',
+  online: true,
+  status: 3,
+  statusText: 'running',
+  nickname: '生存服',
+}];
+
+let lanSnapshot: LanSnapshot = {
+  running: true,
+  broadcast: true,
+  sharing: false,
+  sharedInstanceId: '',
+  shareDirs: [],
+  worlds: [{
+    id: '192.168.1.20:25565',
+    host: '192.168.1.20',
+    port: 25565,
+    address: '192.168.1.20:25565',
+    motd: 'Alex 的生存世界',
+    version: '1.21.1',
+    online: 2,
+    max: 8,
+    players: [{ name: 'Alex' }, { name: 'Steve' }],
+    source: 'lan',
+    hostName: 'Alex',
+    lastSeen: new Date().toISOString(),
+  }, {
+    id: '192.168.1.31:25566',
+    host: '192.168.1.31',
+    port: 25566,
+    address: '192.168.1.31:25566',
+    motd: '创造建筑服',
+    version: '1.20.1',
+    online: 1,
+    max: 20,
+    players: [{ name: 'Builder' }],
+    source: 'scan',
+    lastSeen: nowMinus(2),
+  }],
+  peers: [{
+    id: 'peer-alex',
+    name: 'Alex',
+    instance: '1.21.1 · Fabric',
+    mcVersion: '1.21.1',
+    address: '192.168.1.20',
+    instanceId: 'instance-remote-alex',
+    loader: 'fabric',
+    loaderVersion: '0.16.10',
+    syncPort: 45678,
+    syncDirs: ['mods', 'shaderpacks', 'resourcepacks'],
+    canSync: true,
+    lastSeen: new Date().toISOString(),
+  }, {
+    id: 'peer-builder',
+    name: 'Builder',
+    instance: '1.20.1 · Forge',
+    mcVersion: '1.20.1',
+    address: '192.168.1.31',
+    instanceId: 'instance-remote-builder',
+    loader: 'forge',
+    loaderVersion: '47.2.0',
+    syncPort: 45679,
+    syncDirs: ['mods', 'config'],
+    canSync: true,
+    lastSeen: nowMinus(1),
+  }],
+  warnings: [],
+};
 
 const paths = {
   base: mockBase,
@@ -968,6 +1059,18 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       settings = { ...(args[0] as Settings) };
       return clone(settings) as T;
     }
+    case 'BeginOrcaRouterLogin':
+      await sleep(900);
+      settings = {
+        ...settings,
+        aiSearchProvider: 'orcarouter',
+        aiSearchModel: 'orcarouter/auto',
+        aiSearchBaseUrl: '',
+        aiSearchApiKey: 'orca-demo-key-1234567890',
+      };
+      return undefined as T;
+    case 'CancelOrcaRouterLogin':
+      return undefined as T;
     case 'GetHitokoto': {
       await sleep(400);
       const quotes: Hitokoto[] = [
@@ -1032,12 +1135,15 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       emit('instances:changed', null);
       return undefined as T;
     }
-    case 'LaunchInstance': {
+    case 'LaunchInstance':
+    case 'LaunchInstanceToServer': {
       const id = String(args[0]);
       const instance = instances.find((i) => i.id === id);
       if (!instance) throw new Error('版本不存在');
       instance.running = true;
-      logs.set(id, ['[启动器] 正在启动 ' + instance.name + ' · Java ' + instance.requiredJava, '[启动器] 正在校验游戏文件…']);
+      const initialLogs = ['[启动器] 正在启动 ' + instance.name + ' · Java ' + instance.requiredJava, '[启动器] 正在校验游戏文件…'];
+      if (method === 'LaunchInstanceToServer') initialLogs.push('[启动器] 直连服务器 ' + String(args[2] ?? ''));
+      logs.set(id, initialLogs);
       emit('launch:state', { instanceId: id, running: true, exitCode: 0, durationSeconds: 0, stoppedByUser: false } satisfies LaunchState);
       emit('instances:changed', null);
       const lines = [
@@ -1314,6 +1420,128 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       if (!settings.defaultJavaPath) settings.defaultJavaPath = runtime.path;
       return clone(runtime) as T;
     }
+    case 'ListServerProfiles':
+      return clone(serverProfiles) as T;
+    case 'SaveServerProfile': {
+      const request = args[0] as ServerProfileRequest;
+      const index = serverProfiles.findIndex((profile) => profile.id === request.id);
+      const previous = index >= 0 ? serverProfiles[index] : undefined;
+      const profile: ServerProfile = {
+        id: request.id || `server-${Date.now()}`,
+        name: request.name.trim() || 'MCSM',
+        panelUrl: request.panelUrl,
+        daemonId: request.daemonId,
+        instanceUuid: request.instanceUuid,
+        localInstanceId: request.localInstanceId,
+        remoteRoot: request.remoteRoot || '/',
+        syncDirs: request.syncDirs,
+        deleteExtras: request.deleteExtras,
+        createdAt: previous?.createdAt ?? new Date().toISOString(),
+        lastSync: previous?.lastSync ?? '',
+        apiKeySet: Boolean(request.apiKey?.trim()) || (Boolean(previous?.apiKeySet) && !request.clearApiKey),
+      };
+      serverProfiles = index >= 0
+        ? serverProfiles.map((item, itemIndex) => itemIndex === index ? profile : item)
+        : [...serverProfiles, profile];
+      if (!serverStatuses.some((status) => status.profileId === profile.id)) {
+        serverStatuses = [...serverStatuses, {
+          profileId: profile.id, online: false, status: 0, statusText: 'stopped', nickname: profile.name,
+        }];
+      }
+      emit('servers:changed', null);
+      return clone(profile) as T;
+    }
+    case 'DeleteServerProfile': {
+      const id = String(args[0]);
+      serverProfiles = serverProfiles.filter((profile) => profile.id !== id);
+      serverStatuses = serverStatuses.filter((status) => status.profileId !== id);
+      emit('servers:changed', null);
+      return undefined as T;
+    }
+    case 'ListMcsmInstances':
+      await sleep(350);
+      return [
+        { daemonId: 'daemon-1', instanceUuid: 'instance-survival', nickname: '生存服', status: 3 },
+        { daemonId: 'daemon-1', instanceUuid: 'instance-creative', nickname: '创造服', status: 0 },
+      ] satisfies RemoteMcsmInstance[] as T;
+    case 'GetServerStatuses':
+      return clone(serverStatuses) as T;
+    case 'StartServer':
+    case 'StopServer':
+    case 'RestartServer': {
+      const id = String(args[0]);
+      const running = method !== 'StopServer';
+      serverStatuses = serverStatuses.map((status) => status.profileId === id
+        ? { ...status, online: running, status: running ? 3 : 0, statusText: running ? 'running' : 'stopped', error: undefined }
+        : status);
+      emit('servers:changed', null);
+      return undefined as T;
+    }
+    case 'SyncServerProfile': {
+      const id = String(args[0]);
+      const profile = serverProfiles.find((item) => item.id === id);
+      await progressTask(`同步到服务器 · ${profile?.name ?? 'MCSM'}`, [
+        '正在扫描本地文件…', '正在对比远端文件…', '正在上传变化文件…', '同步完成',
+      ], 1900);
+      serverProfiles = serverProfiles.map((item) => item.id === id
+        ? { ...item, lastSync: new Date().toISOString() }
+        : item);
+      emit('servers:changed', null);
+      return { uploaded: 3, skipped: 12, deleted: 0, bytes: 24_000_000 } satisfies ServerSyncResult as T;
+    }
+    case 'StartLanDiscovery':
+      lanSnapshot = { ...lanSnapshot, running: true, broadcast: Boolean(args[1]) };
+      emit('lan:changed', clone(lanSnapshot));
+      return clone(lanSnapshot) as T;
+    case 'StopLanDiscovery':
+      lanSnapshot = { ...lanSnapshot, running: false };
+      return undefined as T;
+    case 'StartLanShare': {
+      await sleep(450);
+      lanSnapshot = {
+        ...lanSnapshot,
+        sharing: true,
+        sharedInstanceId: String(args[0] ?? ''),
+        shareDirs: Array.isArray(args[1]) ? (args[1] as string[]) : ['mods', 'shaderpacks', 'resourcepacks'],
+      };
+      emit('lan:changed', clone(lanSnapshot));
+      return clone(lanSnapshot) as T;
+    }
+    case 'StopLanShare':
+      lanSnapshot = { ...lanSnapshot, sharing: false, sharedInstanceId: '', shareDirs: [] };
+      emit('lan:changed', clone(lanSnapshot));
+      return clone(lanSnapshot) as T;
+    case 'SyncFromLanPeer':
+      await progressTask('局域网同步', ['正在读取共享清单…', '正在校验本地文件…', '正在下载模组与光影…', '同步完成'], 1800);
+      return { downloaded: 4, skipped: 7, bytes: 18_000_000 } as T;
+    case 'SetLanBroadcast':
+      lanSnapshot = { ...lanSnapshot, broadcast: Boolean(args[0]) };
+      emit('lan:changed', clone(lanSnapshot));
+      return clone(lanSnapshot) as T;
+    case 'GetLanSnapshot':
+      return clone(lanSnapshot) as T;
+    case 'ScanLanSubnets':
+      await progressTask('扫描局域网服务器', ['正在扫描本地网段…', '正在查询服务器信息…', '扫描完成'], 1800);
+      if (!lanSnapshot.worlds.some((world) => world.id === '192.168.1.42:25565')) {
+        lanSnapshot = {
+          ...lanSnapshot,
+          worlds: [...lanSnapshot.worlds, {
+            id: '192.168.1.42:25565',
+            host: '192.168.1.42',
+            port: 25565,
+            address: '192.168.1.42:25565',
+            motd: '模组生存服',
+            version: '1.21.1',
+            online: 3,
+            max: 10,
+            players: [{ name: 'Alex' }, { name: 'Steve' }, { name: 'Builder' }],
+            source: 'scan',
+            lastSeen: new Date().toISOString(),
+          }],
+        };
+      }
+      emit('lan:changed', clone(lanSnapshot));
+      return clone(lanSnapshot) as T;
     default:
       throw new Error(`演示模式不支持调用 ${method}`);
   }

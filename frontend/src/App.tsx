@@ -18,6 +18,7 @@ import type {
   AccountState,
   Bootstrap,
   InstanceView,
+  LanSnapshot,
   LaunchState,
   PageKey,
   Settings,
@@ -40,6 +41,8 @@ import { VersionsPage } from './pages/VersionsPage';
 import { InstanceSettingsPage } from './pages/InstanceSettingsPage';
 import { ResourcesPage } from './pages/ResourcesPage';
 import { ModpacksPage } from './pages/ModpacksPage';
+import { ServersPage } from './pages/ServersPage';
+import { LanPage } from './pages/LanPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 const THEME_KEY = 'mygoluncher-theme';
@@ -58,6 +61,7 @@ export default function App() {
     return cached ? normalizeLanguage(cached) : detectSystemLanguage();
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [lanPeerCount, setLanPeerCount] = useState(0);
   const [tasks, setTasks] = useState<Record<string, TaskProgress>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [consoleId, setConsoleId] = useState<string | null>(null);
@@ -181,6 +185,19 @@ export default function App() {
   }, [setLanguage]);
 
   useEffect(() => {
+    if (!bootstrap || bootError) return;
+    let alive = true;
+    api.getLanSnapshot()
+      .then((snapshot) => {
+        if (alive) setLanPeerCount(snapshot.peers.length);
+      })
+      .catch(() => {
+        // Discovery may still be starting; the lan:changed event will catch up.
+      });
+    return () => { alive = false; };
+  }, [Boolean(bootstrap), Boolean(bootError)]);
+
+  useEffect(() => {
     if (selectedId) {
       try {
         window.localStorage.setItem(SELECTED_KEY, selectedId);
@@ -218,6 +235,17 @@ export default function App() {
     setLaunchPhase('preparing');
     try {
       await api.launchInstance(id, language);
+    } catch (error) {
+      setLaunchingId(null);
+      pushToast('error', t('app.launchFailed'), (error as Error).message);
+    }
+  }, [pushToast, t, language]);
+
+  const launchToServer = useCallback(async (id: string, address: string) => {
+    setLaunchingId(id);
+    setLaunchPhase('preparing');
+    try {
+      await api.launchInstanceToServer(id, language, address);
     } catch (error) {
       setLaunchingId(null);
       pushToast('error', t('app.launchFailed'), (error as Error).message);
@@ -294,6 +322,9 @@ export default function App() {
       }),
       onEvent<{ instanceId: string }>('launch:window', (payload) => {
         setLaunchingId((current) => current === payload.instanceId ? null : current);
+      }),
+      onEvent<LanSnapshot>('lan:changed', (snapshot) => {
+        setLanPeerCount(snapshot.peers.length);
       }),
       onEvent<LaunchState>('launch:state', (state) => {
         void refreshInstances();
@@ -372,16 +403,18 @@ export default function App() {
     openDataFolder,
     openInstanceFolder,
     launch,
+    launchToServer,
     stop,
     openConsole: (id: string) => { void openConsole(id); },
     pushToast,
     tasks: Object.values(tasks),
+    lanPeerCount,
     isDemo,
   }), [
     bootstrap, instances, settings, accounts, selectedAccount, page, theme, setTheme,
     language, locale, t, setLanguage,
     navigate, selectedId, selectedInstance, launchingId, selectInstance, refreshInstances,
-    reloadBootstrap, saveSettings, openDataFolder, openInstanceFolder, launch, stop,
+    reloadBootstrap, saveSettings, openDataFolder, openInstanceFolder, launch, launchToServer, stop, lanPeerCount,
     openConsole, pushToast, tasks,
   ]);
 
@@ -427,6 +460,8 @@ export default function App() {
     instanceSettings: <InstanceSettingsPage />,
     resources: <ResourcesPage />,
     modpacks: <ModpacksPage />,
+    servers: <ServersPage />,
+    lan: <LanPage />,
     settings: <SettingsPage />,
   };
 

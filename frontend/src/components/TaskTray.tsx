@@ -22,6 +22,9 @@ const stageKeys: Record<string, MessageKey> = {
   natives: 'stage.natives',
   logging: 'stage.logging',
   dependencies: 'stage.dependencies',
+  upload: 'stage.upload',
+  delete: 'stage.delete',
+  scan: 'stage.scan',
 };
 
 export function TaskTray({ tasks }: { tasks: TaskProgress[] }) {

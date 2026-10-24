@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import {
   BadgeCheck,
   Coffee,
@@ -6,6 +6,8 @@ import {
   FolderOpen,
   Globe2,
   Info,
+  Link2,
+  LoaderCircle,
   Moon,
   Quote,
   Save,
@@ -31,9 +33,12 @@ export function SettingsPage() {
   const {
     settings, bootstrap, accounts, selectedAccount, saveSettings, pushToast,
     openDataFolder, openAccounts, isDemo, theme, setTheme, t, language, setLanguage,
+    reloadBootstrap,
   } = useApp();
   const [form, setForm] = useState<Settings | null>(settings ? { ...settings } : null);
   const [saving, setSaving] = useState(false);
+  const [orcaBusy, setOrcaBusy] = useState(false);
+  const orcaCancelled = useRef(false);
 
   useEffect(() => {
     if (settings) setForm({ ...settings });
@@ -78,33 +83,71 @@ export function SettingsPage() {
     patch('language', normalizeLanguage(value));
   };
 
-  const aiProvider = form.aiSearchProvider === 'anthropic' ? 'anthropic' : 'deepseek';
+  const aiProvider = form.aiSearchProvider === 'anthropic'
+    ? 'anthropic'
+    : form.aiSearchProvider === 'orcarouter' ? 'orcarouter' : 'deepseek';
   const isAnthropic = aiProvider === 'anthropic';
-  const aiModelPlaceholder = isAnthropic ? 'claude-opus-5-5' : 'deepseek-chat';
-  const aiBasePlaceholder = isAnthropic ? 'https://api.anthropic.com' : 'https://api.deepseek.com';
-  const aiKeyPlaceholder = isAnthropic ? 'sk-ant-...' : 'sk-...';
+  const isOrcaRouter = aiProvider === 'orcarouter';
+  const aiModelPlaceholder = isAnthropic
+    ? 'claude-opus-5-5'
+    : isOrcaRouter ? 'orcarouter/auto' : 'deepseek-chat';
+  const aiBasePlaceholder = isAnthropic
+    ? 'https://api.anthropic.com'
+    : isOrcaRouter ? 'https://api.orcarouter.ai/v1' : 'https://api.deepseek.com';
+  const aiKeyPlaceholder = isAnthropic ? 'sk-ant-...' : isOrcaRouter ? 'OrcaRouter API Key' : 'sk-...';
   const aiKeyURL = isAnthropic
     ? 'https://console.anthropic.com/settings/keys'
-    : 'https://platform.deepseek.com/api_keys';
+    : isOrcaRouter ? 'https://www.arouter.ai' : 'https://platform.deepseek.com/api_keys';
 
   const changeAIProvider = (provider: string) => {
-    const next = provider === 'anthropic' ? 'anthropic' : 'deepseek';
+    const next = provider === 'anthropic'
+      ? 'anthropic'
+      : provider === 'orcarouter' ? 'orcarouter' : 'deepseek';
     const currentModel = (form.aiSearchModel ?? '').trim();
-    const knownModels = ['deepseek-chat', 'deepseek-reasoner', 'claude-opus-5-5'];
+    const knownModels = ['deepseek-chat', 'deepseek-reasoner', 'claude-opus-5-5', 'orcarouter/auto'];
     patch('aiSearchProvider', next);
     if (next !== aiProvider) {
       patch('aiSearchApiKey', '');
     }
     if (!currentModel || knownModels.includes(currentModel)) {
-      patch('aiSearchModel', next === 'anthropic' ? 'claude-opus-5-5' : 'deepseek-chat');
+      patch('aiSearchModel', next === 'anthropic'
+        ? 'claude-opus-5-5'
+        : next === 'orcarouter' ? 'orcarouter/auto' : 'deepseek-chat');
     }
     const currentBase = (form.aiSearchBaseUrl ?? '').trim().replace(/\/+$/, '');
     if (!currentBase || [
       'https://api.anthropic.com',
       'https://api.deepseek.com',
       'https://api.deepseek.com/v1',
+      'https://api.orcarouter.ai/v1',
     ].includes(currentBase)) {
       patch('aiSearchBaseUrl', '');
+    }
+  };
+
+  const authorizeOrcaRouter = async () => {
+    orcaCancelled.current = false;
+    setOrcaBusy(true);
+    try {
+      await api.beginOrcaRouterLogin();
+      await reloadBootstrap();
+      pushToast('success', t('settings.orcaSuccess'));
+    } catch (error) {
+      if (!orcaCancelled.current) {
+        pushToast('error', t('settings.orcaFailed'), (error as Error).message);
+      }
+    } finally {
+      setOrcaBusy(false);
+      orcaCancelled.current = false;
+    }
+  };
+
+  const cancelOrcaRouter = async () => {
+    orcaCancelled.current = true;
+    try {
+      await api.cancelOrcaRouterLogin();
+    } catch {
+      // The pending request reports the cancellation.
     }
   };
 
@@ -115,7 +158,7 @@ export function SettingsPage() {
         title={<>{t('settings.title')} <span className="title-accent">/</span> MyGoLuncher</>}
         description={t('settings.description')}
         actions={
-          <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={saving || !dirty}>
+          <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={saving || orcaBusy || !dirty}>
             <Save size={15} />
             {saving ? t('common.saving') : dirty ? t('common.saveSettings') : t('common.saved')}
           </button>
@@ -352,6 +395,7 @@ export function SettingsPage() {
             >
               <option value="deepseek">{t('settings.aiProviderDeepSeek')}</option>
               <option value="anthropic">{t('settings.aiProviderAnthropic')}</option>
+              <option value="orcarouter">{t('settings.aiProviderOrcaRouter')}</option>
             </select>
             <span className="field-hint">{t('settings.aiProviderHint')}</span>
           </label>
@@ -375,6 +419,28 @@ export function SettingsPage() {
               autoComplete="off"
             />
           </label>
+          {isOrcaRouter && (
+            <div className="field orca-auth-field">
+              <div className="orca-auth-row">
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => void authorizeOrcaRouter()}
+                  disabled={orcaBusy}
+                >
+                  {orcaBusy ? <LoaderCircle size={14} className="spin" /> : <Link2 size={14} />}
+                  {orcaBusy ? t('settings.orcaWaiting') : t('settings.orcaAuthorize')}
+                </button>
+                {orcaBusy && (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void cancelOrcaRouter()}>
+                    {t('settings.orcaCancel')}
+                  </button>
+                )}
+              </div>
+              <span className="field-hint">{t('settings.orcaHint')}</span>
+              <span className="field-hint">{t('settings.orcaConfigHint')}</span>
+            </div>
+          )}
           <label className="field">
             <span className="field-label">{t('settings.aiBaseURL')}</span>
             <input

@@ -32,6 +32,7 @@ type Paths struct {
 	Settings   string `json:"-"`
 	InstanceDB string `json:"-"`
 	Accounts   string `json:"-"`
+	Servers    string `json:"-"`
 }
 
 // DefaultPaths uses a portable layout next to the running executable:
@@ -115,6 +116,7 @@ func PathsFor(base string) Paths {
 		Settings:   filepath.Join(config, "settings.json"),
 		InstanceDB: filepath.Join(config, "instances.json"),
 		Accounts:   filepath.Join(config, "accounts.json"),
+		Servers:    filepath.Join(config, "servers.json"),
 	}
 }
 
@@ -668,19 +670,31 @@ func normalizeAIProvider(provider, model string) string {
 		return "anthropic"
 	case "deepseek":
 		return "deepseek"
+	case "orcarouter", "orca-router", "orca":
+		return "orcarouter"
 	default:
-		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude") {
+		switch lowerModel := strings.ToLower(strings.TrimSpace(model)); {
+		case strings.HasPrefix(lowerModel, "claude"):
 			return "anthropic"
+		case strings.HasPrefix(lowerModel, "orcarouter/"), strings.HasPrefix(lowerModel, "orca/"):
+			return "orcarouter"
+		case strings.HasPrefix(lowerModel, "deepseek"):
+			return "deepseek"
+		default:
+			return "deepseek"
 		}
-		return "deepseek"
 	}
 }
 
 func defaultAIModel(provider string) string {
-	if provider == "anthropic" {
+	switch provider {
+	case "anthropic":
 		return "claude-opus-5-5"
+	case "orcarouter":
+		return "orcarouter/auto"
+	default:
+		return "deepseek-chat"
 	}
-	return "deepseek-chat"
 }
 
 func normalizeLanguage(value string) string {

@@ -48,10 +48,12 @@ export interface AppContextValue {
   openDataFolder: () => Promise<void>;
   openInstanceFolder: (id: string) => Promise<void>;
   launch: (id: string) => Promise<void>;
+  launchToServer: (id: string, address: string) => Promise<void>;
   stop: (id: string) => Promise<void>;
   openConsole: (id: string) => void;
   pushToast: (kind: ToastKind, title: string, message?: string) => void;
   tasks: TaskProgress[];
+  lanPeerCount: number;
   isDemo: boolean;
 }
 

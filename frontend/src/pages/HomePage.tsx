@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Boxes,
   Coffee,
@@ -20,6 +20,8 @@ import { EmptyState } from '../components/EmptyState';
 import { greetingKey, loaderLabel, loaderTone, relativeTime } from '../lib/format';
 import type { Hitokoto } from '../lib/types';
 
+const HITOKOTO_ROTATE_MS = 5000;
+
 export function HomePage() {
   const {
     instances, selectedInstance, selectedId, selectInstance, settings, selectedAccount,
@@ -29,6 +31,7 @@ export function HomePage() {
   const [hitokoto, setHitokoto] = useState<Hitokoto | null>(null);
   const [hitokotoLoading, setHitokotoLoading] = useState(true);
   const [hitokotoError, setHitokotoError] = useState('');
+  const rotating = useRef(false);
 
   const loadHitokoto = useCallback(async () => {
     setHitokotoLoading(true);
@@ -42,9 +45,32 @@ export function HomePage() {
     }
   }, []);
 
+  // Background refresh for the five-second rotation. It deliberately does not
+  // toggle the loading state, so the quote area never flickers.
+  const rotateHitokoto = useCallback(async () => {
+    if (rotating.current) return;
+    rotating.current = true;
+    try {
+      const next = await api.getHitokoto();
+      setHitokoto((current) => (next.text && next.text !== current?.text ? next : current ?? next));
+      setHitokotoError('');
+    } catch {
+      // Keep the current quote when a background refresh fails.
+    } finally {
+      rotating.current = false;
+    }
+  }, []);
+
   useEffect(() => {
     void loadHitokoto();
   }, [loadHitokoto]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void rotateHitokoto();
+    }, HITOKOTO_ROTATE_MS);
+    return () => window.clearInterval(timer);
+  }, [rotateHitokoto]);
 
   const player = selectedAccount?.name ?? settings?.playerName ?? 'Steve';
   const running = instances.filter((instance) => instance.running);
@@ -156,13 +182,13 @@ export function HomePage() {
           </button>
         </div>
         {hitokoto ? (
-          <>
+          <div className="hitokoto-rotator" key={hitokoto.text}>
             <p className="hitokoto-text">“{hitokoto.text}”</p>
             <div className="hitokoto-meta">
               <span>—— {hitokotoSource}</span>
               <span className="hitokoto-tag"><Quote size={11} /> {t('home.hitokotoTag')}</span>
             </div>
-          </>
+          </div>
         ) : hitokotoLoading ? (
           <div className="hitokoto-skeleton">
             <span className="skeleton skeleton-line wide" />

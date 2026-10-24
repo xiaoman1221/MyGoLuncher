@@ -17,14 +17,22 @@ import type {
   JavaPackage,
   JavaReleaseInfo,
   JavaRuntime,
+  LanSnapshot,
+  LanSyncResult,
+  McsmConnectRequest,
   ModpackImportResponse,
   ProjectVersion,
   ResourceSearchRequest,
   ResourceSearchResult,
   ResourceVersion,
+  RemoteMcsmInstance,
   SearchRequest,
   SearchResult,
   ServerPackExportResult,
+  ServerProfile,
+  ServerProfileRequest,
+  ServerStatus,
+  ServerSyncResult,
   Settings,
   UpdateInstanceRequest,
   VersionList,
@@ -61,6 +69,8 @@ export const api = {
   getInstances: () => call<InstanceView[]>('GetInstances'),
   saveSettings: (settings: Settings) => call<Settings>('SaveSettings', settings),
   getHitokoto: () => call<Hitokoto>('GetHitokoto'),
+  beginOrcaRouterLogin: () => call<void>('BeginOrcaRouterLogin'),
+  cancelOrcaRouterLogin: () => call<void>('CancelOrcaRouterLogin'),
   testDownloadMirrors: (customs: MirrorConfig[]) =>
     call<MirrorSpeedResult[]>('TestDownloadMirrors', customs),
 
@@ -90,6 +100,8 @@ export const api = {
     call<void>('DeleteInstance', id, deleteFiles),
 
   launchInstance: (id: string, language: string) => call<void>('LaunchInstance', id, language),
+  launchInstanceToServer: (id: string, language: string, address: string) =>
+    call<void>('LaunchInstanceToServer', id, language, address),
   stopInstance: (id: string) => call<void>('StopInstance', id),
   getInstanceLog: (id: string) => call<string[]>('GetInstanceLog', id),
   openInstanceFolder: (id: string) => call<void>('OpenInstanceFolder', id),
@@ -130,4 +142,28 @@ export const api = {
   getJavaReleases: () => call<JavaReleaseInfo>('GetJavaReleases'),
   getJavaPackage: (feature: number) => call<JavaPackage>('GetJavaPackage', feature),
   installJava: (feature: number) => call<JavaRuntime>('InstallJava', feature),
+
+  listServerProfiles: () => call<ServerProfile[]>('ListServerProfiles'),
+  saveServerProfile: (request: ServerProfileRequest) =>
+    call<ServerProfile>('SaveServerProfile', request),
+  deleteServerProfile: (id: string) => call<void>('DeleteServerProfile', id),
+  listMcsmInstances: (request: McsmConnectRequest) =>
+    call<RemoteMcsmInstance[]>('ListMcsmInstances', request),
+  getServerStatuses: () => call<ServerStatus[]>('GetServerStatuses'),
+  startServer: (id: string) => call<void>('StartServer', id),
+  stopServer: (id: string) => call<void>('StopServer', id),
+  restartServer: (id: string) => call<void>('RestartServer', id),
+  syncServerProfile: (id: string) => call<ServerSyncResult>('SyncServerProfile', id),
+
+  startLanDiscovery: (instanceId: string, broadcast: boolean) =>
+    call<LanSnapshot>('StartLanDiscovery', instanceId, broadcast),
+  stopLanDiscovery: () => call<void>('StopLanDiscovery'),
+  startLanShare: (instanceId: string, dirs: string[]) =>
+    call<LanSnapshot>('StartLanShare', instanceId, dirs),
+  stopLanShare: () => call<LanSnapshot>('StopLanShare'),
+  syncFromLanPeer: (peerId: string, targetInstanceId: string) =>
+    call<LanSyncResult>('SyncFromLanPeer', peerId, targetInstanceId),
+  setLanBroadcast: (enabled: boolean) => call<LanSnapshot>('SetLanBroadcast', enabled),
+  getLanSnapshot: () => call<LanSnapshot>('GetLanSnapshot'),
+  scanLanSubnets: () => call<LanSnapshot>('ScanLanSubnets'),
 };

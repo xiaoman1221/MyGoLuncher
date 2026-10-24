@@ -397,7 +397,136 @@ export interface AuthlibServer {
   url: string;
 }
 
-export type PageKey = 'home' | 'versions' | 'instanceSettings' | 'resources' | 'modpacks' | 'settings';
+export type ServerSyncDir =
+  | 'mods'
+  | 'config'
+  | 'defaultconfigs'
+  | 'scripts'
+  | 'kubejs'
+  | 'datapacks'
+  | 'resourcepacks'
+  | 'shaderpacks';
+
+export interface ServerProfile {
+  id: string;
+  name: string;
+  panelUrl: string;
+  daemonId: string;
+  instanceUuid: string;
+  localInstanceId: string;
+  remoteRoot: string;
+  syncDirs: ServerSyncDir[];
+  deleteExtras: boolean;
+  createdAt?: string;
+  lastSync?: string;
+  apiKeySet: boolean;
+}
+
+export interface ServerProfileRequest {
+  id?: string;
+  name: string;
+  panelUrl: string;
+  daemonId: string;
+  instanceUuid: string;
+  localInstanceId: string;
+  remoteRoot: string;
+  syncDirs: ServerSyncDir[];
+  deleteExtras: boolean;
+  apiKey?: string;
+  clearApiKey?: boolean;
+}
+
+export interface McsmConnectRequest {
+  profileId?: string;
+  panelUrl?: string;
+  apiKey?: string;
+}
+
+export interface RemoteMcsmInstance {
+  daemonId: string;
+  instanceUuid: string;
+  nickname: string;
+  status: number;
+}
+
+export interface ServerStatus {
+  profileId: string;
+  online: boolean;
+  status: number;
+  statusText: string;
+  nickname: string;
+  error?: string;
+}
+
+export interface ServerSyncResult {
+  uploaded: number;
+  skipped: number;
+  deleted: number;
+  bytes: number;
+}
+
+export interface LanPlayer {
+  name: string;
+}
+
+export interface LanWorld {
+  id: string;
+  host: string;
+  port: number;
+  address: string;
+  motd: string;
+  version: string;
+  online: number;
+  max: number;
+  players: LanPlayer[];
+  source: 'lan' | 'scan' | string;
+  hostName?: string;
+  lastSeen: string;
+}
+
+export type LanShareDir = 'mods' | 'shaderpacks' | 'resourcepacks' | 'config';
+
+export interface LanPeer {
+  id: string;
+  name: string;
+  instance: string;
+  mcVersion: string;
+  address: string;
+  instanceId?: string;
+  loader?: string;
+  loaderVersion?: string;
+  syncPort?: number;
+  syncDirs?: string[];
+  canSync: boolean;
+  lastSeen: string;
+}
+
+export interface LanSnapshot {
+  running: boolean;
+  broadcast: boolean;
+  sharing: boolean;
+  sharedInstanceId?: string;
+  shareDirs?: string[];
+  worlds: LanWorld[];
+  peers: LanPeer[];
+  warnings?: string[];
+}
+
+export interface LanSyncResult {
+  downloaded: number;
+  skipped: number;
+  bytes: number;
+}
+
+export type PageKey =
+  | 'home'
+  | 'versions'
+  | 'instanceSettings'
+  | 'resources'
+  | 'modpacks'
+  | 'servers'
+  | 'lan'
+  | 'settings';
 export type Theme = 'dark' | 'light';
 export type ResourceType = 'mod' | 'shader' | 'resourcepack' | 'datapack' | 'modpack';
 export type ResourceSource = 'modrinth' | 'curseforge';

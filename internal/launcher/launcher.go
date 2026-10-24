@@ -49,6 +49,9 @@ type Options struct {
 	AuthlibJar    string
 	AuthlibServer string
 
+	// Server optionally connects directly to a Minecraft server after launch.
+	Server *ServerAddress
+
 	OnLine func(line string)
 }
 
@@ -453,12 +456,16 @@ func (l *Launcher) buildArguments(merged mojang.Version, opts Options, gameDir, 
 		"quickPlaySingleplayer": "",
 		"quickPlayMultiplayer":  "",
 	}
+	quickPlay := opts.Server != nil && supportsQuickPlay(merged)
+	if quickPlay {
+		values["quickPlayMultiplayer"] = opts.Server.String()
+	}
 	features := map[string]bool{
 		"is_demo_user":               false,
 		"has_custom_resolution":      false,
-		"has_quick_plays_support":    false,
+		"has_quick_plays_support":    quickPlay,
 		"is_quick_play_singleplayer": false,
-		"is_quick_play_multiplayer":  false,
+		"is_quick_play_multiplayer":  quickPlay,
 		"is_quick_play_realms":       false,
 	}
 
@@ -542,7 +549,25 @@ func (l *Launcher) buildArguments(merged mojang.Version, opts Options, gameDir, 
 	if len(gameArgs) == 0 {
 		return nil, nil, errors.New("版本档案缺少游戏启动参数")
 	}
+	if opts.Server != nil && !quickPlay {
+		// Minecraft removed --server/--port in 1.20 in favour of quick play.
+		// Older versions still accept these direct-connect arguments.
+		gameArgs = append(gameArgs, "--server", opts.Server.HostArg(), "--port", fmt.Sprintf("%d", opts.Server.Port))
+	}
 	return jvmArgs, gameArgs, nil
+}
+
+// supportsQuickPlay reports whether the version metadata includes the 1.20+
+// quick play argument. This is more reliable than parsing snapshot names.
+func supportsQuickPlay(version mojang.Version) bool {
+	for _, argument := range version.Arguments.Game {
+		for _, value := range argument.Value {
+			if strings.Contains(value, "quickPlayMultiplayer") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var unknownPlaceholder = regexp.MustCompile(`\$\{[^}]+\}`)

@@ -21,17 +21,6 @@ import (
 	"MyMinecraftGoLuncher/internal/httpx"
 )
 
-const (
-	// ProviderDeepSeek uses DeepSeek's OpenAI-compatible chat API.
-	ProviderDeepSeek = "deepseek"
-	// ProviderAnthropic uses the Anthropic Claude Messages API.
-	ProviderAnthropic = "anthropic"
-
-	DefaultDeepSeekBaseURL = "https://api.deepseek.com"
-	DefaultDeepSeekModel   = "deepseek-chat"
-	DefaultAnthropicModel  = "claude-opus-5-5"
-)
-
 const systemPrompt = `You convert Minecraft launcher search queries into concise English keyword queries for Modrinth and CurseForge.
 
 Rules:
@@ -52,8 +41,8 @@ type Config struct {
 
 // DefaultModelForProvider returns the standard model for a provider.
 func DefaultModelForProvider(provider string) string {
-	if normalizeProvider(provider) == ProviderAnthropic {
-		return DefaultAnthropicModel
+	if config, ok := LookupProvider(provider); ok {
+		return config.DefaultModel
 	}
 	return DefaultDeepSeekModel
 }
@@ -64,6 +53,8 @@ func normalizeProvider(provider string) string {
 		return ProviderAnthropic
 	case "deepseek":
 		return ProviderDeepSeek
+	case "orcarouter", "orca-router", "orca":
+		return ProviderOrcaRouter
 	default:
 		return ""
 	}
@@ -78,11 +69,10 @@ func TranslateQuery(ctx context.Context, cfg Config, query string) (string, erro
 	model := strings.TrimSpace(cfg.Model)
 	provider := normalizeProvider(cfg.Provider)
 	if provider == "" {
-		if strings.HasPrefix(strings.ToLower(model), "claude") {
-			provider = ProviderAnthropic
-		} else {
-			provider = ProviderDeepSeek
-		}
+		provider = ModelProvider(model)
+	}
+	if provider == "" {
+		provider = ProviderDeepSeek
 	}
 	if model == "" {
 		model = DefaultModelForProvider(provider)
@@ -90,6 +80,8 @@ func TranslateQuery(ctx context.Context, cfg Config, query string) (string, erro
 	switch provider {
 	case ProviderAnthropic:
 		return translateAnthropic(ctx, cfg, model, query)
+	case ProviderOrcaRouter:
+		return translateOrcaRouter(ctx, cfg, model, query)
 	default:
 		return translateDeepSeek(ctx, cfg, model, query)
 	}

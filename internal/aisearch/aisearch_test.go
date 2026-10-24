@@ -108,11 +108,15 @@ func TestProviderDefaults(t *testing.T) {
 	if DefaultModelForProvider(ProviderAnthropic) != "claude-opus-5-5" {
 		t.Fatal("unexpected Anthropic default model")
 	}
+	if DefaultModelForProvider(ProviderOrcaRouter) != "orcarouter/auto" {
+		t.Fatal("unexpected OrcaRouter default model")
+	}
 }
 
 func TestTranslateQueryRequiresKey(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	t.Setenv("DEEPSEEK_API_KEY", "")
+	t.Setenv("ORCA_KEY", "")
 	if _, err := TranslateQuery(context.Background(), Config{}, "钠"); err == nil {
 		t.Fatal("missing API key should fail")
 	}

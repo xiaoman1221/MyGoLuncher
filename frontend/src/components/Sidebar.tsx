@@ -1,4 +1,4 @@
-import { Boxes, FolderOpen, Home, LayoutList, PackageOpen, Settings, Settings2, TerminalSquare } from 'lucide-react';
+import { Boxes, FolderOpen, Home, LayoutList, PackageOpen, RadioTower, Server, Settings, Settings2, TerminalSquare } from 'lucide-react';
 import { useApp } from '../lib/app-context';
 import { accountKindKey } from '../lib/i18n';
 import { cn, initials } from '../lib/format';
@@ -7,7 +7,7 @@ import { LogoMark } from './LogoMark';
 
 const navItems: Array<{
   key: PageKey;
-  labelKey: 'common.home' | 'common.versionDownload' | 'instanceSettings.title' | 'resources.title' | 'modpacks.title' | 'common.settings';
+  labelKey: 'common.home' | 'common.versionDownload' | 'instanceSettings.title' | 'resources.title' | 'modpacks.title' | 'servers.title' | 'lan.title' | 'common.settings';
   icon: typeof Home;
 }> = [
   { key: 'home', labelKey: 'common.home', icon: Home },
@@ -15,13 +15,15 @@ const navItems: Array<{
   { key: 'instanceSettings', labelKey: 'instanceSettings.title', icon: Settings2 },
   { key: 'resources', labelKey: 'resources.title', icon: LayoutList },
   { key: 'modpacks', labelKey: 'modpacks.title', icon: PackageOpen },
+  { key: 'servers', labelKey: 'servers.title', icon: Server },
+  { key: 'lan', labelKey: 'lan.title', icon: RadioTower },
   { key: 'settings', labelKey: 'common.settings', icon: Settings },
 ];
 
 export function Sidebar() {
   const {
     page, navigate, settings, instances, selectedAccount, openAccounts,
-    openConsole, openDataFolder, bootstrap, t,
+    openConsole, openDataFolder, bootstrap, lanPeerCount, t,
   } = useApp();
   const running = instances.filter((instance) => instance.running);
   const player = selectedAccount?.name ?? settings?.playerName ?? 'Steve';
@@ -53,6 +55,9 @@ export function Sidebar() {
               <span>{t(item.labelKey)}</span>
               {item.key === 'home' && instances.length > 0 && (
                 <span className="nav-badge">{instances.length}</span>
+              )}
+              {item.key === 'lan' && lanPeerCount > 0 && (
+                <span className="nav-badge">{lanPeerCount}</span>
               )}
             </button>
           );
