@@ -300,6 +300,8 @@
 
 /* Topbar */
 .topbar {
+  --topbar-pad: 30px;
+  --wails-draggable: drag;
   position: relative;
   z-index: 20;
   display: flex;
@@ -308,10 +310,17 @@
   gap: 20px;
   height: 64px;
   flex: 0 0 64px;
-  padding: 0 30px;
+  padding: 0 var(--topbar-pad);
   border-bottom: 1px solid var(--line);
   background: var(--topbar-bg);
   backdrop-filter: blur(16px);
+  user-select: none;
+}
+
+.topbar button,
+.topbar input,
+.topbar a {
+  --wails-draggable: no-drag;
 }
 
 .topbar-left {
@@ -423,6 +432,38 @@
   white-space: nowrap;
 }
 
+.window-controls {
+  --wails-draggable: no-drag;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  flex: 0 0 auto;
+  gap: 2px;
+  margin-left: 2px;
+  margin-right: calc(var(--topbar-pad) * -1);
+}
+
+.window-control {
+  --wails-draggable: no-drag;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 100%;
+  color: var(--muted);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.window-control:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.window-control.is-close:hover {
+  background: #d93f3a;
+  color: #ffffff;
+}
+
 /* Page header */
 .page-header {
   display: flex;
@@ -464,13 +505,14 @@
 @media (max-width: 1220px) {
   :root { --sidebar-w: 210px; }
   .page-stage { padding: 24px 25px 70px; }
-  .topbar { padding: 0 24px; }
+  .topbar { --topbar-pad: 24px; }
   .topbar-mode { display: none; }
 }
 
 @media (max-width: 1080px) {
   .page-header { flex-direction: column; align-items: flex-start; gap: 16px; }
   .page-header-actions { padding-bottom: 0; }
-  .topbar { padding: 0 20px; }
+  .topbar { --topbar-pad: 20px; }
   .page-stage { padding: 22px 20px 64px; }
+  .window-control { width: 38px; }
 }

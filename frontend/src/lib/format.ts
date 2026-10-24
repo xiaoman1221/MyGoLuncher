@@ -33,22 +33,27 @@ export function formatBytes(bytes: number): string {
   return `${size.toFixed(size >= 100 || index === 0 ? 0 : 1)} ${units[index]}`;
 }
 
-export function formatDate(value: string | Date | undefined): string {
-  if (!value) return '从未';
+export function formatCompactNumber(value: number, locale = 'zh-CN'): string {
+  if (!Number.isFinite(value)) return '0';
+  return new Intl.NumberFormat(locale, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+}
+
+export function formatDate(value: string | Date | undefined, locale = 'zh-CN', fallback = '—'): string {
+  if (!value) return fallback;
   const date = typeof value === 'string' ? new Date(value) : value;
-  if (Number.isNaN(date.getTime()) || date.getFullYear() < 1971) return '从未';
-  return new Intl.DateTimeFormat('zh-CN', {
+  if (Number.isNaN(date.getTime()) || date.getFullYear() < 1971) return fallback;
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric',
     month: '2-digit',
     day: '2-digit',
   }).format(date);
 }
 
-export function formatDateTime(value: string | Date | undefined): string {
+export function formatDateTime(value: string | Date | undefined, locale = 'zh-CN'): string {
   if (!value) return '—';
   const date = typeof value === 'string' ? new Date(value) : value;
   if (Number.isNaN(date.getTime())) return '—';
-  return new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat(locale, {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -56,14 +61,14 @@ export function formatDateTime(value: string | Date | undefined): string {
   }).format(date);
 }
 
-export function relativeTime(value: string | undefined): string {
-  if (!value) return '尚未启动';
+export function relativeTime(value: string | undefined, locale = 'zh-CN', fallback = '—'): string {
+  if (!value) return fallback;
   const date = new Date(value);
-  if (Number.isNaN(date.getTime()) || date.getFullYear() < 1971) return '尚未启动';
+  if (Number.isNaN(date.getTime()) || date.getFullYear() < 1971) return fallback;
   const diff = date.getTime() - Date.now();
   const abs = Math.abs(diff);
-  const formatter = new Intl.RelativeTimeFormat('zh-CN', { numeric: 'auto' });
-  if (abs < 60_000) return '刚刚';
+  const formatter = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
+  if (abs < 60_000) return formatter.format(0, 'second');
   if (abs < 3_600_000) return formatter.format(Math.round(diff / 60_000), 'minute');
   if (abs < 86_400_000) return formatter.format(Math.round(diff / 3_600_000), 'hour');
   if (abs < 2_592_000_000) return formatter.format(Math.round(diff / 86_400_000), 'day');
@@ -82,7 +87,7 @@ export function formatPlayTime(minutes: number): string {
   return `${Math.round(hours)} 小时`;
 }
 
-export function loaderLabel(loader: string): string {
+export function loaderLabel(loader: string, vanillaLabel = '原版'): string {
   switch (loader.toLowerCase()) {
     case 'fabric':
       return 'Fabric';
@@ -93,7 +98,7 @@ export function loaderLabel(loader: string): string {
     case 'neoforge':
       return 'NeoForge';
     default:
-      return '原版';
+      return vanillaLabel;
   }
 }
 
@@ -129,13 +134,13 @@ export function accentFromString(value: string): string {
   return `hsl(${hue} 55% 45%)`;
 }
 
-export function greeting(): string {
+export function greetingKey(): 'greeting.late' | 'greeting.morning' | 'greeting.noon' | 'greeting.afternoon' | 'greeting.evening' {
   const hour = new Date().getHours();
-  if (hour < 6) return '夜深了';
-  if (hour < 11) return '早上好';
-  if (hour < 14) return '中午好';
-  if (hour < 19) return '下午好';
-  return '晚上好';
+  if (hour < 6) return 'greeting.late';
+  if (hour < 11) return 'greeting.morning';
+  if (hour < 14) return 'greeting.noon';
+  if (hour < 19) return 'greeting.afternoon';
+  return 'greeting.evening';
 }
 
 export function stageLabel(stage: string): string {

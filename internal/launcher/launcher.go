@@ -39,6 +39,7 @@ type Options struct {
 	Instance store.Instance
 	Settings store.Settings
 	JavaPath string
+	GameDir  string
 
 	PlayerName    string
 	PlayerUUID    string
@@ -87,6 +88,14 @@ func (p *Process) Err() error {
 // Duration returns elapsed run time.
 func (p *Process) Duration() time.Duration { return time.Since(p.StartedAt) }
 
+// PID returns the operating-system process ID of the Java game.
+func (p *Process) PID() int {
+	if p.cmd != nil && p.cmd.Process != nil {
+		return p.cmd.Process.Pid
+	}
+	return 0
+}
+
 // Stop terminates the process tree.
 func (p *Process) Stop() error {
 	var err error
@@ -127,7 +136,10 @@ func (l *Launcher) Start(ctx context.Context, opts Options) (*Process, error) {
 	if _, err := os.Stat(opts.JavaPath); err != nil {
 		return nil, fmt.Errorf("Java 不存在: %w", err)
 	}
-	gameDir := filepath.Join(l.Paths.Instances, inst.ID)
+	gameDir := strings.TrimSpace(opts.GameDir)
+	if gameDir == "" {
+		gameDir = filepath.Join(l.Paths.Instances, inst.ID)
+	}
 	if !filepath.IsAbs(gameDir) {
 		gameDir, _ = filepath.Abs(gameDir)
 	}

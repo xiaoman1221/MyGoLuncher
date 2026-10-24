@@ -1,4 +1,5 @@
 import { createContext, useContext } from 'react';
+import type { Language, MessageKey } from './i18n';
 import type {
   AccountState,
   AccountView,
@@ -28,9 +29,14 @@ export interface AppContextValue {
   page: PageKey;
   theme: Theme;
   setTheme: (theme: Theme) => void;
+  language: Language;
+  locale: string;
+  t: (key: MessageKey, vars?: Record<string, string | number>) => string;
+  setLanguage: (language: Language) => void;
   navigate: (page: PageKey) => void;
   selectedId: string | null;
   selectedInstance: InstanceView | null;
+  launchingId: string | null;
   selectInstance: (id: string) => void;
   refreshInstances: () => Promise<void>;
   reloadBootstrap: () => Promise<void>;

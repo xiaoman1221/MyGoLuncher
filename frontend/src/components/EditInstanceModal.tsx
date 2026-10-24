@@ -9,7 +9,7 @@ const memorySteps = [2048, 4096, 6144, 8192, 12288, 16384];
 
 export function EditInstanceModal({ id, open, onClose }: { id: string | null; open: boolean; onClose: () => void }) {
   const {
-    instances, settings, bootstrap, refreshInstances, pushToast, openInstanceFolder, askDelete,
+    instances, settings, bootstrap, refreshInstances, pushToast, openInstanceFolder, askDelete, t,
   } = useApp();
   const instance = instances.find((item) => item.id === id);
   const [name, setName] = useState('');
@@ -32,17 +32,17 @@ export function EditInstanceModal({ id, open, onClose }: { id: string | null; op
 
   const save = async () => {
     if (!name.trim()) {
-      pushToast('error', '版本名称不能为空');
+      pushToast('error', t('edit.nameRequired'));
       return;
     }
     setSaving(true);
     try {
       await api.updateInstance({ id: instance.id, name: name.trim(), memoryMB: autoMemory ? 0 : memory, javaPath: javaPath.trim() });
       await refreshInstances();
-      pushToast('success', '版本设置已保存');
+      pushToast('success', t('edit.saved'));
       onClose();
     } catch (error) {
-      pushToast('error', '保存失败', (error as Error).message);
+      pushToast('error', t('edit.saveFailed'), (error as Error).message);
     } finally {
       setSaving(false);
     }
@@ -52,8 +52,8 @@ export function EditInstanceModal({ id, open, onClose }: { id: string | null; op
     <Modal
       open={open}
       onClose={onClose}
-      title="版本设置"
-      eyebrow={`${instance.mcVersion} · ${loaderLabel(instance.loader)}`}
+      title={t('edit.title')}
+      eyebrow={`${instance.mcVersion} · ${loaderLabel(instance.loader, t('loader.vanilla'))}`}
       size="md"
       footer={
         <>
@@ -62,12 +62,12 @@ export function EditInstanceModal({ id, open, onClose }: { id: string | null; op
             className="btn btn-danger-ghost"
             onClick={() => { onClose(); askDelete(instance.id); }}
           >
-            <Trash2 size={15} /> 删除版本
+            <Trash2 size={15} /> {t('common.deleteVersion')}
           </button>
           <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" onClick={onClose}>取消</button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
             <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={saving}>
-              <Save size={15} /> {saving ? '保存中…' : '保存'}
+              <Save size={15} /> {saving ? t('common.saving') : t('common.save')}
             </button>
           </div>
         </>
@@ -75,23 +75,23 @@ export function EditInstanceModal({ id, open, onClose }: { id: string | null; op
     >
       <div className="form-grid">
         <label className="field field-span-2">
-          <span className="field-label">版本名称</span>
+          <span className="field-label">{t('edit.name')}</span>
           <input className="text-input" value={name} onChange={(event) => setName(event.target.value)} maxLength={60} />
         </label>
 
         <div className="field field-span-2">
           <div className="field-label-row">
-            <span className="field-label">分配内存</span>
+            <span className="field-label">{t('edit.memory')}</span>
             <span className="memory-value">
               {autoMemory
-                ? `自动 · 约 ${((bootstrap?.autoMemoryMB ?? 4096) / 1024).toFixed(1)} GB`
+                ? t('settings.autoMemoryValue', { gb: ((bootstrap?.autoMemoryMB ?? 4096) / 1024).toFixed(1) })
                 : `${(memory / 1024).toFixed(memory % 1024 ? 1 : 0)} GB`}
             </span>
           </div>
           <label className="toggle-row">
             <span>
-              <strong>自动分配内存</strong>
-              <small>根据系统内存自动计算推荐值</small>
+              <strong>{t('edit.autoMemory')}</strong>
+              <small>{t('edit.autoMemoryHint')}</small>
             </span>
             <input
               type="checkbox"
@@ -132,18 +132,18 @@ export function EditInstanceModal({ id, open, onClose }: { id: string | null; op
         </div>
 
         <label className="field field-span-2">
-          <span className="field-label"><Coffee size={14} /> Java 路径 <small>留空使用默认运行时</small></span>
+          <span className="field-label"><Coffee size={14} /> {t('edit.javaPath')} <small>{t('edit.javaPathHint')}</small></span>
           <input
             className="text-input mono"
             value={javaPath}
             onChange={(event) => setJavaPath(event.target.value)}
-            placeholder={settings?.defaultJavaPath || `默认 Java ${instance.requiredJava}`}
+            placeholder={settings?.defaultJavaPath || t('edit.javaPathHint')}
           />
         </label>
 
         <div className="form-actions-inline field-span-2">
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => void openInstanceFolder(instance.id)}>
-            <FolderOpen size={15} /> 打开版本目录
+            <FolderOpen size={15} /> {t('edit.openFolder')}
           </button>
         </div>
       </div>

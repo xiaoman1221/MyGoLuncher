@@ -2,23 +2,24 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { Box, Coffee, Layers3, Rocket, TriangleAlert } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
+import type { MessageKey } from '../lib/i18n';
 import { cn } from '../lib/format';
 import type { VersionView } from '../lib/types';
 import { Modal } from './Modal';
 import { VersionPicker } from './VersionPicker';
 
-const loaders = [
-  { id: 'vanilla', label: '原版', description: '纯净游戏', tone: 'vanilla' },
-  { id: 'fabric', label: 'Fabric', description: '轻量模组', tone: 'fabric' },
-  { id: 'quilt', label: 'Quilt', description: 'Fabric 分支', tone: 'quilt' },
-  { id: 'forge', label: 'Forge', description: '经典模组', tone: 'forge' },
-  { id: 'neoforge', label: 'NeoForge', description: '新生代', tone: 'neoforge' },
+const loaders: Array<{ id: string; label: string; descriptionKey: MessageKey; tone: string }> = [
+  { id: 'vanilla', label: 'Vanilla', descriptionKey: 'loader.vanillaDesc', tone: 'vanilla' },
+  { id: 'fabric', label: 'Fabric', descriptionKey: 'loader.fabricDesc', tone: 'fabric' },
+  { id: 'quilt', label: 'Quilt', descriptionKey: 'loader.quiltDesc', tone: 'quilt' },
+  { id: 'forge', label: 'Forge', descriptionKey: 'loader.forgeDesc', tone: 'forge' },
+  { id: 'neoforge', label: 'NeoForge', descriptionKey: 'loader.neoforgeDesc', tone: 'neoforge' },
 ];
 
 const memorySteps = [2048, 4096, 6144, 8192, 12288, 16384];
 
 export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { settings, bootstrap, pushToast, refreshInstances, selectInstance, navigate } = useApp();
+  const { settings, bootstrap, pushToast, refreshInstances, selectInstance, navigate, t } = useApp();
   const [versions, setVersions] = useState<VersionView[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
   const [versionError, setVersionError] = useState('');
@@ -67,12 +68,12 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
 
   const submit = () => {
     if (!mcVersion) {
-      pushToast('error', '请选择游戏版本');
+      pushToast('error', t('create.selectVersion'));
       return;
     }
     setSubmitting(true);
     onClose();
-    pushToast('info', '正在创建版本', '游戏文件会在后台下载。');
+    pushToast('info', t('create.started'), t('create.startedDetail'));
     void api.createInstance({
       name: name.trim(),
       mcVersion,
@@ -83,9 +84,9 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
       await refreshInstances();
       selectInstance(instance.id);
       navigate('home');
-      pushToast('success', '版本创建完成', `${instance.name} 已准备好。`);
+      pushToast('success', t('create.done'), t('create.doneDetail', { name: instance.name }));
     }).catch((error: Error) => {
-      pushToast('error', '创建版本失败', error.message);
+      pushToast('error', t('create.failed'), error.message);
     });
   };
 
@@ -93,20 +94,20 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
     <Modal
       open={open}
       onClose={onClose}
-      title="新建版本"
+      title={t('create.title')}
       eyebrow="NEW VERSION"
-      description="选择 Minecraft 版本和加载器。"
+      description={t('create.description')}
       size="lg"
       footer={
         <>
           <span className="modal-foot-note">
-            <Coffee size={14} /> 需要 Java {requiredJava}
+            <Coffee size={14} /> {t('create.requiredJava', { java: requiredJava })}
           </span>
           <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" onClick={onClose}>取消</button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
             <button type="button" className="btn btn-primary" disabled={submitting || loadingVersions || !mcVersion} onClick={submit}>
               <Rocket size={16} />
-              {submitting ? '正在创建…' : '创建并安装'}
+              {submitting ? t('create.creating') : t('create.createInstall')}
             </button>
           </div>
         </>
@@ -114,18 +115,18 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
     >
       <div className="form-grid">
         <label className="field field-span-2">
-          <span className="field-label">版本名称 <small>可选</small></span>
+          <span className="field-label">{t('create.name')} <small>{t('create.optional')}</small></span>
           <input
             className="text-input"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder={`${mcVersion || 'Minecraft'} 冒险`}
+            placeholder={t('create.namePlaceholder', { version: mcVersion || 'Minecraft' })}
             maxLength={60}
           />
         </label>
 
         <div className="field field-span-2">
-          <span className="field-label">Minecraft 版本</span>
+          <span className="field-label">{t('create.mcVersion')}</span>
           <VersionPicker
             options={versions}
             value={mcVersion}
@@ -138,7 +139,7 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
         </div>
 
         <div className="field field-span-2">
-          <span className="field-label">模组加载器</span>
+          <span className="field-label">{t('create.loader')}</span>
           <div className="loader-grid">
             {loaders.map((item) => (
               <button
@@ -149,8 +150,8 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
               >
                 <span className="loader-symbol">{item.id === 'vanilla' ? <Box size={18} /> : <Layers3 size={18} />}</span>
                 <span>
-                  <strong>{item.label}</strong>
-                  <small>{item.description}</small>
+                  <strong>{item.id === 'vanilla' ? t('loader.vanilla') : item.label}</strong>
+                  <small>{t(item.descriptionKey)}</small>
                 </span>
               </button>
             ))}
@@ -159,29 +160,33 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
 
         {isModded && (
           <label className="field field-span-2">
-            <span className="field-label">加载器版本 <small>留空自动选择最新稳定版</small></span>
+            <span className="field-label">{t('create.loaderVersion')} <small>{t('create.loaderVersionHint')}</small></span>
             <input
               className="text-input mono"
               value={loaderVersion}
               onChange={(event) => setLoaderVersion(event.target.value)}
-              placeholder={loader === 'fabric' ? '例如 0.16.10' : loader === 'quilt' ? '例如 0.26.4' : '例如 47.2.0'}
+              placeholder={loader === 'fabric'
+                ? t('create.loaderPlaceholder.fabric')
+                : loader === 'quilt'
+                  ? t('create.loaderPlaceholder.quilt')
+                  : t('create.loaderPlaceholder.other')}
             />
           </label>
         )}
 
         <div className="field field-span-2">
           <div className="field-label-row">
-            <span className="field-label">分配内存</span>
+            <span className="field-label">{t('create.memory')}</span>
             <span className="memory-value">
               {autoMemory
-                ? `自动 · 约 ${((bootstrap?.autoMemoryMB ?? 4096) / 1024).toFixed(1)} GB`
+                ? t('settings.autoMemoryValue', { gb: ((bootstrap?.autoMemoryMB ?? 4096) / 1024).toFixed(1) })
                 : `${(memory / 1024).toFixed(memory % 1024 ? 1 : 0)} GB`}
             </span>
           </div>
           <label className="toggle-row">
             <span>
-              <strong>自动分配内存</strong>
-              <small>根据系统内存自动计算推荐值</small>
+              <strong>{t('create.autoMemory')}</strong>
+              <small>{t('create.autoMemoryHint')}</small>
             </span>
             <input
               type="checkbox"

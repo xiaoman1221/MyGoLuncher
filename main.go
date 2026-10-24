@@ -20,6 +20,7 @@ func main() {
 		Height:           900,
 		MinWidth:         1120,
 		MinHeight:        720,
+		Frameless:        true,
 		BackgroundColour: &options.RGBA{R: 10, G: 14, B: 12, A: 1},
 		AssetServer: &assetserver.Options{
 			Assets: assets,

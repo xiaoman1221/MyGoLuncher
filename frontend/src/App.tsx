@@ -3,6 +3,16 @@ import { RefreshCw, TriangleAlert } from 'lucide-react';
 import { api, isDemo } from './lib/api';
 import { onEvent } from './lib/events';
 import { AppContext, type Toast, type ToastKind } from './lib/app-context';
+import {
+  LANGUAGE_STORAGE_KEY,
+  detectSystemLanguage,
+  localeFor,
+  normalizeLanguage,
+  resolveStartupLanguage,
+  translate,
+  type Language,
+  type MessageKey,
+} from './lib/i18n';
 import type {
   AccountLoginEvent,
   AccountState,
@@ -24,8 +34,12 @@ import { CreateInstanceModal } from './components/CreateInstanceModal';
 import { EditInstanceModal } from './components/EditInstanceModal';
 import { ConfirmDeleteModal } from './components/ConfirmDeleteModal';
 import { AccountModal } from './components/AccountModal';
+import { LaunchOverlay } from './components/LaunchOverlay';
 import { HomePage } from './pages/HomePage';
 import { VersionsPage } from './pages/VersionsPage';
+import { InstanceSettingsPage } from './pages/InstanceSettingsPage';
+import { ResourcesPage } from './pages/ResourcesPage';
+import { ModpacksPage } from './pages/ModpacksPage';
 import { SettingsPage } from './pages/SettingsPage';
 
 const THEME_KEY = 'mygoluncher-theme';
@@ -39,6 +53,10 @@ export default function App() {
   const [theme, setThemeState] = useState<Theme>(() => (
     window.localStorage.getItem(THEME_KEY) === 'light' ? 'light' : 'dark'
   ));
+  const [language, setLanguageState] = useState<Language>(() => {
+    const cached = window.localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    return cached ? normalizeLanguage(cached) : detectSystemLanguage();
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Record<string, TaskProgress>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -48,6 +66,8 @@ export default function App() {
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [accountsOpen, setAccountsOpen] = useState(false);
+  const [launchingId, setLaunchingId] = useState<string | null>(null);
+  const [launchPhase, setLaunchPhase] = useState<'preparing' | 'waiting'>('preparing');
 
   const toastId = useRef(0);
   const taskTimers = useRef(new Map<string, number>());
@@ -69,6 +89,22 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
   }, [theme]);
+
+  const setLanguage = useCallback((next: Language) => {
+    setLanguageState(next);
+    window.localStorage.setItem(LANGUAGE_STORAGE_KEY, next);
+    document.documentElement.lang = next;
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = language;
+  }, [language]);
+
+  const t = useCallback(
+    (key: MessageKey, vars?: Record<string, string | number>) => translate(language, key, vars),
+    [language],
+  );
+  const locale = localeFor(language);
 
   const pushToast = useCallback((kind: ToastKind, title: string, message?: string) => {
     const id = ++toastId.current;
@@ -104,9 +140,9 @@ export default function App() {
       const instances = await api.getInstances();
       applyInstances(instances);
     } catch (error) {
-      pushToast('error', '刷新版本失败', (error as Error).message);
+      pushToast('error', t('app.refreshFailed'), (error as Error).message);
     }
-  }, [applyInstances, pushToast]);
+  }, [applyInstances, pushToast, t]);
 
   const reloadBootstrap = useCallback(async () => {
     const fresh = await api.bootstrap();
@@ -133,6 +169,7 @@ export default function App() {
           ? stored
           : data.instances[0]?.id ?? null;
         setSelectedId(next);
+        setLanguage(resolveStartupLanguage(data.settings.languageAuto, data.settings.language));
       })
       .catch((error: Error) => {
         if (alive) setBootError(error.message);
@@ -141,7 +178,7 @@ export default function App() {
         if (alive) setLoading(false);
       });
     return () => { alive = false; };
-  }, []);
+  }, [setLanguage]);
 
   useEffect(() => {
     if (selectedId) {
@@ -164,33 +201,36 @@ export default function App() {
     try {
       await api.openDataFolder();
     } catch (error) {
-      pushToast('error', '无法打开游戏目录', (error as Error).message);
+      pushToast('error', t('app.openGameFolderFailed'), (error as Error).message);
     }
-  }, [pushToast]);
+  }, [pushToast, t]);
 
   const openInstanceFolder = useCallback(async (id: string) => {
     try {
       await api.openInstanceFolder(id);
     } catch (error) {
-      pushToast('error', '无法打开版本目录', (error as Error).message);
+      pushToast('error', t('app.openVersionFolderFailed'), (error as Error).message);
     }
-  }, [pushToast]);
+  }, [pushToast, t]);
 
   const launch = useCallback(async (id: string) => {
+    setLaunchingId(id);
+    setLaunchPhase('preparing');
     try {
-      await api.launchInstance(id);
+      await api.launchInstance(id, language);
     } catch (error) {
-      pushToast('error', '启动失败', (error as Error).message);
+      setLaunchingId(null);
+      pushToast('error', t('app.launchFailed'), (error as Error).message);
     }
-  }, [pushToast]);
+  }, [pushToast, t, language]);
 
   const stop = useCallback(async (id: string) => {
     try {
       await api.stopInstance(id);
     } catch (error) {
-      pushToast('error', '无法结束游戏', (error as Error).message);
+      pushToast('error', t('app.stopFailed'), (error as Error).message);
     }
-  }, [pushToast]);
+  }, [pushToast, t]);
 
   const openConsole = useCallback(async (id: string) => {
     setConsoleId(id);
@@ -247,32 +287,39 @@ export default function App() {
       onEvent<AccountLoginEvent>('auth:login', (event) => {
         if (event.success) {
           void reloadBootstrap();
-          pushToast('success', 'Microsoft 登录成功', event.account?.name);
+          pushToast('success', t('app.msLoginSuccess'), event.account?.name);
         } else {
-          pushToast('error', 'Microsoft 登录失败', event.message);
+          pushToast('error', t('app.msLoginFailed'), event.message);
         }
+      }),
+      onEvent<{ instanceId: string }>('launch:window', (payload) => {
+        setLaunchingId((current) => current === payload.instanceId ? null : current);
       }),
       onEvent<LaunchState>('launch:state', (state) => {
         void refreshInstances();
         if (state.running) {
+          setLaunchPhase('waiting');
           if (settingsRef.current?.showGameConsole !== false) {
             void openConsole(state.instanceId);
           }
           const instance = bootstrap.instances.find((item) => item.id === state.instanceId);
-          pushToast('success', '游戏已启动', instance ? instance.name : undefined);
-        } else if (state.stoppedByUser) {
-          pushToast('info', '游戏已停止');
+          pushToast('success', t('app.gameStarted'), instance ? instance.name : undefined);
         } else {
-          pushToast(
-            state.exitCode === 0 ? 'info' : 'error',
-            state.exitCode === 0 ? '游戏已退出' : '游戏异常退出',
-            state.exitCode === 0 ? undefined : `退出代码 ${state.exitCode}`,
-          );
+          setLaunchingId((current) => current === state.instanceId ? null : current);
+          if (state.stoppedByUser) {
+            pushToast('info', t('app.gameStopped'));
+          } else {
+            pushToast(
+              state.exitCode === 0 ? 'info' : 'error',
+              state.exitCode === 0 ? t('app.gameExited') : t('app.gameCrashed'),
+              state.exitCode === 0 ? undefined : t('app.exitCode', { code: state.exitCode }),
+            );
+          }
         }
       }),
     ];
     return () => disposers.forEach((dispose) => dispose());
-  }, [Boolean(bootstrap), Boolean(bootError), refreshInstances, openConsole, pushToast, reloadBootstrap]);
+  }, [Boolean(bootstrap), Boolean(bootError), refreshInstances, openConsole, pushToast, reloadBootstrap, t]);
 
   useEffect(() => {
     const timers = taskTimers.current;
@@ -283,12 +330,19 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!launchingId) return;
+    const timer = window.setTimeout(() => setLaunchingId(null), 180_000);
+    return () => window.clearTimeout(timer);
+  }, [launchingId]);
+
   const instances = bootstrap?.instances ?? [];
   const settings = bootstrap?.settings ?? null;
   const accounts = bootstrap?.accounts ?? [];
   const selectedAccount = accounts.find((account) => account.id === bootstrap?.selectedAccountId) ?? accounts[0] ?? null;
   const selectedInstance = instances.find((instance) => instance.id === selectedId) ?? null;
   const activeConsole = instances.find((instance) => instance.id === consoleId) ?? null;
+  const launchingInstance = instances.find((instance) => instance.id === launchingId) ?? null;
 
   const contextValue = useMemo(() => ({
     bootstrap,
@@ -299,9 +353,14 @@ export default function App() {
     page,
     theme,
     setTheme,
+    language,
+    locale,
+    t,
+    setLanguage,
     navigate,
     selectedId,
     selectedInstance,
+    launchingId,
     selectInstance,
     refreshInstances,
     reloadBootstrap,
@@ -320,7 +379,8 @@ export default function App() {
     isDemo,
   }), [
     bootstrap, instances, settings, accounts, selectedAccount, page, theme, setTheme,
-    navigate, selectedId, selectedInstance, selectInstance, refreshInstances,
+    language, locale, t, setLanguage,
+    navigate, selectedId, selectedInstance, launchingId, selectInstance, refreshInstances,
     reloadBootstrap, saveSettings, openDataFolder, openInstanceFolder, launch, stop,
     openConsole, pushToast, tasks,
   ]);
@@ -331,7 +391,7 @@ export default function App() {
         <div className="boot-glow" />
         <LogoMark size={72} />
         <div className="boot-title">MYGO</div>
-        <div className="boot-sub">LUNCHER · MINECRAFT</div>
+        <div className="boot-sub">{t('app.bootSub')}</div>
         <div className="boot-bar"><span /></div>
       </div>
     );
@@ -341,8 +401,8 @@ export default function App() {
     return (
       <div className="boot-screen boot-error">
         <div className="boot-error-icon"><TriangleAlert size={28} /></div>
-        <h1>启动器初始化失败</h1>
-        <p>{bootError || '无法读取启动器配置。'}</p>
+        <h1>{t('app.initFailed')}</h1>
+        <p>{bootError || t('app.readConfigFailed')}</p>
         <button
           type="button"
           className="btn btn-primary"
@@ -354,7 +414,7 @@ export default function App() {
               .finally(() => setLoading(false));
           }}
         >
-          <RefreshCw size={15} /> 重试
+          <RefreshCw size={15} /> {t('common.retry')}
         </button>
         <span className="boot-legal">MyGoLuncher · v1.0.0</span>
       </div>
@@ -364,6 +424,9 @@ export default function App() {
   const pages: Record<PageKey, ReactNode> = {
     home: <HomePage />,
     versions: <VersionsPage />,
+    instanceSettings: <InstanceSettingsPage />,
+    resources: <ResourcesPage />,
+    modpacks: <ModpacksPage />,
     settings: <SettingsPage />,
   };
 
@@ -393,6 +456,14 @@ export default function App() {
           onClose={() => setConsoleId(null)}
           onStop={() => void stop(activeConsole.id)}
           onOpenFolder={() => void openInstanceFolder(activeConsole.id)}
+        />
+      )}
+
+      {launchingInstance && (
+        <LaunchOverlay
+          instance={launchingInstance}
+          phase={launchPhase}
+          onDismiss={() => setLaunchingId(null)}
         />
       )}
 

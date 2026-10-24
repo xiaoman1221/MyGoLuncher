@@ -24,10 +24,12 @@ import type {
   ResourceVersion,
   SearchRequest,
   SearchResult,
+  ServerPackExportResult,
   Settings,
   UpdateInstanceRequest,
   VersionList,
   VersionView,
+  YSSDeviceView,
 } from './types';
 
 type Listener = (payload: unknown) => void;
@@ -62,7 +64,15 @@ const initialSettings: Settings = {
   showGameConsole: true,
   showLauncherOnLaunch: false,
   hitokotoApiUrl: 'https://hitokotogo.yhdzz.cn/v2',
-  schemaVersion: 2,
+  languageAuto: true,
+  language: 'zh-CN',
+  versionIsolation: true,
+  aiSearchEnabled: false,
+  aiSearchProvider: 'deepseek',
+  aiSearchBaseUrl: '',
+  aiSearchApiKey: '',
+  aiSearchModel: 'deepseek-chat',
+  schemaVersion: 3,
   microsoftClientID: '',
   customMirrors: [],
 };
@@ -154,6 +164,7 @@ const initialAccounts: AccountView[] = [
 ];
 let accounts: AccountView[] = initialAccounts;
 let selectedAccountId = 'offline-steve';
+let yssCancelled = false;
 const installedVersions = new Set(['1.21.1', '1.20.1', '26.3']);
 const logs = new Map<string, string[]>();
 const launchTimers = new Map<string, ReturnType<typeof setInterval>>();
@@ -926,6 +937,33 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
     }
     case 'CancelMicrosoftLogin':
       return undefined as T;
+    case 'BeginYSSLogin': {
+      const serverUrl = String(args[0] ?? 'https://yss.1v.fit');
+      yssCancelled = false;
+      window.setTimeout(() => {
+        if (yssCancelled) return;
+        const account: AccountView = {
+          id: `yss-${Date.now()}`, kind: 'authlib', name: 'Steve',
+          uuid: '069a79f444e94726a5befca90e38aaf5', serverUrl,
+          expiresAt: '', label: '外置登录',
+        };
+        accounts = [account, ...accounts.filter((item) => item.kind !== 'authlib' || item.name !== 'Steve')];
+        selectedAccountId = account.id;
+        emit('accounts:changed', { accounts: clone(accounts), selectedId: selectedAccountId });
+        emit('auth:yss', { success: true, message: 'YSS 授权成功', account: clone(account) });
+      }, 2400);
+      return {
+        userCode: 'ABCD-EFGH',
+        verificationUri: 'https://yss.1v.fit/oauth/device',
+        verificationUriComplete: 'https://yss.1v.fit/oauth/device?user_code=ABCD-EFGH',
+        expiresIn: 600,
+        interval: 5,
+        message: '',
+      } satisfies YSSDeviceView as T;
+    }
+    case 'CancelYSSLogin':
+      yssCancelled = true;
+      return undefined as T;
     case 'SaveSettings': {
       settings = { ...(args[0] as Settings) };
       return clone(settings) as T;
@@ -1059,10 +1097,22 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       const target = instances.find((item) => item.id === req.instanceId);
       const gameVersion = req.type === 'modpack' ? '' : (target?.mcVersion ?? '');
       const loader = req.type === 'mod' ? (target?.loader ?? '') : '';
+      const cjkPattern = /[㐀-鿿぀-ヿ가-힯]/;
+      const aliases: Array<[string, string]> = [
+        ['苹果皮', 'appleskin'], ['旅行地图', 'journeymap'], ['小地图', 'minimap'],
+        ['光影', 'shader'], ['材质包', 'resource pack'], ['资源包', 'resource pack'],
+        ['优化', 'optimization'], ['钠', 'sodium'], ['锂', 'lithium'], ['铷', 'rubidium'],
+      ];
+      const rawQuery = req.query.trim();
+      let queryUsed = rawQuery;
+      for (const [from, to] of aliases) queryUsed = queryUsed.split(from).join(to);
+      const hadCJK = cjkPattern.test(rawQuery);
+      const aiUsed = Boolean(req.useAI && hadCJK);
+      const cjkQuery = cjkPattern.test(queryUsed) && !aiUsed;
       let items = mockResourceCatalog().filter((item) => item.type === req.type);
       if (req.source !== 'all') items = items.filter((item) => item.source === req.source);
-      if (req.query.trim()) {
-        const query = req.query.trim().toLowerCase();
+      if (queryUsed) {
+        const query = queryUsed.toLowerCase();
         items = items.filter((item) => `${item.title} ${item.description} ${item.author}`.toLowerCase().includes(query));
       }
       if (req.type !== 'modpack') {
@@ -1088,6 +1138,7 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       return {
         items: clone(merged), total: modrinth.length + curseforge.length,
         offset: req.offset, limit: req.limit, warnings: [], curseForgeReady: true,
+        queryUsed, aiUsed, aiError: '', cjkQuery,
       } satisfies ResourceSearchResult as T;
     }
     case 'ListResourceVersions': {
@@ -1173,6 +1224,9 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
     case 'ExportInstanceBackupDialog':
       await progressTask('导出版本', ['正在收集版本文件…', '正在压缩资源与配置…', '正在写入整合包…'], 1200);
       return 'C:/Users/im/Desktop/export.mrpack' as T;
+    case 'ExportServerPackDialog':
+      await progressTask('导出服务器包', ['正在准备服务器运行时…', '正在打包模组与配置…', '正在写入启动脚本…'], 2200);
+      return { path: 'C:/Users/im/Desktop/MyGoLuncher-server.zip', warnings: [] } satisfies ServerPackExportResult as T;
     case 'AuthlibServers':
       return [
         { id: 'littleskin', name: 'LittleSkin', url: 'https://littleskin.cn/api/yggdrasil' },

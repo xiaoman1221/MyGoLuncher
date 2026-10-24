@@ -220,6 +220,43 @@ func TestOAuthErrorParsing(t *testing.T) {
 	}
 }
 
+func TestSameAuthlibServer(t *testing.T) {
+	if !sameAuthlibServer("https://yss.1v.fit", "https://yss.1v.fit/api/yggdrasil/") {
+		t.Fatal("site root and API location should match")
+	}
+	if sameAuthlibServer("https://yss.1v.fit", "https://littleskin.cn/api/yggdrasil") {
+		t.Fatal("different hosts should not match")
+	}
+}
+
+func TestSameAuthlibIdentityUpdatesExistingAccount(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "accounts.json"), "Steve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	passwordAccount, err := store.Add(Account{
+		Kind: KindAuthlib, Name: "Steve", UUID: "abc123",
+		ServerURL: "https://yss.1v.fit", AccessToken: "password-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oauthAccount, err := store.Add(Account{
+		Kind: KindAuthlib, Name: "Steve", UUID: "abc123",
+		ServerURL: "https://yss.1v.fit/api/yggdrasil", AccessToken: "oauth-token",
+		OAuth2: true, OAuth2TokenEndpoint: "https://yss.1v.fit/api/v1/oauth2/token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oauthAccount.ID != passwordAccount.ID {
+		t.Fatalf("OAuth2 login should update the existing identity: %s != %s", oauthAccount.ID, passwordAccount.ID)
+	}
+	if count := len(store.List()); count != 2 {
+		t.Fatalf("expected offline + authlib account, got %d", count)
+	}
+}
+
 func TestOfflineUUID(t *testing.T) {
 	first := OfflineUUID("Steve")
 	second := OfflineUUID("Steve")

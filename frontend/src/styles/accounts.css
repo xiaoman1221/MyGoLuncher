@@ -225,6 +225,20 @@
   gap: 8px;
 }
 
+.yss-auth-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid rgba(var(--accent-rgb), 0.24);
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+.yss-auth-block .account-note {
+  margin: 0;
+}
+
 .authlib-preset {
   display: flex;
   align-items: center;

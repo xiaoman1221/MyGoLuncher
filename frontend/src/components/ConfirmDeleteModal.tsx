@@ -5,7 +5,7 @@ import { useApp } from '../lib/app-context';
 import { Modal } from './Modal';
 
 export function ConfirmDeleteModal({ id, open, onClose }: { id: string | null; open: boolean; onClose: () => void }) {
-  const { instances, refreshInstances, pushToast, selectInstance, selectedId } = useApp();
+  const { instances, settings, refreshInstances, pushToast, selectInstance, selectedId, t } = useApp();
   const instance = instances.find((item) => item.id === id);
   const [deleteFiles, setDeleteFiles] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -28,10 +28,10 @@ export function ConfirmDeleteModal({ id, open, onClose }: { id: string | null; o
         const next = instances.find((item) => item.id !== instance.id);
         if (next) selectInstance(next.id);
       }
-      pushToast('success', deleteFiles ? '版本与文件已删除' : '版本已从启动器移除');
+      pushToast('success', deleteFiles ? t('delete.successFiles') : t('delete.successKeep'));
       onClose();
     } catch (error) {
-      pushToast('error', '删除失败', (error as Error).message);
+      pushToast('error', t('delete.failed'), (error as Error).message);
     } finally {
       setDeleting(false);
     }
@@ -41,14 +41,14 @@ export function ConfirmDeleteModal({ id, open, onClose }: { id: string | null; o
     <Modal
       open={open}
       onClose={onClose}
-      title="删除版本？"
+      title={t('delete.title')}
       eyebrow="DELETE"
       size="sm"
       footer={
         <div className="modal-actions modal-actions-end">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>取消</button>
+          <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
           <button type="button" className="btn btn-danger" onClick={() => void remove()} disabled={deleting}>
-            <Trash2 size={15} /> {deleting ? '正在删除…' : '确认删除'}
+            <Trash2 size={15} /> {deleting ? t('delete.deleting') : t('delete.confirm')}
           </button>
         </div>
       }
@@ -57,20 +57,24 @@ export function ConfirmDeleteModal({ id, open, onClose }: { id: string | null; o
         <div className="danger-icon"><TriangleAlert size={20} /></div>
         <div>
           <strong>{instance.name}</strong>
-          <p>{instance.mcVersion} · 从启动器列表中移除这个版本。</p>
+          <p>{t('delete.body', { version: instance.mcVersion })}</p>
         </div>
       </div>
-      <label className="checkbox-row">
-        <input
-          type="checkbox"
-          checked={deleteFiles}
-          onChange={(event) => setDeleteFiles(event.target.checked)}
-        />
-        <span>
-          <strong>同时删除游戏目录</strong>
-          <small>存档、模组与配置将永久删除。</small>
-        </span>
-      </label>
+      {settings?.versionIsolation !== false ? (
+        <label className="checkbox-row">
+          <input
+            type="checkbox"
+            checked={deleteFiles}
+            onChange={(event) => setDeleteFiles(event.target.checked)}
+          />
+          <span>
+            <strong>{t('delete.deleteFiles')}</strong>
+            <small>{t('delete.deleteFilesHint')}</small>
+          </span>
+        </label>
+      ) : (
+        <p className="modal-note">{t('delete.sharedWarning')}</p>
+      )}
     </Modal>
   );
 }

@@ -1,26 +1,35 @@
-import { Boxes, FolderOpen, Home, Settings, TerminalSquare } from 'lucide-react';
+import { Boxes, FolderOpen, Home, LayoutList, PackageOpen, Settings, Settings2, TerminalSquare } from 'lucide-react';
 import { useApp } from '../lib/app-context';
+import { accountKindKey } from '../lib/i18n';
 import { cn, initials } from '../lib/format';
 import type { PageKey } from '../lib/types';
 import { LogoMark } from './LogoMark';
 
-const navItems: Array<{ key: PageKey; label: string; icon: typeof Home }> = [
-  { key: 'home', label: '首页', icon: Home },
-  { key: 'versions', label: '版本', icon: Boxes },
-  { key: 'settings', label: '设置', icon: Settings },
+const navItems: Array<{
+  key: PageKey;
+  labelKey: 'common.home' | 'common.versionDownload' | 'instanceSettings.title' | 'resources.title' | 'modpacks.title' | 'common.settings';
+  icon: typeof Home;
+}> = [
+  { key: 'home', labelKey: 'common.home', icon: Home },
+  { key: 'versions', labelKey: 'common.versionDownload', icon: Boxes },
+  { key: 'instanceSettings', labelKey: 'instanceSettings.title', icon: Settings2 },
+  { key: 'resources', labelKey: 'resources.title', icon: LayoutList },
+  { key: 'modpacks', labelKey: 'modpacks.title', icon: PackageOpen },
+  { key: 'settings', labelKey: 'common.settings', icon: Settings },
 ];
 
 export function Sidebar() {
   const {
     page, navigate, settings, instances, selectedAccount, openAccounts,
-    openConsole, openDataFolder, bootstrap,
+    openConsole, openDataFolder, bootstrap, t,
   } = useApp();
   const running = instances.filter((instance) => instance.running);
   const player = selectedAccount?.name ?? settings?.playerName ?? 'Steve';
+  const accountLabel = t(accountKindKey(selectedAccount?.kind ?? 'offline'));
 
   return (
     <aside className="sidebar">
-      <button type="button" className="brand" onClick={() => navigate('home')} aria-label="返回首页">
+      <button type="button" className="brand" onClick={() => navigate('home')} aria-label={t('nav.backHome')}>
         <LogoMark size={38} />
         <div className="brand-copy">
           <span className="brand-title">MYGO</span>
@@ -28,7 +37,7 @@ export function Sidebar() {
         </div>
       </button>
 
-      <nav className="sidebar-nav" aria-label="主导航">
+      <nav className="sidebar-nav" aria-label={t('nav.main')}>
         {navItems.map((item) => {
           const Icon = item.icon;
           const active = page === item.key;
@@ -41,7 +50,7 @@ export function Sidebar() {
               aria-current={active ? 'page' : undefined}
             >
               <span className="nav-icon"><Icon size={18} strokeWidth={active ? 2.2 : 1.8} /></span>
-              <span>{item.label}</span>
+              <span>{t(item.labelKey)}</span>
               {item.key === 'home' && instances.length > 0 && (
                 <span className="nav-badge">{instances.length}</span>
               )}
@@ -54,8 +63,8 @@ export function Sidebar() {
         <button type="button" className="sidebar-live" onClick={() => openConsole(running[0].id)}>
           <span className="live-pulse" />
           <span>
-            <strong>{running.length} 个版本运行中</strong>
-            <small>打开游戏控制台</small>
+            <strong>{t('sidebar.running', { count: running.length })}</strong>
+            <small>{t('sidebar.openConsole')}</small>
           </span>
           <TerminalSquare size={17} />
         </button>
@@ -65,14 +74,14 @@ export function Sidebar() {
 
       <button type="button" className="sidebar-folder" onClick={() => void openDataFolder()}>
         <FolderOpen size={16} />
-        <span>打开游戏目录</span>
+        <span>{t('common.openGameFolder')}</span>
       </button>
 
-      <button type="button" className="profile-card" onClick={openAccounts} title="切换账户">
+      <button type="button" className="profile-card" onClick={openAccounts} title={t('sidebar.switchAccount')}>
         <div className="avatar avatar-sm">{initials(player)}</div>
         <div className="profile-copy">
           <strong>{player}</strong>
-          <span>{selectedAccount?.label ?? '离线'}</span>
+          <span>{accountLabel}</span>
         </div>
         <span className={`profile-status kind-${selectedAccount?.kind ?? 'offline'}`} />
       </button>

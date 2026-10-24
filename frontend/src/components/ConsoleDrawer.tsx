@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Copy, FolderOpen, Square, TerminalSquare, X } from 'lucide-react';
 import type { InstanceView } from '../lib/types';
+import { useApp } from '../lib/app-context';
 import { loaderLabel } from '../lib/format';
 
 interface ConsoleDrawerProps {
@@ -20,6 +21,7 @@ function lineTone(line: string): string {
 }
 
 export function ConsoleDrawer({ instance, logs, onClose, onStop, onOpenFolder }: ConsoleDrawerProps) {
+  const { t } = useApp();
   const scrollRef = useRef<HTMLDivElement>(null);
   const [copied, setCopied] = useState(false);
 
@@ -47,19 +49,19 @@ export function ConsoleDrawer({ instance, logs, onClose, onStop, onOpenFolder }:
   };
 
   return (
-    <aside className="console-drawer" aria-label="游戏控制台">
+    <aside className="console-drawer" aria-label={t('console.title')}>
       <header className="console-head">
         <div className="console-lights" aria-hidden="true">
           <span className="red" /><span className="amber" /><span className="green" />
         </div>
         <div className="console-title">
           <TerminalSquare size={16} />
-          <span>游戏控制台</span>
+          <span>{t('console.title')}</span>
         </div>
         <div className={`console-status ${instance.running ? 'is-live' : ''}`}>
-          {instance.running ? <><span className="live-pulse" />运行中</> : '已停止'}
+          {instance.running ? <><span className="live-pulse" />{t('home.running')}</> : t('console.stopped')}
         </div>
-        <button type="button" className="icon-button icon-button-sm" onClick={onClose} aria-label="关闭控制台">
+        <button type="button" className="icon-button icon-button-sm" onClick={onClose} aria-label={t('console.close')}>
           <X size={16} />
         </button>
       </header>
@@ -67,13 +69,13 @@ export function ConsoleDrawer({ instance, logs, onClose, onStop, onOpenFolder }:
       <div className="console-meta">
         <div>
           <strong>{instance.name}</strong>
-          <span>{instance.mcVersion} · {loaderLabel(instance.loader)} · Java {instance.requiredJava}</span>
+          <span>{instance.mcVersion} · {loaderLabel(instance.loader, t('loader.vanilla'))} · Java {instance.requiredJava}</span>
         </div>
         <div className="console-actions">
-          <button type="button" className="icon-button icon-button-sm" title="复制日志" onClick={() => void copy()}>
+          <button type="button" className="icon-button icon-button-sm" title={t('console.copyLogs')} onClick={() => void copy()}>
             {copied ? <Check size={15} /> : <Copy size={15} />}
           </button>
-          <button type="button" className="icon-button icon-button-sm" title="打开版本目录" onClick={onOpenFolder}>
+          <button type="button" className="icon-button icon-button-sm" title={t('console.openFolder')} onClick={onOpenFolder}>
             <FolderOpen size={15} />
           </button>
         </div>
@@ -83,7 +85,7 @@ export function ConsoleDrawer({ instance, logs, onClose, onStop, onOpenFolder }:
         {logs.length === 0 ? (
           <div className="console-empty">
             <TerminalSquare size={24} />
-            <span>等待游戏输出…</span>
+            <span>{t('console.waiting')}</span>
           </div>
         ) : (
           logs.map((line, index) => (
@@ -96,13 +98,13 @@ export function ConsoleDrawer({ instance, logs, onClose, onStop, onOpenFolder }:
       </div>
 
       <footer className="console-foot">
-        <span className="console-hint">实时日志 · 最多保留 600 行</span>
+        <span className="console-hint">{t('console.hint')}</span>
         {instance.running ? (
           <button type="button" className="btn btn-danger btn-sm" onClick={onStop}>
-            <Square size={13} fill="currentColor" /> 结束游戏
+            <Square size={13} fill="currentColor" /> {t('console.endGame')}
           </button>
         ) : (
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>关闭</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>{t('common.close')}</button>
         )}
       </footer>
     </aside>

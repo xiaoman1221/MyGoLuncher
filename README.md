@@ -2,26 +2,42 @@
 
 一个使用 **Go + Wails + React + TypeScript** 构建的 Minecraft 桌面启动器。
 
-界面只保留启动游戏所需的基本信息：版本、账户、内存与 Java。支持黑夜 / 白天两种主题，白天模式以粉色为主色。
+界面保持简洁，同时提供版本设置、资源中心、整合包与 Java 运行时管理。支持黑夜 / 白天两种主题，白天模式以粉色为主色。
 
 ![黑夜模式](docs/screenshot-home-dark.png)
 
 ![白天模式](docs/screenshot-home-light.png)
+
+![English](docs/screenshot-home-en.png)
 
 ## 功能
 
 - **添加本地版本**：扫描本机官方启动器、HMCL、PCL2、Prism Launcher / MultiMC，也可以手动选择 `.minecraft`、`versions` 目录或单个版本文件夹。导入时复制存档、模组、资源包与配置，并准备游戏运行环境。
 - **下载官方版本**：从 Mojang 元数据获取正式版、快照和远古版本，下载客户端、运行库、本地库与资源文件。
 - **多下载源**：官方源与 BMCLAPI，安装前测速并自动回退，所有文件仍做哈希校验。
-- **独立版本目录**：每个版本拥有独立的 `mods/`、`shaderpacks/`、`resourcepacks/`、`saves/` 与日志目录。
+- **版本设置**：在左侧「版本设置」中统一管理已安装版本，可修改名称、内存与 Java，查看游戏目录。
+- **版本隔离**：可在设置中开启或关闭。开启时每个版本拥有独立的 `mods/`、`shaderpacks/`、`resourcepacks/`、`saves/` 与日志目录；关闭后所有版本共用 `.minecraft`。
 - **加载器**：Fabric、Quilt、Forge、NeoForge。
+- **资源中心**：从 Modrinth 与 CurseForge 搜索并安装模组、光影、资源包、数据包与整合包；可在设置中填写 CurseForge API Key。
+  - 内置常见中文别名（如“钠”“小地图”“苹果皮”），无需 AI 也可搜索。
+  - 可选接入 AI 搜索：默认使用 **DeepSeek**（`deepseek-chat`），也支持 **Anthropic Claude**；在「设置 → AI 搜索」中选择提供商并填写对应 API Key。
+- **整合包与服务器包**：
+  - 导入 `.mrpack`、CurseForge `.zip`、Prism / MultiMC 或通用 `.zip`。
+  - 一键导出 `.mrpack` 或完整备份 `.zip`。
+  - 一键导出服务器包 `.zip`：包含加载器运行时或安装器、`mods/`、`config/`、`defaultconfigs/`、`scripts/`、`kubejs/`、`datapacks/`、`server.properties`、启动脚本与 EULA 模板。
 - **账户**：
   - Microsoft 正版登录（设备码 OAuth）。
   - 外置登录，内置 **LittleSkin**（`https://littleskin.cn/api/yggdrasil`）与 **YggdrasilSkinServer**（`https://yss.1v.fit`），也兼容其他 Authlib-Injector 服务器。
+  - **YSS 一键授权**：选择 YggdrasilSkinServer 后可使用 OAuth2 设备码流程，在系统浏览器中登录并确认，无需输入站点密码。需要在 YSS 管理端启用「启动器 OAuth2」。
   - 离线账户，可添加、重命名和切换。
 - **Java**：自动扫描本机 Java，按版本元数据匹配；缺失时从 Adoptium 下载 Temurin JRE。
 - **游戏控制台**：实时日志、错误高亮、复制日志、结束游戏进程。
+- **启动动画**：点击启动后显示旋转方块与进度动画；检测到游戏窗口出现后动画结束。
+- **游戏语言同步**：启动游戏前将 Minecraft 语言设置为启动器当前界面语言（`zh_cn` / `zh_tw` / `en_us` / `ja_jp` / `ko_kr`），写入实例的 `options.txt`。
+- **启动后隐藏**：检测到游戏窗口真正出现后才隐藏启动器；游戏窗口关闭（进程退出）后自动恢复启动器窗口。可在设置中关闭。
 - **主题**：黑夜模式（荧光绿）/ 白天模式（粉色），主题保存在本机。
+- **多语言**：简体中文、繁體中文、English、日本語、한국어。默认跟随系统语言，无法识别时回退简体中文；可在设置中关闭自动跟随并固定启动语言。
+- **内置窗口控制**：隐藏系统标题栏，顶部栏可拖动窗口，并提供最小化、最大化 / 还原和关闭按钮。
 - **首页“你知道吗”**：默认从 HitokotoGo 获取一句“一言”，地址为 `https://hitokotogo.yhdzz.cn/v2`，可在设置中更换。接口文档：<https://hitokotogo.yhdzz.cn/docs>。
 
 ## 技术栈
@@ -32,7 +48,7 @@
 | 后端 | Go 1.25+ |
 | 前端 | React 19 + TypeScript + Vite |
 | 图标 | Lucide |
-| 数据源 | Mojang Piston Meta、Adoptium API、Fabric / Quilt Meta、Forge / NeoForge 官方 Maven |
+| 数据源 | Mojang Piston Meta、Adoptium API、Fabric / Quilt Meta、Forge / NeoForge 官方 Maven、Modrinth API、CurseForge API |
 
 ## 开发
 
@@ -120,7 +136,14 @@ cd frontend && npm run build
 
 ## 已知限制
 
+- 界面已完成基础多语言适配；下载、安装与登录流程中的详细错误信息和后台任务标题仍由后端以中文返回。
 - 账户令牌保存在本机 `accounts.json` 中，请勿在共享电脑上保存私人账户。
 - 外置服务器若要求两步验证或特殊登录流程，需要按其文档处理。
-- 资源中心、整合包导入 / 导出等功能的后端代码仍然保留，但当前界面未提供入口。
+- YSS 一键授权依赖站点启用「启动器 OAuth2」；若站点未启用，启动器会给出提示，仍可使用用户名 / 密码外置登录。
+- 关闭版本隔离后，所有版本共用 `.minecraft` 中的模组、存档与配置，删除版本时也不会删除共享游戏目录。
+- 资源中心使用 CurseForge 内容时需要填写自己的 CurseForge API Key；未填写时仅显示 Modrinth 结果。
+- AI 搜索需要自备 DeepSeek 或 Anthropic API Key，搜索关键词会发送到所选提供商的 API。未配置或调用失败时会回退到本地别名匹配。API Key 与其他设置一样以明文保存在本机 `settings.json` 中。
+- 服务器包会包含实例中的全部模组；仅客户端模组可能需要手动从 `mods/` 中移除。Forge / NeoForge / Quilt 服务器包首次使用需运行 `install-server` 脚本。
+- 服务器包不会自动接受 Minecraft EULA，请阅读后自行将 `eula.txt` 中的 `eula=false` 改为 `true`。
+- 每次启动游戏都会把当前启动器语言写入 `options.txt`；如果之后在游戏内修改语言，下次通过启动器启动时会被重新同步。
 - 本项目不是 Mojang Studios 或 Microsoft 的官方产品。Minecraft 是 Mojang Studios 的商标。

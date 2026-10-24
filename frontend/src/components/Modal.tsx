@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
+import { useApp } from '../lib/app-context';
 
 interface ModalProps {
   open: boolean;
@@ -25,6 +26,7 @@ export function Modal({
   size = 'md',
   closeable = true,
 }: ModalProps) {
+  const { t } = useApp();
   const titleId = useId();
   const cardRef = useRef<HTMLDivElement>(null);
 
@@ -70,7 +72,7 @@ export function Modal({
             {description && <p>{description}</p>}
           </div>
           {closeable && (
-            <button type="button" className="icon-button modal-close" onClick={onClose} aria-label="关闭">
+            <button type="button" className="icon-button modal-close" onClick={onClose} aria-label={t('common.close')}>
               <X size={18} />
             </button>
           )}

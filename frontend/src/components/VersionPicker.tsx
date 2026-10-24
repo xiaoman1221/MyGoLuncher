@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronsUpDown, LoaderCircle, Search } from 'lucide-react';
 import type { VersionView } from '../lib/types';
+import { useApp } from '../lib/app-context';
 import { cn } from '../lib/format';
 
 interface VersionPickerProps {
@@ -11,21 +12,22 @@ interface VersionPickerProps {
   placeholder?: string;
 }
 
-function typeLabel(type: string) {
-  switch (type) {
-    case 'release': return '正式版';
-    case 'snapshot': return '快照';
-    case 'old_beta': return '远古 Beta';
-    case 'old_alpha': return '远古 Alpha';
-    default: return type;
-  }
-}
-
 export function VersionPicker({ options, value, onChange, loading, placeholder }: VersionPickerProps) {
+  const { t } = useApp();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const rootRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  const typeLabel = (type: string) => {
+    switch (type) {
+      case 'release': return t('version.type.release');
+      case 'snapshot': return t('version.type.snapshot');
+      case 'old_beta': return t('version.type.old_beta');
+      case 'old_alpha': return t('version.type.old_alpha');
+      default: return type;
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -69,15 +71,15 @@ export function VersionPicker({ options, value, onChange, loading, placeholder }
         aria-expanded={open}
       >
         {loading ? (
-          <span className="select-placeholder"><LoaderCircle size={15} className="spin" /> 正在读取版本…</span>
+          <span className="select-placeholder"><LoaderCircle size={15} className="spin" /> {t('picker.loading')}</span>
         ) : selected ? (
           <span className="version-trigger-value">
             <span className="mc-version">{selected.id}</span>
             <span className={`version-type type-${selected.type}`}>{typeLabel(selected.type)}</span>
-            {selected.installed && <span className="installed-tag">已安装</span>}
+            {selected.installed && <span className="installed-tag">{t('picker.installed')}</span>}
           </span>
         ) : (
-          <span className="select-placeholder">{placeholder ?? '选择版本'}</span>
+          <span className="select-placeholder">{placeholder ?? t('picker.select')}</span>
         )}
         <ChevronsUpDown size={16} className="select-chevron" />
       </button>
@@ -90,12 +92,12 @@ export function VersionPicker({ options, value, onChange, loading, placeholder }
               ref={searchRef}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="搜索版本，例如 1.21.1"
-              aria-label="搜索 Minecraft 版本"
+              placeholder={t('picker.searchPlaceholder')}
+              aria-label={t('picker.searchAria')}
             />
           </div>
           <div className="version-options">
-            {filtered.length === 0 && <div className="version-empty">没有匹配的版本</div>}
+            {filtered.length === 0 && <div className="version-empty">{t('picker.noMatch')}</div>}
             {filtered.map((version) => (
               <button
                 key={version.id}
@@ -113,7 +115,7 @@ export function VersionPicker({ options, value, onChange, loading, placeholder }
                   <span className={`version-type type-${version.type}`}>{typeLabel(version.type)}</span>
                 </span>
                 <span className="version-option-meta">
-                  {version.installed && <span className="installed-tag">已安装</span>}
+                  {version.installed && <span className="installed-tag">{t('picker.installed')}</span>}
                   {version.id === value && <Check size={15} />}
                 </span>
               </button>

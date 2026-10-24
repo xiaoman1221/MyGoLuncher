@@ -22,22 +22,22 @@ import { cn, formatDate } from '../lib/format';
 
 type VersionFilter = 'release' | 'snapshot' | 'all';
 
-const typeLabels: Record<string, string> = {
-  release: '正式版',
-  snapshot: '快照',
-  old_beta: 'Beta',
-  old_alpha: 'Alpha',
-};
+const typeKeys = {
+  release: 'version.type.release',
+  snapshot: 'version.type.snapshot',
+  old_beta: 'version.type.old_beta',
+  old_alpha: 'version.type.old_alpha',
+} as const;
 
-const filters: Array<{ key: VersionFilter; label: string }> = [
-  { key: 'release', label: '正式版' },
-  { key: 'snapshot', label: '快照' },
-  { key: 'all', label: '全部' },
+const filters: Array<{ key: VersionFilter; labelKey: 'versions.filter.release' | 'versions.filter.snapshot' | 'versions.filter.all' }> = [
+  { key: 'release', labelKey: 'versions.filter.release' },
+  { key: 'snapshot', labelKey: 'versions.filter.snapshot' },
+  { key: 'all', labelKey: 'versions.filter.all' },
 ];
 
 export function VersionsPage() {
   const {
-    pushToast, refreshInstances, selectInstance, navigate,
+    pushToast, refreshInstances, selectInstance, navigate, t, locale,
   } = useApp();
   const [filter, setFilter] = useState<VersionFilter>('release');
   const [query, setQuery] = useState('');
@@ -88,10 +88,15 @@ export function VersionsPage() {
 
   const entries = useMemo(() => buildLocalEntries(scans), [scans]);
 
+  const typeLabel = (type: string) => {
+    const key = typeKeys[type as keyof typeof typeKeys];
+    return key ? t(key) : type;
+  };
+
   const showScans = (results: ExternalScanResult[]) => {
     const found = buildLocalEntries(results);
     if (found.length === 0) {
-      pushToast('error', '没有发现版本', '请选择包含 versions 目录或单个版本文件夹的目录。');
+      pushToast('error', t('versions.noVersionsFound'), t('versions.noVersionsHint'));
       return;
     }
     setScans(results);
@@ -105,7 +110,7 @@ export function VersionsPage() {
       const results = await api.detectLocalLaunchers();
       showScans(results);
     } catch (reason) {
-      pushToast('error', '未找到本地启动器', (reason as Error).message);
+      pushToast('error', t('versions.noLauncher'), (reason as Error).message);
     } finally {
       setScanning(false);
     }
@@ -118,7 +123,7 @@ export function VersionsPage() {
       if (!result.root) return;
       showScans([result]);
     } catch (reason) {
-      pushToast('error', '目录扫描失败', (reason as Error).message);
+      pushToast('error', t('versions.scanFailed'), (reason as Error).message);
     } finally {
       setPicking(false);
     }
@@ -136,12 +141,12 @@ export function VersionsPage() {
       const warning = imported.warnings.length > 0 ? `；${imported.warnings[0]}` : '';
       pushToast(
         'success',
-        '版本已添加',
-        `${imported.instance.name} 已加入启动器${warning}`,
+        t('versions.added'),
+        t('versions.addedDetail', { name: imported.instance.name, warning }),
       );
       navigate('home');
     } catch (reason) {
-      pushToast('error', '版本导入失败', (reason as Error).message);
+      pushToast('error', t('versions.importFailed'), (reason as Error).message);
     } finally {
       setImporting(false);
     }
@@ -155,9 +160,9 @@ export function VersionsPage() {
         ...current,
         versions: current.versions.map((entry) => entry.id === version.id ? { ...entry, installed: true } : entry),
       } : current);
-      pushToast('success', '版本安装完成', `Minecraft ${version.id} 已准备好。`);
+      pushToast('success', t('versions.installDone'), t('versions.installDoneDetail', { id: version.id }));
     } catch (reason) {
-      pushToast('error', '版本安装失败', (reason as Error).message);
+      pushToast('error', t('versions.installFailed'), (reason as Error).message);
     } finally {
       setPending((current) => {
         const next = new Set(current);
@@ -171,40 +176,38 @@ export function VersionsPage() {
     <div className="page versions-page">
       <PageHeader
         kicker="VERSIONS"
-        title={<>版本 <span className="title-accent">/</span> 添加与下载</>}
-        description="添加官方启动器、其他启动器或任意目录中的版本，也可以直接下载 Mojang 官方版本。"
+        title={<>{t('versions.title')} <span className="title-accent">/</span> {t('versions.titleTail')}</>}
+        description={t('versions.description')}
       />
 
       <section className="panel local-panel">
         <div className="panel-head">
           <div>
-            <h2>添加本地版本</h2>
-            <p>自动扫描本机官方启动器、HMCL、PCL2、Prism / MultiMC，或手动选择任意版本目录。</p>
+            <h2>{t('versions.addLocalTitle')}</h2>
+            <p>{t('versions.addLocalBody')}</p>
           </div>
         </div>
         <div className="local-actions">
           <button type="button" className="btn btn-primary" onClick={() => void detectLaunchers()} disabled={scanning || picking}>
             {scanning ? <LoaderCircle size={16} className="spin" /> : <Laptop size={16} />}
-            {scanning ? '正在扫描本机启动器…' : '扫描本机启动器'}
+            {scanning ? t('versions.scanning') : t('versions.scanLaunchers')}
           </button>
           <button type="button" className="btn btn-ghost" onClick={() => void pickDirectory()} disabled={scanning || picking}>
             {picking ? <LoaderCircle size={16} className="spin" /> : <FolderInput size={16} />}
-            {picking ? '正在读取目录…' : '选择版本目录'}
+            {picking ? t('versions.readingDirectory') : t('versions.pickDirectory')}
           </button>
         </div>
-        <p className="panel-note">
-          支持选择 <code>.minecraft</code>、<code>versions</code> 文件夹或单个版本文件夹。导入时会复制存档、模组与配置，并重新准备游戏文件。
-        </p>
+        <p className="panel-note">{t('versions.localHint')}</p>
       </section>
 
       <section className="panel">
         <div className="panel-head panel-head-row">
           <div>
-            <h2>下载 Minecraft</h2>
-            <p>从 Mojang 官方源下载游戏本体、运行库与资源文件。</p>
+            <h2>{t('versions.downloadTitle')}</h2>
+            <p>{t('versions.downloadBody')}</p>
           </div>
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReloadKey((value) => value + 1)}>
-            <RefreshCw size={14} className={loading ? 'spin' : ''} /> 刷新
+            <RefreshCw size={14} className={loading ? 'spin' : ''} /> {t('common.refresh')}
           </button>
         </div>
 
@@ -212,10 +215,10 @@ export function VersionsPage() {
           <div className="inline-banner banner-error">
             <TriangleAlert size={17} />
             <div>
-              <strong>版本清单加载失败</strong>
+              <strong>{t('versions.listFailed')}</strong>
               <span>{error}</span>
             </div>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReloadKey((value) => value + 1)}>重试</button>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setReloadKey((value) => value + 1)}>{t('common.retry')}</button>
           </div>
         )}
 
@@ -228,7 +231,7 @@ export function VersionsPage() {
                 className={cn('segment', filter === item.key && 'is-active')}
                 onClick={() => setFilter(item.key)}
               >
-                {item.label}
+                {t(item.labelKey)}
               </button>
             ))}
           </div>
@@ -240,20 +243,20 @@ export function VersionsPage() {
                 setQuery(event.target.value);
                 setVisible(50);
               }}
-              placeholder="搜索版本号"
-              aria-label="搜索版本号"
+              placeholder={t('versions.searchPlaceholder')}
+              aria-label={t('versions.searchPlaceholder')}
             />
           </div>
-          <span className="toolbar-count">{filtered.length} 个版本</span>
+          <span className="toolbar-count">{t('versions.count', { count: filtered.length })}</span>
         </div>
 
         <div className="version-table">
           <div className="version-table-head">
-            <span>版本</span>
-            <span>类型</span>
-            <span>发布时间</span>
-            <span>Java</span>
-            <span className="align-right">操作</span>
+            <span>{t('versions.tableVersion')}</span>
+            <span>{t('versions.tableType')}</span>
+            <span>{t('versions.tableReleased')}</span>
+            <span>{t('versions.tableJava')}</span>
+            <span className="align-right">{t('versions.tableActions')}</span>
           </div>
           {loading ? (
             Array.from({ length: 6 }).map((_, index) => (
@@ -269,21 +272,21 @@ export function VersionsPage() {
             <EmptyState
               compact
               icon={<Search size={24} />}
-              title="没有找到版本"
-              body="换一个关键词，或切换正式版 / 快照筛选。"
+              title={t('versions.emptyTitle')}
+              body={t('versions.emptyBody')}
             />
           ) : (
             filtered.slice(0, visible).map((version) => (
               <div className="version-row" key={version.id}>
                 <span className="version-id"><strong>{version.id}</strong></span>
                 <span>
-                  <span className={`version-type type-${version.type}`}>{typeLabels[version.type] ?? version.type}</span>
+                  <span className={`version-type type-${version.type}`}>{typeLabel(version.type)}</span>
                 </span>
-                <span className="version-date">{formatDate(version.releaseTime)}</span>
+                <span className="version-date">{formatDate(version.releaseTime, locale)}</span>
                 <span className="version-java">Java {version.javaMajor}</span>
                 <span className="version-action">
                   {version.installed ? (
-                    <span className="installed-state"><Check size={14} /> 已安装</span>
+                    <span className="installed-state"><Check size={14} /> {t('common.installed')}</span>
                   ) : (
                     <button
                       type="button"
@@ -292,7 +295,7 @@ export function VersionsPage() {
                       disabled={pending.has(version.id)}
                     >
                       {pending.has(version.id) ? <LoaderCircle size={14} className="spin" /> : <ArrowDownToLine size={14} />}
-                      {pending.has(version.id) ? '安装中' : '安装'}
+                      {pending.has(version.id) ? t('common.installing') : t('common.install')}
                     </button>
                   )}
                 </span>
@@ -301,7 +304,7 @@ export function VersionsPage() {
           )}
           {!loading && visible < filtered.length && (
             <button type="button" className="load-more" onClick={() => setVisible((value) => value + 50)}>
-              加载更多版本 <span>{visible} / {filtered.length}</span>
+              {t('versions.loadMore')} <span>{visible} / {filtered.length}</span>
             </button>
           )}
         </div>

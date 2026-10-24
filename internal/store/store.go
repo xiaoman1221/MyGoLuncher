@@ -147,6 +147,14 @@ type Settings struct {
 	ShowGameConsole      bool           `json:"showGameConsole"`
 	ShowLauncherOnLaunch bool           `json:"showLauncherOnLaunch"`
 	HitokotoAPIURL       string         `json:"hitokotoApiUrl"`
+	LanguageAuto         bool           `json:"languageAuto"`
+	Language             string         `json:"language"`
+	VersionIsolation     bool           `json:"versionIsolation"`
+	AISearchEnabled      bool           `json:"aiSearchEnabled"`
+	AISearchProvider     string         `json:"aiSearchProvider"`
+	AISearchBaseURL      string         `json:"aiSearchBaseUrl"`
+	AISearchAPIKey       string         `json:"aiSearchApiKey"`
+	AISearchModel        string         `json:"aiSearchModel"`
 	SchemaVersion        int            `json:"schemaVersion"`
 	ConcurrencyWarned    bool           `json:"-"`
 }
@@ -154,13 +162,18 @@ type Settings struct {
 // DefaultSettings builds first-run preferences.
 func DefaultSettings() Settings {
 	return Settings{
-		PlayerName:      "Steve",
-		DefaultMemoryMB: 0, // automatic
-		CustomMirrors:   []MirrorConfig{},
-		DownloadWorkers: 8,
-		ShowGameConsole: true,
-		HitokotoAPIURL:  hitokoto.DefaultAPIURL,
-		SchemaVersion:   2,
+		PlayerName:       "Steve",
+		DefaultMemoryMB:  0, // automatic
+		CustomMirrors:    []MirrorConfig{},
+		DownloadWorkers:  8,
+		ShowGameConsole:  true,
+		HitokotoAPIURL:   hitokoto.DefaultAPIURL,
+		LanguageAuto:     true,
+		Language:         "zh-CN",
+		VersionIsolation: true,
+		AISearchProvider: "deepseek",
+		AISearchModel:    "deepseek-chat",
+		SchemaVersion:    3,
 	}
 }
 
@@ -242,6 +255,12 @@ func Open(paths Paths) (*Store, error) {
 		s.settings.SchemaVersion = 2
 		settingsDirty = true
 	}
+	if s.settings.SchemaVersion < 3 {
+		// Isolation was implicit before this option existed; keep it on.
+		s.settings.VersionIsolation = true
+		s.settings.SchemaVersion = 3
+		settingsDirty = true
+	}
 	if s.settings.DefaultMemoryMB != 0 && (s.settings.DefaultMemoryMB < 512 || s.settings.DefaultMemoryMB > 65536) {
 		s.settings.DefaultMemoryMB = 0
 		settingsDirty = true
@@ -251,6 +270,28 @@ func Open(paths Paths) (*Store, error) {
 	}
 	if strings.TrimSpace(s.settings.HitokotoAPIURL) == "" {
 		s.settings.HitokotoAPIURL = hitokoto.DefaultAPIURL
+		settingsDirty = true
+	}
+	// Settings written before i18n existed have no language value. Treat that
+	// as the first-run default: follow the system language, fall back to zh-CN.
+	if strings.TrimSpace(s.settings.Language) == "" {
+		s.settings.LanguageAuto = true
+		s.settings.Language = "zh-CN"
+		settingsDirty = true
+	} else {
+		normalized := normalizeLanguage(s.settings.Language)
+		if normalized != s.settings.Language {
+			s.settings.Language = normalized
+			settingsDirty = true
+		}
+	}
+	provider := normalizeAIProvider(s.settings.AISearchProvider, s.settings.AISearchModel)
+	if provider != s.settings.AISearchProvider {
+		s.settings.AISearchProvider = provider
+		settingsDirty = true
+	}
+	if strings.TrimSpace(s.settings.AISearchModel) == "" {
+		s.settings.AISearchModel = defaultAIModel(provider)
 		settingsDirty = true
 	}
 	var db instanceDB
@@ -358,10 +399,18 @@ func (s *Store) SaveSettings(next Settings) (Settings, error) {
 	if next.HitokotoAPIURL == "" {
 		next.HitokotoAPIURL = hitokoto.DefaultAPIURL
 	}
+	next.Language = normalizeLanguage(next.Language)
+	next.AISearchBaseURL = strings.TrimSpace(next.AISearchBaseURL)
+	next.AISearchAPIKey = strings.TrimSpace(next.AISearchAPIKey)
+	next.AISearchProvider = normalizeAIProvider(next.AISearchProvider, next.AISearchModel)
+	next.AISearchModel = strings.TrimSpace(next.AISearchModel)
+	if next.AISearchModel == "" {
+		next.AISearchModel = defaultAIModel(next.AISearchProvider)
+	}
 	if next.CustomMirrors == nil {
 		next.CustomMirrors = []MirrorConfig{}
 	}
-	next.SchemaVersion = 2
+	next.SchemaVersion = 3
 	s.mu.Lock()
 	s.settings = next
 	err := saveJSON(s.paths.Settings, next)
@@ -520,6 +569,48 @@ func (s *Store) sortInstancesLocked() {
 		}
 		return left.CreatedAt.After(right.CreatedAt)
 	})
+}
+
+func normalizeAIProvider(provider, model string) string {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "anthropic", "claude":
+		return "anthropic"
+	case "deepseek":
+		return "deepseek"
+	default:
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude") {
+			return "anthropic"
+		}
+		return "deepseek"
+	}
+}
+
+func defaultAIModel(provider string) string {
+	if provider == "anthropic" {
+		return "claude-opus-5-5"
+	}
+	return "deepseek-chat"
+}
+
+func normalizeLanguage(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.ReplaceAll(value, "_", "-")
+	switch {
+	case strings.HasPrefix(value, "zh"):
+		if strings.Contains(value, "tw") || strings.Contains(value, "hk") ||
+			strings.Contains(value, "mo") || strings.Contains(value, "hant") {
+			return "zh-TW"
+		}
+		return "zh-CN"
+	case strings.HasPrefix(value, "en"):
+		return "en"
+	case strings.HasPrefix(value, "ja"):
+		return "ja"
+	case strings.HasPrefix(value, "ko"):
+		return "ko"
+	default:
+		return "zh-CN"
+	}
 }
 
 func newID() string {

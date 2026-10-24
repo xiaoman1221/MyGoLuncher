@@ -68,6 +68,7 @@ type ImportOptions struct {
 	FallbackLoader        string `json:"fallbackLoader"`
 	FallbackLoaderVersion string `json:"fallbackLoaderVersion"`
 	CurseForgeAPIKey      string `json:"-"`
+	GameDir               string `json:"-"`
 }
 
 // ProgressFunc receives import/export progress.
@@ -276,7 +277,10 @@ func Import(ctx context.Context, st *store.Store, path string, opts ImportOption
 	if err != nil {
 		return ImportResult{}, err
 	}
-	gameDir := st.InstanceDir(inst.ID)
+	gameDir := strings.TrimSpace(opts.GameDir)
+	if gameDir == "" {
+		gameDir = st.InstanceDir(inst.ID)
+	}
 	cleanup := true
 	defer func() {
 		if cleanup {

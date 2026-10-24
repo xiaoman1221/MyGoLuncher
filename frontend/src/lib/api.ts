@@ -24,9 +24,11 @@ import type {
   ResourceVersion,
   SearchRequest,
   SearchResult,
+  ServerPackExportResult,
   Settings,
   UpdateInstanceRequest,
   VersionList,
+  YSSDeviceView,
 } from './types';
 
 type WailsWindow = Window & {
@@ -73,6 +75,8 @@ export const api = {
   authlibServers: () => call<AuthlibServer[]>('AuthlibServers'),
   beginMicrosoftLogin: () => call<DeviceCodeView>('BeginMicrosoftLogin'),
   cancelMicrosoftLogin: () => call<void>('CancelMicrosoftLogin'),
+  beginYSSLogin: (serverUrl: string) => call<YSSDeviceView>('BeginYSSLogin', serverUrl),
+  cancelYSSLogin: () => call<void>('CancelYSSLogin'),
 
   listVersions: (includeSnapshots: boolean, includeOld: boolean) =>
     call<VersionList>('ListVersions', includeSnapshots, includeOld),
@@ -85,7 +89,7 @@ export const api = {
   deleteInstance: (id: string, deleteFiles: boolean) =>
     call<void>('DeleteInstance', id, deleteFiles),
 
-  launchInstance: (id: string) => call<void>('LaunchInstance', id),
+  launchInstance: (id: string, language: string) => call<void>('LaunchInstance', id, language),
   stopInstance: (id: string) => call<void>('StopInstance', id),
   getInstanceLog: (id: string) => call<string[]>('GetInstanceLog', id),
   openInstanceFolder: (id: string) => call<void>('OpenInstanceFolder', id),
@@ -113,6 +117,8 @@ export const api = {
     call<string>('ExportModpackDialog', instanceId),
   exportInstanceBackupDialog: (instanceId: string) =>
     call<string>('ExportInstanceBackupDialog', instanceId),
+  exportServerPackDialog: (instanceId: string) =>
+    call<ServerPackExportResult>('ExportServerPackDialog', instanceId),
   pickExternalLauncher: () => call<ExternalScanResult>('PickExternalLauncher'),
   pickVersionDirectory: () => call<ExternalScanResult>('PickVersionDirectory'),
   scanVersionDirectory: (path: string) => call<ExternalScanResult>('ScanVersionDirectory', path),

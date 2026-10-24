@@ -1,5 +1,6 @@
 import { CheckCircle2, Info, TriangleAlert, X } from 'lucide-react';
 import type { Toast } from '../lib/app-context';
+import { useApp } from '../lib/app-context';
 
 interface ToastStackProps {
   toasts: Toast[];
@@ -14,6 +15,7 @@ const icons = {
 };
 
 export function ToastStack({ toasts, onDismiss, withConsole }: ToastStackProps) {
+  const { t } = useApp();
   if (toasts.length === 0) return null;
   return (
     <div className={`toast-stack ${withConsole ? 'with-console' : ''}`} aria-live="polite">
@@ -26,7 +28,7 @@ export function ToastStack({ toasts, onDismiss, withConsole }: ToastStackProps) 
               <strong>{toast.title}</strong>
               {toast.message && <span>{toast.message}</span>}
             </div>
-            <button type="button" className="toast-close" onClick={() => onDismiss(toast.id)} aria-label="关闭通知">
+            <button type="button" className="toast-close" onClick={() => onDismiss(toast.id)} aria-label={t('common.close')}>
               <X size={14} />
             </button>
           </div>

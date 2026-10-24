@@ -1,3 +1,155 @@
+/* Game launch animation */
+.launch-overlay {
+  position: fixed;
+  top: 64px;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--backdrop);
+  backdrop-filter: blur(16px);
+  animation: fadeIn 0.2s ease;
+}
+
+.launch-glow {
+  position: absolute;
+  width: min(640px, 82vw);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  pointer-events: none;
+  background: radial-gradient(circle, rgba(var(--accent-rgb), 0.20), transparent 66%);
+  animation: glowPulse 2.6s ease-in-out infinite;
+}
+
+.launch-stage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(460px, calc(100vw - 48px));
+  padding: 30px 30px 24px;
+  border: 1px solid var(--line-strong);
+  border-radius: 22px;
+  background: var(--panel);
+  box-shadow: var(--shadow-pop);
+  text-align: center;
+  animation: slideUp 0.26s var(--ease-out);
+}
+
+.launch-cube-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 154px;
+  height: 128px;
+  margin-bottom: 2px;
+  perspective: 620px;
+}
+
+.launch-cube {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  transform-style: preserve-3d;
+  animation: launchCube 3s linear infinite;
+}
+
+.launch-face {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(var(--accent-rgb), 0.45);
+  border-radius: 3px;
+  background: linear-gradient(145deg, rgba(var(--accent-rgb), 0.38), var(--panel-2) 70%);
+  box-shadow: inset 0 0 22px rgba(var(--accent-rgb), 0.16);
+}
+
+.launch-face::after {
+  content: "";
+  position: absolute;
+  inset: 11px;
+  border: 1px solid rgba(var(--accent-rgb), 0.25);
+  background-image:
+    linear-gradient(90deg, rgba(var(--accent-rgb), 0.18) 1px, transparent 1px),
+    linear-gradient(rgba(var(--accent-rgb), 0.18) 1px, transparent 1px);
+  background-size: 13px 13px;
+}
+
+.launch-face-front { transform: translateZ(38px); }
+.launch-face-back { transform: rotateY(180deg) translateZ(38px); }
+.launch-face-right { transform: rotateY(90deg) translateZ(38px); }
+.launch-face-left { transform: rotateY(-90deg) translateZ(38px); }
+.launch-face-top { transform: rotateX(90deg) translateZ(38px); }
+.launch-face-bottom { transform: rotateX(-90deg) translateZ(38px); }
+
+@keyframes launchCube {
+  from { transform: rotateX(-24deg) rotateY(0deg); }
+  to { transform: rotateX(-24deg) rotateY(360deg); }
+}
+
+.launch-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+}
+
+.launch-copy .eyebrow {
+  justify-content: center;
+}
+
+.launch-copy h2 {
+  max-width: 100%;
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launch-copy p {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.launch-progress {
+  position: relative;
+  width: min(240px, 70%);
+  height: 4px;
+  margin-top: 4px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--line);
+}
+
+.launch-progress span {
+  position: absolute;
+  width: 38%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  animation: indeterminate 1.4s ease-in-out infinite;
+}
+
+.launch-status {
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.launch-hint {
+  max-width: 330px;
+  color: var(--muted-2);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
 /* Modal */
 .modal-layer {
   position: fixed;
@@ -112,6 +264,13 @@
   color: var(--muted-2);
   font-size: 10px;
   line-height: 1.5;
+}
+
+.modal-note {
+  margin-top: 12px;
+  color: var(--muted-2);
+  font-size: 10.5px;
+  line-height: 1.55;
 }
 
 .modal-actions .btn {

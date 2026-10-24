@@ -44,6 +44,68 @@ func TestLegacyConfigMigration(t *testing.T) {
 	}
 }
 
+func TestLanguageDefaultsAndNormalization(t *testing.T) {
+	cases := map[string]string{
+		"zh-Hant": "zh-TW",
+		"zh-HK":   "zh-TW",
+		"zh-CN":   "zh-CN",
+		"en-US":   "en",
+		"ja-JP":   "ja",
+		"ko-KR":   "ko",
+		"fr-FR":   "zh-CN",
+	}
+	for input, want := range cases {
+		if got := normalizeLanguage(input); got != want {
+			t.Fatalf("normalizeLanguage(%q) = %q, want %q", input, got, want)
+		}
+	}
+
+	paths := PathsFor(t.TempDir())
+	if err := paths.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	// A settings file from before i18n existed has no language fields.
+	if err := os.WriteFile(paths.Settings, []byte(`{"playerName":"Steve","downloadWorkers":8}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := st.Settings()
+	if !settings.LanguageAuto || settings.Language != "zh-CN" {
+		t.Fatalf("legacy language migration failed: %#v", settings)
+	}
+	if settings.AISearchProvider != "deepseek" || settings.AISearchModel != "deepseek-chat" {
+		t.Fatalf("AI defaults = %q / %q", settings.AISearchProvider, settings.AISearchModel)
+	}
+
+	settings.LanguageAuto = false
+	settings.Language = "en-US"
+	settings.VersionIsolation = false
+	saved, err := st.SaveSettings(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.LanguageAuto || saved.Language != "en" {
+		t.Fatalf("language settings not normalized: %#v", saved)
+	}
+	if saved.VersionIsolation {
+		t.Fatal("version isolation should be saved as disabled")
+	}
+
+	reopened, err := Open(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Settings().LanguageAuto || reopened.Settings().Language != "en" {
+		t.Fatalf("language settings not persisted: %#v", reopened.Settings())
+	}
+	if reopened.Settings().VersionIsolation {
+		t.Fatalf("version isolation not persisted: %#v", reopened.Settings())
+	}
+}
+
 func TestStoreLifecycle(t *testing.T) {
 	root := t.TempDir()
 	paths := PathsFor(root)
@@ -181,8 +243,11 @@ func TestAutomaticMemoryMigration(t *testing.T) {
 	if got := st.Settings().DefaultMemoryMB; got != 0 {
 		t.Fatalf("old 4 GB default should migrate to automatic, got %d", got)
 	}
-	if st.Settings().SchemaVersion != 2 {
+	if st.Settings().SchemaVersion != 3 {
 		t.Fatalf("schema version = %d", st.Settings().SchemaVersion)
+	}
+	if !st.Settings().VersionIsolation {
+		t.Fatal("version isolation should default to enabled")
 	}
 	inst, err := st.CreateInstance(Instance{Name: "Auto", MCVersion: "1.21.1", Loader: "fabric", MemoryMB: 0})
 	if err != nil {

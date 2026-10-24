@@ -28,6 +28,14 @@ export interface Settings {
   showGameConsole: boolean;
   showLauncherOnLaunch: boolean;
   hitokotoApiUrl: string;
+  languageAuto: boolean;
+  language: string;
+  versionIsolation: boolean;
+  aiSearchEnabled: boolean;
+  aiSearchProvider: string;
+  aiSearchBaseUrl: string;
+  aiSearchApiKey: string;
+  aiSearchModel: string;
   schemaVersion?: number;
 }
 
@@ -112,6 +120,15 @@ export interface AccountState {
 export interface DeviceCodeView {
   userCode: string;
   verificationUri: string;
+  expiresIn: number;
+  interval: number;
+  message: string;
+}
+
+export interface YSSDeviceView {
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
   expiresIn: number;
   interval: number;
   message: string;
@@ -248,6 +265,11 @@ export interface JavaPackage {
   installed: boolean;
 }
 
+export interface ServerPackExportResult {
+  path: string;
+  warnings: string[];
+}
+
 export interface ModpackImportResponse {
   instance: InstanceView;
   format: string;
@@ -338,6 +360,7 @@ export interface ResourceSearchRequest {
   sort: string;
   offset: number;
   limit: number;
+  useAI: boolean;
 }
 
 export interface ResourceSearchResult {
@@ -347,6 +370,10 @@ export interface ResourceSearchResult {
   limit: number;
   warnings: string[];
   curseForgeReady: boolean;
+  queryUsed: string;
+  aiUsed: boolean;
+  aiError: string;
+  cjkQuery: boolean;
 }
 
 export interface CreateInstanceRequest {
@@ -370,7 +397,7 @@ export interface AuthlibServer {
   url: string;
 }
 
-export type PageKey = 'home' | 'versions' | 'settings';
+export type PageKey = 'home' | 'versions' | 'instanceSettings' | 'resources' | 'modpacks' | 'settings';
 export type Theme = 'dark' | 'light';
 export type ResourceType = 'mod' | 'shader' | 'resourcepack' | 'datapack' | 'modpack';
 export type ResourceSource = 'modrinth' | 'curseforge';

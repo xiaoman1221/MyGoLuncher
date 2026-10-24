@@ -1,13 +1,42 @@
 import { CheckCircle2, LoaderCircle, TriangleAlert } from 'lucide-react';
 import type { TaskProgress } from '../lib/types';
-import { stageLabel } from '../lib/format';
+import type { MessageKey } from '../lib/i18n';
+import { useApp } from '../lib/app-context';
+
+const stageKeys: Record<string, MessageKey> = {
+  prepare: 'stage.prepare',
+  game: 'stage.game',
+  loader: 'stage.loader',
+  java: 'stage.java',
+  download: 'stage.download',
+  assets: 'stage.assets',
+  libraries: 'stage.libraries',
+  import: 'stage.import',
+  extract: 'stage.extract',
+  copy: 'stage.copy',
+  done: 'stage.done',
+  mirror: 'stage.mirror',
+  error: 'stage.error',
+  metadata: 'stage.metadata',
+  client: 'stage.client',
+  natives: 'stage.natives',
+  logging: 'stage.logging',
+  dependencies: 'stage.dependencies',
+};
 
 export function TaskTray({ tasks }: { tasks: TaskProgress[] }) {
+  const { t } = useApp();
   if (tasks.length === 0) return null;
+
+  const stageLabel = (stage: string) => {
+    const key = stage.includes(':') ? stage.split(':').pop()! : stage;
+    return t(stageKeys[key] ?? 'stage.processing');
+  };
+
   return (
-    <aside className="task-tray" aria-live="polite" aria-label="后台任务">
+    <aside className="task-tray" aria-live="polite" aria-label={t('task.background')}>
       <div className="task-tray-head">
-        <span className="eyebrow"><span className="eyebrow-dash" />后台任务</span>
+        <span className="eyebrow"><span className="eyebrow-dash" />{t('task.background')}</span>
         <span className="task-tray-count">{tasks.length}</span>
       </div>
       <div className="task-list">
@@ -25,7 +54,7 @@ export function TaskTray({ tasks }: { tasks: TaskProgress[] }) {
                   <strong>{task.title}</strong>
                   <span title={task.message}>{task.message}</span>
                 </div>
-                <span className="task-stage">{failed ? '失败' : success ? '完成' : stageLabel(task.stage)}</span>
+                <span className="task-stage">{failed ? t('task.failed') : success ? t('task.done') : stageLabel(task.stage)}</span>
               </div>
               <div className="task-progress">
                 <div

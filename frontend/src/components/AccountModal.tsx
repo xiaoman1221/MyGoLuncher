@@ -10,6 +10,7 @@ import {
   LogIn,
   Pencil,
   Server,
+  ShieldCheck,
   Trash2,
   TriangleAlert,
   UserRound,
@@ -17,16 +18,17 @@ import {
 import { api, isDemo } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import { onEvent } from '../lib/events';
-import type { AccountLoginEvent, AccountView, AuthlibServer, DeviceCodeView } from '../lib/types';
+import type { AccountLoginEvent, AccountView, AuthlibServer, DeviceCodeView, YSSDeviceView } from '../lib/types';
+import { accountKindKey } from '../lib/i18n';
 import { cn, initials } from '../lib/format';
 import { Modal } from './Modal';
 
 type LoginTab = 'microsoft' | 'authlib' | 'offline';
 
-const tabs: Array<{ key: LoginTab; label: string; icon: typeof BadgeCheck }> = [
-  { key: 'microsoft', label: 'Microsoft 正版', icon: BadgeCheck },
-  { key: 'authlib', label: '外置登录', icon: Globe2 },
-  { key: 'offline', label: '离线模式', icon: UserRound },
+const tabs: Array<{ key: LoginTab; labelKey: 'account.tab.microsoft' | 'account.tab.authlib' | 'account.tab.offline'; icon: typeof BadgeCheck }> = [
+  { key: 'microsoft', labelKey: 'account.tab.microsoft', icon: BadgeCheck },
+  { key: 'authlib', labelKey: 'account.tab.authlib', icon: Globe2 },
+  { key: 'offline', labelKey: 'account.tab.offline', icon: UserRound },
 ];
 
 const fallbackServers: AuthlibServer[] = [
@@ -40,9 +42,34 @@ function kindClass(account: AccountView) {
   return 'kind-offline';
 }
 
+function hostOf(raw: string): string {
+  try {
+    return new URL(raw.includes('://') ? raw : `https://${raw}`).hostname.toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isYSSServer(raw: string): boolean {
+  const host = hostOf(raw);
+  return host === 'yss.1v.fit' || host.endsWith('.yss.1v.fit');
+}
+
+function canOpenVerification(url: string, server: string): boolean {
+  if (!url) return false;
+  try {
+    const target = new URL(url);
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') return false;
+    const expected = hostOf(server);
+    return !expected || target.hostname.toLowerCase() === expected;
+  } catch {
+    return false;
+  }
+}
+
 export function AccountModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const {
-    accounts, selectedAccount, settings, reloadBootstrap, pushToast,
+    accounts, selectedAccount, settings, reloadBootstrap, pushToast, t,
   } = useApp();
   const [tab, setTab] = useState<LoginTab>('microsoft');
   const [device, setDevice] = useState<DeviceCodeView | null>(null);
@@ -60,12 +87,21 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
   const [authError, setAuthError] = useState('');
   const [offlineBusy, setOfflineBusy] = useState(false);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [yssDevice, setYssDevice] = useState<YSSDeviceView | null>(null);
+  const [yssBusy, setYssBusy] = useState(false);
+  const [yssError, setYssError] = useState('');
+  const [yssDone, setYssDone] = useState(false);
+  const [yssCopied, setYssCopied] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setMsError('');
     setMsDone(false);
     setAuthError('');
+    setYssDevice(null);
+    setYssBusy(false);
+    setYssError('');
+    setYssDone(false);
     const offline = accounts.find((account) => account.kind === 'offline');
     setOfflineName(offline?.name ?? settings?.playerName ?? 'Steve');
     setEditingOfflineId(null);
@@ -97,11 +133,29 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
     });
   }, [open, reloadBootstrap]);
 
+  useEffect(() => {
+    if (!open) return;
+    return onEvent<AccountLoginEvent>('auth:yss', (event) => {
+      setYssBusy(false);
+      setYssDevice(null);
+      if (event.success) {
+        setYssDone(true);
+        setYssError('');
+        void reloadBootstrap();
+      } else {
+        setYssError(event.message);
+      }
+    });
+  }, [open, reloadBootstrap]);
+
   const close = () => {
     if (msBusy) void api.cancelMicrosoftLogin();
+    if (yssBusy) void api.cancelYSSLogin();
     setDevice(null);
     setMsBusy(false);
     setMsError('');
+    setYssDevice(null);
+    setYssBusy(false);
     onClose();
   };
 
@@ -140,13 +194,53 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
     }
   };
 
+  const startYSS = async () => {
+    setYssBusy(true);
+    setYssError('');
+    setYssDone(false);
+    setYssDevice(null);
+    try {
+      const code = await api.beginYSSLogin(authServer);
+      setYssDevice(code);
+      const target = code.verificationUriComplete || code.verificationUri;
+      if (canOpenVerification(target, authServer)) {
+        void api.openURL(target);
+      } else if (target) {
+        setYssError(t('account.yss.openFailed'));
+      }
+    } catch (error) {
+      setYssBusy(false);
+      setYssError((error as Error).message);
+    }
+  };
+
+  const cancelYSS = async () => {
+    try {
+      await api.cancelYSSLogin();
+    } finally {
+      setYssBusy(false);
+      setYssDevice(null);
+    }
+  };
+
+  const copyYSS = async () => {
+    if (!yssDevice) return;
+    try {
+      await navigator.clipboard.writeText(yssDevice.userCode);
+      setYssCopied(true);
+      window.setTimeout(() => setYssCopied(false), 1500);
+    } catch {
+      setYssCopied(false);
+    }
+  };
+
   const selectAccount = async (account: AccountView) => {
     try {
       await api.selectAccount(account.id);
       await reloadBootstrap();
-      pushToast('success', '已切换账户', account.name);
+      pushToast('success', t('account.switched'), account.name);
     } catch (error) {
-      pushToast('error', '切换账户失败', (error as Error).message);
+      pushToast('error', t('account.switchFailed'), (error as Error).message);
     }
   };
 
@@ -155,9 +249,9 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
     try {
       await api.removeAccount(account.id);
       await reloadBootstrap();
-      pushToast('success', '账户已移除');
+      pushToast('success', t('account.removed'));
     } catch (error) {
-      pushToast('error', '移除账户失败', (error as Error).message);
+      pushToast('error', t('account.removeFailed'), (error as Error).message);
     } finally {
       setRemoving(null);
     }
@@ -170,7 +264,7 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
       await api.loginAuthlib(authServer, authUser, authPassword);
       await reloadBootstrap();
       setAuthPassword('');
-      pushToast('success', '外置登录成功', authUser);
+      pushToast('success', t('account.authlibSuccess'), authUser);
     } catch (error) {
       setAuthError((error as Error).message);
     } finally {
@@ -181,22 +275,22 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
   const submitOffline = async () => {
     const name = offlineName.trim();
     if (!name) {
-      pushToast('error', '请输入离线玩家名');
+      pushToast('error', t('account.nameRequired'));
       return;
     }
     setOfflineBusy(true);
     try {
       if (editingOfflineId) {
         await api.renameOfflineAccount(editingOfflineId, name);
-        pushToast('success', '离线账户名称已更新', name);
+        pushToast('success', t('account.offlineSaved'), name);
       } else {
         await api.addOfflineAccount(name);
-        pushToast('success', '离线账户已添加', name);
+        pushToast('success', t('account.offlineAdded'), name);
       }
       await reloadBootstrap();
       setEditingOfflineId(null);
     } catch (error) {
-      pushToast('error', '离线账户保存失败', (error as Error).message);
+      pushToast('error', t('account.offlineSaveFailed'), (error as Error).message);
     } finally {
       setOfflineBusy(false);
     }
@@ -212,15 +306,15 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
     <Modal
       open={open}
       onClose={close}
-      title="账户"
+      title={t('account.title')}
       eyebrow="ACCOUNTS"
-      description="选择启动游戏时使用的身份。账户数量不限。"
+      description={t('account.description')}
       size="xl"
     >
       <div className="account-layout">
         <aside className="account-side">
           <div className="account-side-head">
-            <span>已保存账户</span>
+            <span>{t('account.saved')}</span>
             <span className="account-count">{accounts.length}</span>
           </div>
           <div className="account-list">
@@ -232,25 +326,25 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
                   <div className="account-row-copy">
                     <div className="account-row-title">
                       <strong>{account.name}</strong>
-                      {active && <span className="account-active"><Check size={10} /> 使用中</span>}
+                      {active && <span className="account-active"><Check size={10} /> {t('account.inUse')}</span>}
                     </div>
-                    <span>{account.label}{account.serverUrl ? ` · ${account.serverUrl.replace(/^https?:\/\//, '')}` : ''}</span>
+                    <span>{t(accountKindKey(account.kind))}{account.serverUrl ? ` · ${account.serverUrl.replace(/^https?:\/\//, '')}` : ''}</span>
                   </div>
                   <div className="account-row-actions">
                     {!active && (
                       <button type="button" className="btn btn-ghost btn-sm" onClick={() => void selectAccount(account)}>
-                        切换
+                        {t('account.switch')}
                       </button>
                     )}
                     {account.kind === 'offline' && (
-                      <button type="button" className="icon-button icon-button-sm" title="编辑离线账户" onClick={() => editOffline(account)}>
+                      <button type="button" className="icon-button icon-button-sm" title={t('account.editOffline')} onClick={() => editOffline(account)}>
                         <Pencil size={14} />
                       </button>
                     )}
                     <button
                       type="button"
                       className="icon-button icon-button-sm account-remove"
-                      title={accounts.length <= 1 ? '至少保留一个账户' : '移除账户'}
+                      title={accounts.length <= 1 ? t('account.keepOne') : t('account.remove')}
                       onClick={() => void removeAccount(account)}
                       disabled={removing === account.id || accounts.length <= 1}
                     >
@@ -275,7 +369,7 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
                   onClick={() => setTab(item.key)}
                 >
                   <Icon size={15} />
-                  {item.label}
+                  {t(item.labelKey)}
                 </button>
               );
             })}
@@ -286,21 +380,21 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
               <div className="account-brand-head">
                 <div className="account-brand-icon microsoft"><BadgeCheck size={22} /></div>
                 <div>
-                  <h3>Microsoft 正版登录</h3>
-                  <p>使用设备码在浏览器中完成授权，自动获取玩家名与 UUID。</p>
+                  <h3>{t('account.microsoft.title')}</h3>
+                  <p>{t('account.microsoft.body')}</p>
                 </div>
               </div>
 
               {!device && !msDone && (
                 <button type="button" className="btn btn-primary btn-lg full-width" onClick={() => void startMicrosoft()} disabled={msBusy}>
                   {msBusy ? <LoaderCircle size={17} className="spin" /> : <LogIn size={17} />}
-                  {msBusy ? '正在获取登录代码…' : '使用 Microsoft 登录'}
+                  {msBusy ? t('account.microsoft.requesting') : t('account.microsoft.login')}
                 </button>
               )}
 
               {device && (
                 <div className="device-code-card">
-                  <p>在浏览器中打开链接并输入下面的代码。</p>
+                  <p>{t('account.microsoft.deviceHint')}</p>
                   <button type="button" className="device-code" onClick={() => void copyCode()}>
                     <strong>{device.userCode}</strong>
                     {copied ? <Check size={16} /> : <Copy size={16} />}
@@ -310,26 +404,26 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
                   </a>
                   <div className="device-status">
                     <LoaderCircle size={14} className="spin" />
-                    <span>等待授权完成…</span>
+                    <span>{t('account.microsoft.waiting')}</span>
                   </div>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void cancelMicrosoft()}>取消</button>
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => void cancelMicrosoft()}>{t('common.cancel')}</button>
                 </div>
               )}
 
               {msDone && (
                 <div className="account-success">
                   <BadgeCheck size={18} />
-                  <span>正版账户已添加。</span>
+                  <span>{t('account.microsoft.success')}</span>
                 </div>
               )}
               {msError && (
                 <div className="inline-banner banner-error">
                   <TriangleAlert size={16} />
-                  <div><strong>登录未完成</strong><span>{msError}</span></div>
+                  <div><strong>{t('account.microsoft.failed')}</strong><span>{msError}</span></div>
                 </div>
               )}
               {isDemo && !device && (
-                <p className="account-note">演示模式只展示设备码界面，真实登录需在桌面客户端中完成。</p>
+                <p className="account-note">{t('account.microsoft.demoNote')}</p>
               )}
             </div>
           )}
@@ -339,8 +433,8 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
               <div className="account-brand-head">
                 <div className="account-brand-icon authlib"><Globe2 size={22} /></div>
                 <div>
-                  <h3>外置登录</h3>
-                  <p>支持 LittleSkin 与 YggdrasilSkinServer，也兼容其他 Authlib-Injector 服务器。</p>
+                  <h3>{t('account.authlib.title')}</h3>
+                  <p>{t('account.authlib.body')}</p>
                 </div>
               </div>
               <div className="authlib-presets">
@@ -359,8 +453,67 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
                   </button>
                 ))}
               </div>
+              {isYSSServer(authServer) && (
+                <div className="yss-auth-block">
+                  <button
+                    type="button"
+                    className="btn btn-primary full-width"
+                    onClick={() => void startYSS()}
+                    disabled={yssBusy}
+                  >
+                    {yssBusy ? <LoaderCircle size={16} className="spin" /> : <ShieldCheck size={16} />}
+                    {yssBusy ? t('account.yss.waiting') : t('account.yss.oneClick')}
+                  </button>
+                  <p className="account-note">{t('account.yss.hint')}</p>
+
+                  {yssDevice && (
+                    <div className="device-code-card">
+                      <p>{t('account.yss.codeHint')}</p>
+                      <button type="button" className="device-code" onClick={() => void copyYSS()}>
+                        <strong>{yssDevice.userCode}</strong>
+                        {yssCopied ? <Check size={16} /> : <Copy size={16} />}
+                      </button>
+                      <a
+                        className="device-link"
+                        href={yssDevice.verificationUriComplete || yssDevice.verificationUri}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          const target = yssDevice.verificationUriComplete || yssDevice.verificationUri;
+                          if (canOpenVerification(target, authServer)) {
+                            void api.openURL(target);
+                          } else {
+                            setYssError(t('account.yss.openFailed'));
+                          }
+                        }}
+                      >
+                        {yssDevice.verificationUriComplete || yssDevice.verificationUri} <ExternalLink size={13} />
+                      </a>
+                      <div className="device-status">
+                        <LoaderCircle size={14} className="spin" />
+                        <span>{t('account.yss.waiting')}</span>
+                      </div>
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => void cancelYSS()}>
+                        {t('account.yss.cancel')}
+                      </button>
+                    </div>
+                  )}
+
+                  {yssDone && (
+                    <div className="account-success">
+                      <ShieldCheck size={18} />
+                      <span>{t('account.yss.success')}</span>
+                    </div>
+                  )}
+                  {yssError && (
+                    <div className="inline-banner banner-error">
+                      <TriangleAlert size={16} />
+                      <div><strong>{t('account.yss.failed')}</strong><span>{yssError}</span></div>
+                    </div>
+                  )}
+                </div>
+              )}
               <label className="field">
-                <span className="field-label"><Server size={14} /> 认证服务器地址</span>
+                <span className="field-label"><Server size={14} /> {t('account.authlib.server')}</span>
                 <input
                   className="text-input mono"
                   value={authServer}
@@ -370,11 +523,11 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
               </label>
               <div className="settings-grid-2">
                 <label className="field">
-                  <span className="field-label"><UserRound size={14} /> 用户名 / 邮箱</span>
+                  <span className="field-label"><UserRound size={14} /> {t('account.authlib.username')}</span>
                   <input className="text-input" value={authUser} onChange={(event) => setAuthUser(event.target.value)} autoComplete="username" />
                 </label>
                 <label className="field">
-                  <span className="field-label"><KeyRound size={14} /> 密码</span>
+                  <span className="field-label"><KeyRound size={14} /> {t('account.authlib.password')}</span>
                   <input
                     className="text-input"
                     type="password"
@@ -388,14 +541,14 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
               {authError && (
                 <div className="inline-banner banner-error">
                   <TriangleAlert size={16} />
-                  <div><strong>外置登录失败</strong><span>{authError}</span></div>
+                  <div><strong>{t('account.authlib.failed')}</strong><span>{authError}</span></div>
                 </div>
               )}
               <button type="button" className="btn btn-primary" onClick={() => void loginAuthlib()} disabled={authBusy || !authUser || !authPassword}>
                 {authBusy ? <LoaderCircle size={16} className="spin" /> : <LogIn size={16} />}
-                {authBusy ? '正在验证…' : '登录外置账户'}
+                {authBusy ? t('account.authlib.verifying') : t('account.authlib.login')}
               </button>
-              <p className="account-note">密码只用于本次认证，不会保存。访问令牌保存在本机配置中。</p>
+              <p className="account-note">{t('account.authlib.note')}</p>
             </div>
           )}
 
@@ -404,12 +557,12 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
               <div className="account-brand-head">
                 <div className="account-brand-icon offline"><UserRound size={22} /></div>
                 <div>
-                  <h3>{editingOfflineId ? '重命名离线账户' : '添加离线账户'}</h3>
-                  <p>离线账户只能用于本地游戏和未开启正版验证的服务器。</p>
+                  <h3>{editingOfflineId ? t('account.offline.renameTitle') : t('account.offline.addTitle')}</h3>
+                  <p>{editingOfflineId ? t('account.offline.renameBody') : t('account.offline.addBody')}</p>
                 </div>
               </div>
               <label className="field">
-                <span className="field-label">离线玩家名 <small>最多 16 个字符</small></span>
+                <span className="field-label">{t('account.offline.name')} <small>{t('account.offline.nameHint')}</small></span>
                 <input
                   className="text-input"
                   value={offlineName}
@@ -422,11 +575,11 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
               <div className="button-row">
                 <button type="button" className="btn btn-primary" onClick={() => void submitOffline()} disabled={offlineBusy}>
                   {offlineBusy ? <LoaderCircle size={16} className="spin" /> : <UserRound size={16} />}
-                  {editingOfflineId ? '保存名称' : '添加离线账户'}
+                  {editingOfflineId ? t('account.offline.saveName') : t('account.offline.add')}
                 </button>
                 {editingOfflineId && (
                   <button type="button" className="btn btn-ghost" onClick={() => { setEditingOfflineId(null); setOfflineName(''); }}>
-                    新建离线账户
+                    {t('account.offline.new')}
                   </button>
                 )}
               </div>

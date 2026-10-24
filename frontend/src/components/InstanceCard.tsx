@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   FolderOpen,
+  LoaderCircle,
   MoreHorizontal,
   Pencil,
   Play,
@@ -9,6 +10,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { InstanceView } from '../lib/types';
+import { useApp } from '../lib/app-context';
 import { cn, loaderLabel, loaderTone, relativeTime } from '../lib/format';
 
 interface InstanceCardProps {
@@ -34,6 +36,8 @@ export function InstanceCard({
   onEdit,
   onDelete,
 }: InstanceCardProps) {
+  const { t, locale, launchingId } = useApp();
+  const launching = launchingId === instance.id;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -70,14 +74,16 @@ export function InstanceCard({
       <div className="instance-copy">
         <div className="instance-name-row">
           <h3>{instance.name}</h3>
-          {instance.running && <span className="running-pill"><span className="live-pulse" />运行中</span>}
+          {instance.running && <span className="running-pill"><span className="live-pulse" />{t('home.running')}</span>}
         </div>
         <span className="instance-meta">
-          {instance.mcVersion} · {loaderLabel(instance.loader)}
+          {instance.mcVersion} · {loaderLabel(instance.loader, t('loader.vanilla'))}
           {instance.loaderVersion ? ` ${instance.loaderVersion}` : ''} · Java {instance.requiredJava}
         </span>
         <span className={cn('instance-status', !instance.versionInstalled && 'is-incomplete')}>
-          {instance.versionInstalled ? `上次启动 ${relativeTime(instance.lastPlayed)}` : '游戏文件不完整'}
+          {instance.versionInstalled
+            ? t('home.lastLaunch', { time: relativeTime(instance.lastPlayed, locale, t('common.unknown')) })
+            : t('home.filesIncomplete')}
         </span>
       </div>
 
@@ -88,15 +94,19 @@ export function InstanceCard({
             className="btn btn-danger-ghost btn-sm"
             onClick={(event) => { event.stopPropagation(); onStop(); }}
           >
-            <Square size={12} fill="currentColor" /> 结束
+            <Square size={12} fill="currentColor" /> {t('common.stop')}
           </button>
         ) : (
           <button
             type="button"
             className="btn btn-primary btn-sm"
             onClick={(event) => { event.stopPropagation(); onLaunch(); }}
+            disabled={launching}
           >
-            <Play size={13} fill="currentColor" /> 启动
+            {launching
+              ? <LoaderCircle size={13} className="spin" />
+              : <Play size={13} fill="currentColor" />}
+            {launching ? t('launch.button') : t('common.launch')}
           </button>
         )}
         {instance.running && (
@@ -105,7 +115,7 @@ export function InstanceCard({
             className="btn btn-ghost btn-sm"
             onClick={(event) => { event.stopPropagation(); onConsole(); }}
           >
-            <TerminalSquare size={13} /> 控制台
+            <TerminalSquare size={13} /> {t('common.console')}
           </button>
         )}
         <div className="instance-menu-wrap" ref={menuRef}>
@@ -116,7 +126,7 @@ export function InstanceCard({
               event.stopPropagation();
               setMenuOpen((value) => !value);
             }}
-            aria-label="更多操作"
+            aria-label={t('common.moreActions')}
             aria-expanded={menuOpen}
           >
             <MoreHorizontal size={17} />
@@ -124,14 +134,14 @@ export function InstanceCard({
           {menuOpen && (
             <div className="context-menu" onClick={(event) => event.stopPropagation()}>
               <button type="button" onClick={() => { setMenuOpen(false); onFolder(); }}>
-                <FolderOpen size={15} /> 打开游戏目录
+                <FolderOpen size={15} /> {t('common.openGameFolder')}
               </button>
               <button type="button" onClick={() => { setMenuOpen(false); onEdit(); }}>
-                <Pencil size={15} /> 版本设置
+                <Pencil size={15} /> {t('common.versionSettings')}
               </button>
               <div className="context-separator" />
               <button type="button" className="danger" onClick={() => { setMenuOpen(false); onDelete(); }}>
-                <Trash2 size={15} /> 删除版本
+                <Trash2 size={15} /> {t('common.deleteVersion')}
               </button>
             </div>
           )}

@@ -1,5 +1,6 @@
 import { FolderInput, LoaderCircle, TriangleAlert } from 'lucide-react';
 import type { ExternalCandidate, ExternalScanResult } from '../lib/types';
+import { useApp } from '../lib/app-context';
 import { cn, loaderLabel, loaderTone } from '../lib/format';
 import { Modal } from './Modal';
 
@@ -46,24 +47,25 @@ export function LocalVersionModal({
   onClose,
   onImport,
 }: LocalVersionModalProps) {
+  const { t } = useApp();
   return (
     <Modal
       open={open}
       onClose={onClose}
-      title="添加本地版本"
+      title={t('local.title')}
       eyebrow="LOCAL VERSIONS"
-      description={`发现 ${entries.length} 个可导入的版本。导入后会复制存档、模组与配置，并准备游戏运行环境。`}
+      description={t('local.description', { count: entries.length })}
       size="lg"
       footer={
         <>
           <span className="modal-foot-note">
-            <TriangleAlert size={14} /> 账户不会迁移，导入后请重新登录。
+            <TriangleAlert size={14} /> {t('local.footerNote')}
           </span>
           <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" onClick={onClose}>取消</button>
+            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
             <button type="button" className="btn btn-primary" onClick={onImport} disabled={!selectedKey || importing}>
               {importing ? <LoaderCircle size={15} className="spin" /> : <FolderInput size={15} />}
-              {importing ? '正在导入…' : '导入所选版本'}
+              {importing ? t('local.importing') : t('local.import')}
             </button>
           </div>
         </>
@@ -94,16 +96,16 @@ export function LocalVersionModal({
                       <span className="local-candidate-title">
                         <strong>{candidate.name}</strong>
                         <span className="version-type">
-                          {candidate.mcVersion || '未知版本'}
+                          {candidate.mcVersion || t('common.unknown')}
                         </span>
                         <span className={cn('loader-pill', `tone-${loaderTone(candidate.loader)}`)}>
-                          {loaderLabel(candidate.loader)}
+                          {loaderLabel(candidate.loader, t('loader.vanilla'))}
                         </span>
                         {candidate.loaderVersion && <small>{candidate.loaderVersion}</small>}
                       </span>
                       <span className="local-candidate-meta">
-                        <span>{candidate.modCount} 个模组</span>
-                        <span>{candidate.hasSaves ? '含存档' : '无存档'}</span>
+                        <span>{t('local.modsCount', { count: candidate.modCount })}</span>
+                        <span>{candidate.hasSaves ? t('local.hasSaves') : t('local.noSaves')}</span>
                         <span>{candidate.source}</span>
                       </span>
                       {candidate.warnings.length > 0 && (

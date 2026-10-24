@@ -3,8 +3,10 @@
 package sysutil
 
 import (
+	"context"
 	"os/exec"
 	"syscall"
+	"time"
 )
 
 // HideWindow is a no-op on platforms without console windows.
@@ -17,6 +19,22 @@ func ConfigureProcess(cmd *exec.Cmd) {
 		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
 	cmd.SysProcAttr.Setpgid = true
+}
+
+// WaitForGameWindow is a best-effort fallback on platforms without native
+// window enumeration. The launcher hides after a short game-start delay.
+func WaitForGameWindow(ctx context.Context, pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // KillProcessTree terminates the process group.

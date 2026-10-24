@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,6 +39,12 @@ type Account struct {
 	XUID         string    `json:"xuid,omitempty"`
 	ExpiresAt    time.Time `json:"expiresAt,omitempty"`
 	AddedAt      time.Time `json:"addedAt"`
+
+	// OAuth2 marks accounts obtained through the site's device-code flow.
+	// RefreshToken then stores the site refresh token instead of a Yggdrasil one.
+	OAuth2              bool   `json:"oauth2,omitempty"`
+	OAuth2TokenEndpoint string `json:"oauth2TokenEndpoint,omitempty"`
+	OAuth2ClientID      string `json:"oauth2ClientId,omitempty"`
 }
 
 // View is the safe account representation exposed to the UI.
@@ -170,7 +177,7 @@ func (s *Store) Add(account Account) (Account, error) {
 			}
 			sameIdentity := existing.UUID != "" && strings.EqualFold(existing.UUID, account.UUID)
 			if account.Kind == KindAuthlib {
-				sameIdentity = sameIdentity && strings.EqualFold(existing.ServerURL, account.ServerURL)
+				sameIdentity = sameIdentity && sameAuthlibServer(existing.ServerURL, account.ServerURL)
 			}
 			if sameIdentity {
 				account.ID = existing.ID
@@ -309,6 +316,22 @@ func (s *Store) saveLocked() error {
 	// Token files should only be readable by the current user where possible.
 	_ = os.Chmod(filepath.Clean(s.path), 0o600)
 	return nil
+}
+
+// sameAuthlibServer treats the site root and its API location as the same
+// identity provider, so password and OAuth2 logins update one account.
+func sameAuthlibServer(left, right string) bool {
+	left = strings.TrimRight(strings.TrimSpace(left), "/")
+	right = strings.TrimRight(strings.TrimSpace(right), "/")
+	if strings.EqualFold(left, right) {
+		return true
+	}
+	leftURL, leftErr := url.Parse(left)
+	rightURL, rightErr := url.Parse(right)
+	if leftErr != nil || rightErr != nil {
+		return false
+	}
+	return leftURL.Host != "" && strings.EqualFold(leftURL.Host, rightURL.Host)
 }
 
 func newOfflineAccount(name string) Account {

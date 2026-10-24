@@ -16,6 +16,13 @@ import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import { PageHeader } from '../components/PageHeader';
 import type { Settings } from '../lib/types';
+import {
+  accountKindKey,
+  languageNames,
+  normalizeLanguage,
+  resolveStartupLanguage,
+  type Language,
+} from '../lib/i18n';
 import { cn } from '../lib/format';
 
 const memorySteps = [2048, 4096, 6144, 8192, 12288, 16384, 32768];
@@ -23,7 +30,7 @@ const memorySteps = [2048, 4096, 6144, 8192, 12288, 16384, 32768];
 export function SettingsPage() {
   const {
     settings, bootstrap, accounts, selectedAccount, saveSettings, pushToast,
-    openDataFolder, openAccounts, isDemo, theme, setTheme,
+    openDataFolder, openAccounts, isDemo, theme, setTheme, t, language, setLanguage,
   } = useApp();
   const [form, setForm] = useState<Settings | null>(settings ? { ...settings } : null);
   const [saving, setSaving] = useState(false);
@@ -47,17 +54,57 @@ export function SettingsPage() {
 
   const save = async () => {
     if (form.defaultMemoryMB !== 0 && form.defaultMemoryMB < 512) {
-      pushToast('error', '默认内存必须为自动或至少 512 MB');
+      pushToast('error', t('settings.memoryInvalid'));
       return;
     }
     setSaving(true);
     try {
       await saveSettings(form);
-      pushToast('success', '设置已保存');
+      setLanguage(resolveStartupLanguage(form.languageAuto, form.language));
+      pushToast('success', t('settings.savedToast'));
     } catch (error) {
-      pushToast('error', '设置保存失败', (error as Error).message);
+      pushToast('error', t('settings.saveFailed'), (error as Error).message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const changeLanguage = (value: string) => {
+    if (value === 'auto') {
+      patch('languageAuto', true);
+      return;
+    }
+    patch('languageAuto', false);
+    patch('language', normalizeLanguage(value));
+  };
+
+  const aiProvider = form.aiSearchProvider === 'anthropic' ? 'anthropic' : 'deepseek';
+  const isAnthropic = aiProvider === 'anthropic';
+  const aiModelPlaceholder = isAnthropic ? 'claude-opus-5-5' : 'deepseek-chat';
+  const aiBasePlaceholder = isAnthropic ? 'https://api.anthropic.com' : 'https://api.deepseek.com';
+  const aiKeyPlaceholder = isAnthropic ? 'sk-ant-...' : 'sk-...';
+  const aiKeyURL = isAnthropic
+    ? 'https://console.anthropic.com/settings/keys'
+    : 'https://platform.deepseek.com/api_keys';
+
+  const changeAIProvider = (provider: string) => {
+    const next = provider === 'anthropic' ? 'anthropic' : 'deepseek';
+    const currentModel = (form.aiSearchModel ?? '').trim();
+    const knownModels = ['deepseek-chat', 'deepseek-reasoner', 'claude-opus-5-5'];
+    patch('aiSearchProvider', next);
+    if (next !== aiProvider) {
+      patch('aiSearchApiKey', '');
+    }
+    if (!currentModel || knownModels.includes(currentModel)) {
+      patch('aiSearchModel', next === 'anthropic' ? 'claude-opus-5-5' : 'deepseek-chat');
+    }
+    const currentBase = (form.aiSearchBaseUrl ?? '').trim().replace(/\/+$/, '');
+    if (!currentBase || [
+      'https://api.anthropic.com',
+      'https://api.deepseek.com',
+      'https://api.deepseek.com/v1',
+    ].includes(currentBase)) {
+      patch('aiSearchBaseUrl', '');
     }
   };
 
@@ -65,12 +112,12 @@ export function SettingsPage() {
     <div className="page settings-page">
       <PageHeader
         kicker="SETTINGS"
-        title={<>设置 <span className="title-accent">/</span> MyGoLuncher</>}
-        description="主题、账户、内存、Java 与首页一言。其余选项保持默认即可。"
+        title={<>{t('settings.title')} <span className="title-accent">/</span> MyGoLuncher</>}
+        description={t('settings.description')}
         actions={
           <button type="button" className="btn btn-primary" onClick={() => void save()} disabled={saving || !dirty}>
             <Save size={15} />
-            {saving ? '正在保存…' : dirty ? '保存设置' : '已保存'}
+            {saving ? t('common.saving') : dirty ? t('common.saveSettings') : t('common.saved')}
           </button>
         }
       />
@@ -79,16 +126,16 @@ export function SettingsPage() {
         <div className="inline-banner banner-warning">
           <Info size={17} />
           <div>
-            <strong>浏览器演示模式</strong>
-            <span>文件选择、下载与启动游戏仅在桌面客户端中可用。</span>
+            <strong>{t('settings.demoTitle')}</strong>
+            <span>{t('settings.demoBody')}</span>
           </div>
         </div>
       )}
 
       <section className="panel">
         <div className="panel-head">
-          <h2>界面主题</h2>
-          <p>黑夜模式使用荧光绿，白天模式使用粉色作为主色。</p>
+          <h2>{t('settings.themeTitle')}</h2>
+          <p>{t('settings.themeBody')}</p>
         </div>
         <div className="theme-options">
           <button
@@ -103,8 +150,8 @@ export function SettingsPage() {
             </div>
             <span className="theme-option-copy">
               <Moon size={15} />
-              <strong>黑夜模式</strong>
-              <small>深色界面 · 荧光绿</small>
+              <strong>{t('settings.darkTitle')}</strong>
+              <small>{t('settings.darkDesc')}</small>
             </span>
           </button>
           <button
@@ -119,20 +166,42 @@ export function SettingsPage() {
             </div>
             <span className="theme-option-copy">
               <Sun size={15} />
-              <strong>白天模式</strong>
-              <small>浅色界面 · 粉色主色</small>
+              <strong>{t('settings.lightTitle')}</strong>
+              <small>{t('settings.lightDesc')}</small>
             </span>
           </button>
         </div>
       </section>
 
       <section className="panel">
+        <div className="panel-head">
+          <h2>{t('settings.languageTitle')}</h2>
+          <p>{t('settings.languageBody')}</p>
+        </div>
+        <label className="field">
+          <span className="field-label">{t('settings.languageStartup')}</span>
+          <select
+            className="text-input"
+            value={form.languageAuto ? 'auto' : form.language}
+            onChange={(event) => changeLanguage(event.target.value)}
+          >
+            <option value="auto">{t('settings.languageAuto')}</option>
+            {(Object.keys(languageNames) as Language[]).map((code) => (
+              <option key={code} value={code}>{languageNames[code]}</option>
+            ))}
+          </select>
+          <span className="field-hint">{t('settings.languageHint')}</span>
+          <span className="field-hint">{t('settings.currentLanguage', { language: languageNames[language] })}</span>
+        </label>
+      </section>
+
+      <section className="panel">
         <div className="panel-head panel-head-row">
           <div>
-            <h2>账户</h2>
-            <p>管理 Microsoft 正版、外置登录与离线身份。</p>
+            <h2>{t('settings.accountTitle')}</h2>
+            <p>{t('settings.accountBody')}</p>
           </div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={openAccounts}>管理账户</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={openAccounts}>{t('settings.manageAccounts')}</button>
         </div>
         <div className="account-summary">
           <div className={`account-summary-mark kind-${selectedAccount?.kind ?? 'offline'}`}>
@@ -143,33 +212,33 @@ export function SettingsPage() {
                 : <UserRound size={20} />}
           </div>
           <div className="account-summary-copy">
-            <span>当前身份</span>
+            <span>{t('settings.currentIdentity')}</span>
             <strong>{selectedAccount?.name ?? form.playerName}</strong>
-            <small>{selectedAccount?.label ?? '离线'}{selectedAccount?.serverUrl ? ` · ${selectedAccount.serverUrl}` : ''}</small>
+            <small>{t(accountKindKey(selectedAccount?.kind ?? 'offline'))}{selectedAccount?.serverUrl ? ` · ${selectedAccount.serverUrl}` : ''}</small>
           </div>
-          <span className="account-total">共 {accounts.length} 个身份</span>
+          <span className="account-total">{t('settings.identityCount', { count: accounts.length })}</span>
         </div>
       </section>
 
       <section className="panel">
         <div className="panel-head">
-          <h2>游戏设置</h2>
-          <p>默认内存与 Java 会应用到新建版本，已有版本可在版本设置中单独调整。</p>
+          <h2>{t('settings.gameTitle')}</h2>
+          <p>{t('settings.gameBody')}</p>
         </div>
         <div className="settings-fields">
           <div className="field">
             <div className="field-label-row">
-              <span className="field-label"><Cpu size={14} /> 默认内存</span>
+              <span className="field-label"><Cpu size={14} /> {t('settings.defaultMemory')}</span>
               <span className="memory-value">
                 {form.defaultMemoryMB === 0
-                  ? `自动 · 约 ${((bootstrap?.autoMemoryMB ?? 4096) / 1024).toFixed(1)} GB`
+                  ? t('settings.autoMemoryValue', { gb: ((bootstrap?.autoMemoryMB ?? 4096) / 1024).toFixed(1) })
                   : `${(form.defaultMemoryMB / 1024).toFixed(1)} GB`}
               </span>
             </div>
             <label className="toggle-row">
               <span>
-                <strong>自动分配内存</strong>
-                <small>根据物理内存计算推荐值，并为系统保留余量</small>
+                <strong>{t('settings.autoMemory')}</strong>
+                <small>{t('settings.autoMemoryHint')}</small>
               </span>
               <input
                 type="checkbox"
@@ -207,25 +276,130 @@ export function SettingsPage() {
           </div>
 
           <label className="field">
-            <span className="field-label"><Coffee size={14} /> 默认 Java 路径</span>
+            <span className="field-label"><Coffee size={14} /> {t('settings.defaultJava')}</span>
             <input
               className="text-input mono"
               value={form.defaultJavaPath}
               onChange={(event) => patch('defaultJavaPath', event.target.value)}
-              placeholder="留空自动匹配，或填写 java.exe / JAVA_HOME"
+              placeholder={t('settings.javaPlaceholder')}
             />
-            <span className="field-hint">版本级 Java 设置优先于这里。留空时会在启动前自动寻找或下载匹配的 Java。</span>
+            <span className="field-hint">{t('settings.javaHint')}</span>
           </label>
+
+          <div className="field">
+            <label className="toggle-row">
+              <span>
+                <strong>{t('settings.versionIsolation')}</strong>
+                <small>{t('settings.versionIsolationHint')}</small>
+              </span>
+              <input
+                type="checkbox"
+                className="switch"
+                checked={form.versionIsolation !== false}
+                onChange={(event) => patch('versionIsolation', event.target.checked)}
+              />
+            </label>
+            <span className="field-hint">
+              {form.versionIsolation !== false ? t('settings.versionIsolationOn') : t('settings.versionIsolationOff')}
+            </span>
+          </div>
         </div>
       </section>
 
       <section className="panel">
         <div className="panel-head">
-          <h2>首页一言</h2>
-          <p>首页“你知道吗”的内容来源，默认使用 HitokotoGo。</p>
+          <h2>{t('settings.curseForgeTitle')}</h2>
+          <p>{t('settings.curseForgeBody')}</p>
         </div>
         <label className="field">
-          <span className="field-label"><Quote size={14} /> 一言 API 地址</span>
+          <span className="field-label">{t('settings.curseForgeKey')}</span>
+          <input
+            className="text-input mono"
+            type="password"
+            value={form.curseForgeAPIKey ?? ''}
+            onChange={(event) => patch('curseForgeAPIKey', event.target.value)}
+            placeholder="$2a$10$..."
+            autoComplete="off"
+          />
+          <span className="field-hint">{t('settings.curseForgeHint')}</span>
+        </label>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>{t('settings.aiTitle')}</h2>
+          <p>{t('settings.aiBody')}</p>
+        </div>
+        <div className="settings-fields">
+          <label className="toggle-row">
+            <span>
+              <strong>{t('settings.aiEnabled')}</strong>
+              <small>{t('settings.aiEnabledHint')}</small>
+            </span>
+            <input
+              type="checkbox"
+              className="switch"
+              checked={form.aiSearchEnabled === true}
+              onChange={(event) => patch('aiSearchEnabled', event.target.checked)}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">{t('settings.aiProvider')}</span>
+            <select
+              className="text-input"
+              value={aiProvider}
+              onChange={(event) => changeAIProvider(event.target.value)}
+            >
+              <option value="deepseek">{t('settings.aiProviderDeepSeek')}</option>
+              <option value="anthropic">{t('settings.aiProviderAnthropic')}</option>
+            </select>
+            <span className="field-hint">{t('settings.aiProviderHint')}</span>
+          </label>
+          <label className="field">
+            <span className="field-label">{t('settings.aiModel')}</span>
+            <input
+              className="text-input mono"
+              value={form.aiSearchModel ?? ''}
+              onChange={(event) => patch('aiSearchModel', event.target.value)}
+              placeholder={aiModelPlaceholder}
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">{t('settings.aiAPIKey')}</span>
+            <input
+              className="text-input mono"
+              type="password"
+              value={form.aiSearchApiKey ?? ''}
+              onChange={(event) => patch('aiSearchApiKey', event.target.value)}
+              placeholder={aiKeyPlaceholder}
+              autoComplete="off"
+            />
+          </label>
+          <label className="field">
+            <span className="field-label">{t('settings.aiBaseURL')}</span>
+            <input
+              className="text-input mono"
+              value={form.aiSearchBaseUrl ?? ''}
+              onChange={(event) => patch('aiSearchBaseUrl', event.target.value)}
+              placeholder={aiBasePlaceholder}
+            />
+            <span className="field-hint">{t('settings.aiBaseURLHint')}</span>
+          </label>
+          <div className="panel-actions">
+            <button type="button" className="text-button" onClick={() => void api.openURL(aiKeyURL)}>
+              {t('settings.aiConsole')}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>{t('settings.hitokotoTitle')}</h2>
+          <p>{t('settings.hitokotoBody')}</p>
+        </div>
+        <label className="field">
+          <span className="field-label"><Quote size={14} /> {t('settings.hitokotoAPI')}</span>
           <input
             className="text-input mono"
             value={form.hitokotoApiUrl ?? ''}
@@ -233,16 +407,16 @@ export function SettingsPage() {
             placeholder="https://hitokotogo.yhdzz.cn/v2"
           />
           <span className="field-hint">
-            接口需返回包含 <code>hitokoto</code> 字段的 JSON。
+            {t('settings.hitokotoHint')}
             <button type="button" className="text-button" onClick={() => void api.openURL('https://hitokotogo.yhdzz.cn/docs')}>
-              查看文档
+              {t('settings.viewDocs')}
             </button>
             <button
               type="button"
               className="text-button"
               onClick={() => patch('hitokotoApiUrl', 'https://hitokotogo.yhdzz.cn/v2')}
             >
-              恢复默认
+              {t('settings.restoreDefault')}
             </button>
           </span>
         </label>
@@ -250,25 +424,25 @@ export function SettingsPage() {
 
       <section className="panel">
         <div className="panel-head">
-          <h2>目录</h2>
-          <p>游戏数据与启动器配置都保存在程序目录内。</p>
+          <h2>{t('settings.dirsTitle')}</h2>
+          <p>{t('settings.dirsBody')}</p>
         </div>
         <div className="path-list">
           <div className="path-row">
-            <span>游戏目录</span>
+            <span>{t('settings.gameDir')}</span>
             <code title={bootstrap?.paths.data}>{bootstrap?.paths.data ?? '—'}</code>
           </div>
           <div className="path-row">
-            <span>配置目录</span>
+            <span>{t('settings.configDir')}</span>
             <code title={bootstrap?.paths.root}>{bootstrap?.paths.root ?? '—'}</code>
           </div>
         </div>
         <div className="panel-actions">
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => void openDataFolder()}>
-            <FolderOpen size={15} /> 打开游戏目录
+            <FolderOpen size={15} /> {t('common.openGameFolder')}
           </button>
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => void api.openConfigFolder()}>
-            <FolderOpen size={15} /> 打开配置目录
+            <FolderOpen size={15} /> {t('settings.openConfigDir')}
           </button>
         </div>
       </section>

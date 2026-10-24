@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"MyMinecraftGoLuncher/internal/aisearch"
 	"MyMinecraftGoLuncher/internal/curseforge"
 	"MyMinecraftGoLuncher/internal/modrinth"
 	"MyMinecraftGoLuncher/internal/store"
@@ -34,6 +35,7 @@ type ResourceSearchRequest struct {
 	Sort       string `json:"sort"`
 	Offset     int    `json:"offset"`
 	Limit      int    `json:"limit"`
+	UseAI      bool   `json:"useAI"`
 }
 
 // ResourceProject is a normalized Modrinth/CurseForge result.
@@ -64,6 +66,10 @@ type ResourceSearchResult struct {
 	Limit           int               `json:"limit"`
 	Warnings        []string          `json:"warnings"`
 	CurseForgeReady bool              `json:"curseForgeReady"`
+	QueryUsed       string            `json:"queryUsed"`
+	AIUsed          bool              `json:"aiUsed"`
+	AIError         string            `json:"aiError"`
+	CJKQuery        bool              `json:"cjkQuery"`
 }
 
 // ResourceVersion is a normalized download row.
@@ -153,8 +159,32 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 	if req.Offset < 0 {
 		req.Offset = 0
 	}
+	settings := a.store.Settings()
+	originalQuery := strings.TrimSpace(req.Query)
+	searchQuery := aisearch.NormalizeQuery(originalQuery)
+	result := ResourceSearchResult{
+		Items: []ResourceProject{}, Offset: req.Offset, Limit: req.Limit,
+		CurseForgeReady: strings.TrimSpace(settings.CurseForgeAPIKey) != "", Warnings: []string{},
+	}
+	if req.UseAI && settings.AISearchEnabled && aisearch.HasCJK(searchQuery) {
+		translated, err := aisearch.TranslateQuery(a.context(), aisearch.Config{
+			Provider: settings.AISearchProvider,
+			APIKey:   settings.AISearchAPIKey,
+			BaseURL:  settings.AISearchBaseURL,
+			Model:    settings.AISearchModel,
+		}, searchQuery)
+		if err != nil {
+			result.AIError = err.Error()
+		} else if translated != "" {
+			searchQuery = translated
+			result.AIUsed = true
+		}
+	}
+	result.QueryUsed = searchQuery
+	result.CJKQuery = aisearch.HasCJK(searchQuery)
+	req.Query = searchQuery
 	if req.Sort == "" {
-		if strings.TrimSpace(req.Query) == "" {
+		if req.Query == "" {
 			req.Sort = "downloads"
 		} else {
 			req.Sort = "relevance"
@@ -171,11 +201,7 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 			}
 		}
 	}
-	key := strings.TrimSpace(a.store.Settings().CurseForgeAPIKey)
-	result := ResourceSearchResult{
-		Items: []ResourceProject{}, Offset: req.Offset, Limit: req.Limit,
-		CurseForgeReady: key != "", Warnings: []string{},
-	}
+	key := strings.TrimSpace(settings.CurseForgeAPIKey)
 	includeMR := req.Source != sourceCurseForge
 	includeCF := (req.Source == sourceCurseForge || req.Source == "all") && key != ""
 	if req.Source == sourceCurseForge && key == "" {
@@ -513,7 +539,7 @@ func (a *App) InstallResource(instanceID, source, projectID, versionID string) (
 	t := a.newTask("安装 " + project.Name)
 	defer func() { t.finish(err) }()
 	t.update("download", "正在下载 "+project.Name+"…", 0, 0)
-	dir := filepath.Join(a.store.InstanceDir(inst.ID), subdir)
+	dir := filepath.Join(a.instanceDir(inst), subdir)
 	path, err := client.DownloadFile(a.context(), file, dir)
 	if err != nil {
 		return InstallProjectResult{}, err

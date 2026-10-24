@@ -16,6 +16,7 @@ import (
 
 	"MyMinecraftGoLuncher/internal/auth"
 	"MyMinecraftGoLuncher/internal/external"
+	"MyMinecraftGoLuncher/internal/gameoptions"
 	"MyMinecraftGoLuncher/internal/hitokoto"
 	"MyMinecraftGoLuncher/internal/httpx"
 	"MyMinecraftGoLuncher/internal/java"
@@ -25,6 +26,7 @@ import (
 	"MyMinecraftGoLuncher/internal/modpack"
 	"MyMinecraftGoLuncher/internal/modrinth"
 	"MyMinecraftGoLuncher/internal/mojang"
+	"MyMinecraftGoLuncher/internal/serverpack"
 	"MyMinecraftGoLuncher/internal/store"
 	"MyMinecraftGoLuncher/internal/sysinfo"
 	"MyMinecraftGoLuncher/internal/sysutil"
@@ -48,6 +50,7 @@ type App struct {
 	installMu sync.Mutex
 	authMu    sync.Mutex
 	msCancel  context.CancelFunc
+	yssCancel context.CancelFunc
 
 	totalMemoryMB int
 	autoMemoryMB  int
@@ -124,6 +127,10 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.msCancel != nil {
 		a.msCancel()
 		a.msCancel = nil
+	}
+	if a.yssCancel != nil {
+		a.yssCancel()
+		a.yssCancel = nil
 	}
 	a.authMu.Unlock()
 	a.procMu.Lock()
@@ -248,8 +255,17 @@ func (a *App) Bootstrap() Bootstrap {
 	return b
 }
 
+// instanceDir returns the effective game directory for an instance. When
+// version isolation is disabled every instance shares the .minecraft folder.
+func (a *App) instanceDir(inst store.Instance) string {
+	if a.store.Settings().VersionIsolation {
+		return a.store.InstanceDir(inst.ID)
+	}
+	return a.paths.Data
+}
+
 func (a *App) instanceView(inst store.Instance) InstanceView {
-	gameDir := a.store.InstanceDir(inst.ID)
+	gameDir := a.instanceDir(inst)
 	required := a.requiredJava(inst)
 	launchID := inst.LaunchVersionID
 	if launchID == "" {
@@ -552,6 +568,96 @@ func (a *App) LoginAuthlib(serverURL, username, password string) (auth.View, err
 	return saved.View(), nil
 }
 
+// YSSDeviceView is returned when a YSS one-click authorization starts.
+type YSSDeviceView struct {
+	UserCode                string `json:"userCode"`
+	VerificationURI         string `json:"verificationUri"`
+	VerificationURIComplete string `json:"verificationUriComplete"`
+	ExpiresIn               int    `json:"expiresIn"`
+	Interval                int    `json:"interval"`
+	Message                 string `json:"message"`
+}
+
+// BeginYSSLogin starts YSS device-code authorization and opens no UI itself.
+// The browser is opened by the frontend with the returned verification URL.
+func (a *App) BeginYSSLogin(serverURL string) (YSSDeviceView, error) {
+	if err := a.ready(); err != nil {
+		return YSSDeviceView{}, err
+	}
+	serverURL = strings.TrimSpace(serverURL)
+	if serverURL == "" {
+		serverURL = auth.DefaultYSSBaseURL
+	}
+	a.authMu.Lock()
+	if a.msCancel != nil || a.yssCancel != nil {
+		a.authMu.Unlock()
+		return YSSDeviceView{}, errors.New("已有登录正在进行")
+	}
+	a.authMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(a.context(), 30*time.Second)
+	meta, device, err := auth.BeginYSSDevice(ctx, serverURL, auth.DefaultYSSClientID)
+	cancel()
+	if err != nil {
+		return YSSDeviceView{}, err
+	}
+
+	pollCtx, pollCancel := context.WithCancel(a.context())
+	a.authMu.Lock()
+	a.yssCancel = pollCancel
+	a.authMu.Unlock()
+
+	go func() {
+		defer func() {
+			pollCancel()
+			a.authMu.Lock()
+			a.yssCancel = nil
+			a.authMu.Unlock()
+		}()
+		account, err := auth.PollYSSDevice(pollCtx, meta, device, auth.DefaultYSSClientID)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, auth.ErrLoginCancelled) {
+				return
+			}
+			a.emitYSSLogin(AccountLoginEvent{Success: false, Message: err.Error()})
+			return
+		}
+		saved, err := a.accounts.Add(account)
+		if err != nil {
+			a.emitYSSLogin(AccountLoginEvent{Success: false, Message: err.Error()})
+			return
+		}
+		view := saved.View()
+		a.emitAccountsChanged()
+		a.emitYSSLogin(AccountLoginEvent{Success: true, Message: "YSS 授权成功", Account: &view})
+	}()
+
+	return YSSDeviceView{
+		UserCode:                device.UserCode,
+		VerificationURI:         device.VerificationURI,
+		VerificationURIComplete: device.VerificationURIComplete,
+		ExpiresIn:               device.ExpiresIn,
+		Interval:                device.Interval,
+		Message:                 "在浏览器中登录 YSS 并确认授权。",
+	}, nil
+}
+
+// CancelYSSLogin aborts a pending YSS device-code poll.
+func (a *App) CancelYSSLogin() {
+	a.authMu.Lock()
+	defer a.authMu.Unlock()
+	if a.yssCancel != nil {
+		a.yssCancel()
+		a.yssCancel = nil
+	}
+}
+
+func (a *App) emitYSSLogin(event AccountLoginEvent) {
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "auth:yss", event)
+	}
+}
+
 // DeviceCodeView is safe to expose to the frontend.
 type DeviceCodeView struct {
 	UserCode        string `json:"userCode"`
@@ -574,9 +680,9 @@ func (a *App) BeginMicrosoftLogin() (DeviceCodeView, error) {
 		return DeviceCodeView{}, err
 	}
 	a.authMu.Lock()
-	if a.msCancel != nil {
+	if a.msCancel != nil || a.yssCancel != nil {
 		a.authMu.Unlock()
-		return DeviceCodeView{}, errors.New("已有 Microsoft 登录正在进行")
+		return DeviceCodeView{}, errors.New("已有登录正在进行")
 	}
 	a.authMu.Unlock()
 
@@ -716,7 +822,13 @@ func (a *App) resolveLaunchAuth(ctx context.Context) (launchAuth, error) {
 		if err != nil {
 			authErr = err
 		} else if !valid {
-			renewed, refreshErr := auth.RefreshAuthlib(ctx, account)
+			var renewed auth.Account
+			var refreshErr error
+			if account.OAuth2 {
+				renewed, refreshErr = auth.RefreshYSSAccount(ctx, account)
+			} else {
+				renewed, refreshErr = auth.RefreshAuthlib(ctx, account)
+			}
 			if refreshErr != nil {
 				authErr = refreshErr
 			} else {
@@ -1020,7 +1132,7 @@ func (a *App) DeleteInstance(id string, deleteFiles bool) error {
 		case <-time.After(6 * time.Second):
 		}
 	}
-	if err := a.store.DeleteInstance(id, deleteFiles); err != nil {
+	if err := a.store.DeleteInstance(id, deleteFiles && a.store.Settings().VersionIsolation); err != nil {
 		return err
 	}
 	a.procMu.Lock()
@@ -1040,8 +1152,9 @@ type LaunchState struct {
 	StoppedByUser   bool   `json:"stoppedByUser"`
 }
 
-// LaunchInstance starts Minecraft for an instance.
-func (a *App) LaunchInstance(id string) (err error) {
+// LaunchInstance starts Minecraft for an instance. language is the launcher's
+// current UI language and is written to the game's options.txt.
+func (a *App) LaunchInstance(id, language string) (err error) {
 	if err := a.ready(); err != nil {
 		return err
 	}
@@ -1088,8 +1201,18 @@ func (a *App) LaunchInstance(id string) (err error) {
 	}
 	ring := &logRing{}
 	ring.add("[启动器] 正在启动 " + inst.Name + " · Java " + fmt.Sprint(rt.Major))
+	uiLanguage := strings.TrimSpace(language)
+	if uiLanguage == "" {
+		uiLanguage = a.store.Settings().Language
+	}
+	if code, langErr := gameoptions.SetLanguage(a.instanceDir(inst), uiLanguage); langErr != nil {
+		ring.add("[启动器] 无法更新游戏语言: " + langErr.Error())
+	} else if code != "" {
+		ring.add("[启动器] 游戏语言: " + code)
+	}
 	proc, err := a.launcher.Start(a.context(), launcher.Options{
 		Instance:      launchInst,
+		GameDir:       a.instanceDir(inst),
 		Settings:      a.store.Settings(),
 		JavaPath:      rt.Path,
 		PlayerName:    launchAccount.Name,
@@ -1129,15 +1252,39 @@ func (a *App) LaunchInstance(id string) (err error) {
 	})
 	a.emitLaunchState(LaunchState{InstanceID: id, Running: true})
 	a.emitInstancesChanged()
-	if a.ctx != nil && !a.store.Settings().ShowLauncherOnLaunch {
-		a.procMu.Lock()
-		a.autoHidden = true
-		a.procMu.Unlock()
-		runtime.WindowHide(a.ctx)
-	}
+	hideWhenReady := a.ctx != nil && !a.store.Settings().ShowLauncherOnLaunch
+	watchWindow := a.ctx != nil
 
 	go func() {
+		windowCtx, stopWatch := context.WithCancel(a.context())
+		watchDone := make(chan struct{})
+		if watchWindow {
+			go func() {
+				defer close(watchDone)
+				if !sysutil.WaitForGameWindow(windowCtx, proc.PID()) {
+					return
+				}
+				if a.ctx != nil {
+					runtime.EventsEmit(a.ctx, "launch:window", map[string]string{"instanceId": id})
+				}
+				if !hideWhenReady {
+					return
+				}
+				a.procMu.Lock()
+				if _, running := a.procs[id]; running {
+					a.autoHidden = true
+					if a.ctx != nil {
+						runtime.WindowHide(a.ctx)
+					}
+				}
+				a.procMu.Unlock()
+			}()
+		} else {
+			close(watchDone)
+		}
+
 		<-proc.Done()
+		stopWatch()
 		duration := proc.Duration()
 		minutes := int(duration.Minutes())
 		a.store.MarkPlayed(id, minutes)
@@ -1148,6 +1295,8 @@ func (a *App) LaunchInstance(id string) (err error) {
 			a.autoHidden = false
 		}
 		a.procMu.Unlock()
+		// Let an in-flight hide finish before restoring the launcher.
+		<-watchDone
 		if shouldShow && a.ctx != nil {
 			runtime.WindowShow(a.ctx)
 		}
@@ -1196,10 +1345,11 @@ func (a *App) OpenInstanceFolder(id string) error {
 	if err := a.ready(); err != nil {
 		return err
 	}
-	if _, ok := a.store.Instance(id); !ok {
+	inst, ok := a.store.Instance(id)
+	if !ok {
 		return errors.New("版本不存在")
 	}
-	return openPath(a.store.InstanceDir(id))
+	return openPath(a.instanceDir(inst))
 }
 
 // OpenDataFolder opens the portable game directory.
@@ -1325,7 +1475,7 @@ func (a *App) InstallProject(instanceID, projectID, versionID string) (result In
 	t := a.newTask("安装 " + project.Title)
 	defer func() { t.finish(err) }()
 	t.update("download", "正在下载 "+project.Title+"…", 0, 0)
-	dir := filepath.Join(a.store.InstanceDir(inst.ID), subdir)
+	dir := filepath.Join(a.instanceDir(inst), subdir)
 	path, err := modrinth.DownloadFile(a.context(), version, dir)
 	if err != nil {
 		return InstallProjectResult{}, err
@@ -1387,6 +1537,9 @@ func (a *App) importModpack(ctx context.Context, path string, t *progressTask) (
 		return ModpackImportResponse{}, err
 	}
 	opts := modpack.ImportOptions{CurseForgeAPIKey: a.store.Settings().CurseForgeAPIKey}
+	if !a.store.Settings().VersionIsolation {
+		opts.GameDir = a.paths.Data
+	}
 	if ins.MCVersion == "" {
 		latest, merr := a.mojang.LatestRelease(ctx)
 		if merr != nil {
@@ -1581,7 +1734,7 @@ func (a *App) ImportExternalInstance(root, candidateID, nameOverride string) (re
 		}
 	}()
 	t.update("copy", "正在复制版本内容…", 0, 1)
-	stats, err := external.CopyContent(candidate, a.store.InstanceDir(inst.ID))
+	stats, err := external.CopyContent(candidate, a.instanceDir(inst))
 	if err != nil {
 		return ExternalImportResponse{}, err
 	}
@@ -1620,10 +1773,53 @@ func (a *App) ExportModpackDialog(instanceID string) (string, error) {
 	if !strings.HasSuffix(strings.ToLower(dest), ".mrpack") {
 		dest += ".mrpack"
 	}
-	if err := modpack.ExportMRPack(a.context(), inst, a.store.InstanceDir(inst.ID), dest); err != nil {
+	if err := modpack.ExportMRPack(a.context(), inst, a.instanceDir(inst), dest); err != nil {
 		return "", err
 	}
 	return dest, nil
+}
+
+// ServerPackExportResult describes an exported server pack.
+type ServerPackExportResult struct {
+	Path     string   `json:"path"`
+	Warnings []string `json:"warnings"`
+}
+
+// ExportServerPackDialog exports an instance as a ready-to-configure server
+// pack, including mods, configs, loader runtime, scripts, and an EULA template.
+func (a *App) ExportServerPackDialog(instanceID string) (response ServerPackExportResult, err error) {
+	if err := a.ready(); err != nil {
+		return ServerPackExportResult{}, err
+	}
+	inst, ok := a.store.Instance(instanceID)
+	if !ok {
+		return ServerPackExportResult{}, errors.New("版本不存在")
+	}
+	dest, err := runtime.SaveFileDialog(a.context(), runtime.SaveDialogOptions{
+		Title:           "导出服务器包",
+		DefaultFilename: safeFilename(inst.Name) + "-server.zip",
+		Filters:         []runtime.FileFilter{{DisplayName: "服务器包 (*.zip)", Pattern: "*.zip"}},
+	})
+	if err != nil || strings.TrimSpace(dest) == "" {
+		return ServerPackExportResult{}, err
+	}
+	if !strings.HasSuffix(strings.ToLower(dest), ".zip") {
+		dest += ".zip"
+	}
+	t := a.newTask("导出服务器包")
+	defer func() { t.finish(err) }()
+	pack, packErr := serverpack.Export(a.context(), serverpack.Options{
+		Client:    a.mojang,
+		Instance:  inst,
+		GameDir:   a.instanceDir(inst),
+		Dest:      dest,
+		JavaMajor: a.requiredJava(inst),
+		Progress: func(stage, message string, current, total int) {
+			t.update(stage, message, int64(current), int64(total))
+		},
+	})
+	response = ServerPackExportResult{Path: pack.Path, Warnings: pack.Warnings}
+	return response, packErr
 }
 
 // ExportInstanceBackupDialog exports a Prism/MultiMC-compatible zip.
@@ -1646,7 +1842,7 @@ func (a *App) ExportInstanceBackupDialog(instanceID string) (string, error) {
 	if !strings.HasSuffix(strings.ToLower(dest), ".zip") {
 		dest += ".zip"
 	}
-	if err := modpack.ExportZip(a.context(), inst, a.store.InstanceDir(inst.ID), dest); err != nil {
+	if err := modpack.ExportZip(a.context(), inst, a.instanceDir(inst), dest); err != nil {
 		return "", err
 	}
 	return dest, nil
