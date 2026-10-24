@@ -497,6 +497,7 @@
 .page-header-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   flex: 0 0 auto;
   padding-bottom: 2px;

@@ -37,6 +37,20 @@ type Profile struct {
 	DeleteExtras    bool     `json:"deleteExtras"`
 	CreatedAt       string   `json:"createdAt,omitempty"`
 	LastSync        string   `json:"lastSync,omitempty"`
+	LastRollback    string   `json:"lastRollback,omitempty"`
+	Backups         []Backup `json:"backups,omitempty"`
+}
+
+// Backup is one remote snapshot of the synced directories. The actual archive
+// lives on the MCSM host under <remoteRoot>/.mgl-backups, so it survives
+// launcher restarts without downloading the files locally.
+type Backup struct {
+	ID          string   `json:"id"`
+	CreatedAt   string   `json:"createdAt"`
+	Reason      string   `json:"reason,omitempty"`
+	Dirs        []string `json:"dirs"`
+	MissingDirs []string `json:"missingDirs,omitempty"`
+	EmptyDirs   []string `json:"emptyDirs,omitempty"`
 }
 
 // ProfileView adds whether an API key is stored without exposing it.
@@ -102,14 +116,26 @@ type SyncResult struct {
 	Uploaded int   `json:"uploaded"`
 	Skipped  int   `json:"skipped"`
 	Deleted  int   `json:"deleted"`
+	Filtered int   `json:"filtered"`
 	Bytes    int64 `json:"bytes"`
 }
 
-// SyncOptions controls one synchronization run.
+// SyncFile is one local file offered for manual synchronization.
+type SyncFile struct {
+	Path       string `json:"path"`
+	Dir        string `json:"dir"`
+	Size       int64  `json:"size"`
+	ClientOnly bool   `json:"clientOnly"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+// SyncOptions controls one synchronization run. Files, when non-empty, limits
+// the upload to those instance-relative paths (for example "mods/example.jar").
 type SyncOptions struct {
 	LocalDir     string
 	RemoteRoot   string
 	Dirs         []string
+	Files        []string
 	DeleteExtras bool
 	Progress     ProgressFunc
 }

@@ -69,6 +69,9 @@ type ImportOptions struct {
 	FallbackLoaderVersion string `json:"fallbackLoaderVersion"`
 	CurseForgeAPIKey      string `json:"-"`
 	GameDir               string `json:"-"`
+	// URLRewriter returns mirror candidates for a Modrinth/CurseForge download
+	// URL. The original URL should be the final fallback.
+	URLRewriter func(string) []string `json:"-"`
 }
 
 // ProgressFunc receives import/export progress.
@@ -369,7 +372,7 @@ func importMRPack(ctx context.Context, path string, ins Inspection, gameDir stri
 			return 0, nil, err
 		}
 		downloads = append(downloads, genericDownload{
-			url: f.Downloads[0], dest: dest,
+			urls: downloadCandidates(opts.URLRewriter, f.Downloads), dest: dest,
 			sha512: f.Hashes["sha512"], sha1: f.Hashes["sha1"], size: f.FileSize,
 		})
 	}
@@ -385,11 +388,33 @@ func importMRPack(ctx context.Context, path string, ins Inspection, gameDir stri
 }
 
 type genericDownload struct {
-	url    string
+	urls   []string
 	dest   string
 	sha512 string
 	sha1   string
 	size   int64
+}
+
+func downloadCandidates(rewriter func(string) []string, urls []string) []string {
+	out := make([]string, 0, len(urls)*2)
+	seen := map[string]bool{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	for _, original := range urls {
+		if rewriter != nil {
+			for _, candidate := range rewriter(original) {
+				add(candidate)
+			}
+		}
+		add(original)
+	}
+	return out
 }
 
 func importCurseForge(ctx context.Context, path string, ins Inspection, gameDir string, opts ImportOptions, progress ProgressFunc) (int, []string, error) {
@@ -439,7 +464,7 @@ func importCurseForge(ctx context.Context, path string, ins Inspection, gameDir 
 			missing++
 		} else {
 			downloads = append(downloads, genericDownload{
-				url:  url,
+				urls: downloadCandidates(opts.URLRewriter, []string{url}),
 				dest: filepath.Join(gameDir, "mods", name),
 			})
 		}
@@ -560,8 +585,8 @@ func downloadGeneric(ctx context.Context, downloads []genericDownload, workers i
 				if ctx.Err() != nil {
 					return
 				}
-				err := httpx.Download(ctx, httpx.File{
-					URL: d.url, Dest: d.dest, SHA512: d.sha512, SHA1: d.sha1, Size: d.size,
+				err := httpx.DownloadAny(ctx, d.urls, httpx.File{
+					Dest: d.dest, SHA512: d.sha512, SHA1: d.sha1, Size: d.size,
 					Verify: d.sha512 != "" || d.sha1 != "",
 				})
 				if err != nil {
@@ -709,13 +734,22 @@ func report(fn ProgressFunc, stage, message string, current, total int) {
 }
 
 // ExportMRPack writes a portable Modrinth pack containing all instance files
-// as overrides. This keeps custom configs and local mods intact.
+// as overrides. This keeps custom configs and local mods intact and allows
+// Modrinth App, Prism, MultiMC and other mrpack-aware launchers to import the
+// result without knowing anything about MyGoLuncher's instance layout.
 func ExportMRPack(ctx context.Context, inst store.Instance, gameDir, dest string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	loader := strings.ToLower(strings.TrimSpace(inst.Loader))
+	if loader == "" {
+		loader = "vanilla"
+	}
+	if loader != "vanilla" && strings.TrimSpace(inst.LoaderVersion) == "" {
+		return errors.New("缺少加载器版本，无法生成可被其他启动器导入的整合包")
+	}
 	deps := map[string]string{"minecraft": inst.MCVersion}
-	switch strings.ToLower(inst.Loader) {
+	switch loader {
 	case "fabric":
 		deps["fabric-loader"] = inst.LoaderVersion
 	case "quilt":
@@ -738,20 +772,12 @@ func ExportMRPack(ctx context.Context, inst store.Instance, gameDir, dest string
 	if err != nil {
 		return err
 	}
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	zw := zip.NewWriter(out)
-	defer zw.Close()
-	if err := addZipBytes(zw, "modrinth.index.json", indexData); err != nil {
-		return err
-	}
-	if err := addDirToZip(zw, gameDir, "overrides", exportSkip); err != nil {
-		return err
-	}
-	return zw.Close()
+	return writeZipFile(dest, func(zw *zip.Writer) error {
+		if err := addZipBytes(zw, "modrinth.index.json", indexData); err != nil {
+			return err
+		}
+		return addDirToZip(zw, gameDir, "overrides", portableExportSkip(gameDir, modpackSkip))
+	})
 }
 
 // ExportZip writes a Prism/MultiMC-compatible instance archive.
@@ -759,8 +785,15 @@ func ExportZip(ctx context.Context, inst store.Instance, gameDir, dest string) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	loader := strings.ToLower(strings.TrimSpace(inst.Loader))
+	if loader == "" {
+		loader = "vanilla"
+	}
+	if loader != "vanilla" && strings.TrimSpace(inst.LoaderVersion) == "" {
+		return errors.New("缺少加载器版本，无法生成可被其他启动器导入的版本包")
+	}
 	components := []map[string]string{{"uid": "net.minecraft", "version": inst.MCVersion}}
-	switch strings.ToLower(inst.Loader) {
+	switch loader {
 	case "fabric":
 		components = append(components, map[string]string{"uid": "net.fabricmc.fabric-loader", "version": inst.LoaderVersion})
 	case "quilt":
@@ -775,24 +808,72 @@ func ExportZip(ctx context.Context, inst store.Instance, gameDir, dest string) e
 	if err != nil {
 		return err
 	}
-	cfg := fmt.Sprintf("InstanceType=OneSix\nname=%s\n", inst.Name)
+	instanceName := strings.NewReplacer("\r", " ", "\n", " ").Replace(inst.Name)
+	cfg := fmt.Sprintf("InstanceType=OneSix\nname=%s\n", instanceName)
+	return writeZipFile(dest, func(zw *zip.Writer) error {
+		if err := addZipBytes(zw, "mmc-pack.json", packData); err != nil {
+			return err
+		}
+		if err := addZipBytes(zw, "instance.cfg", []byte(cfg)); err != nil {
+			return err
+		}
+		return addDirToZip(zw, gameDir, "minecraft", portableExportSkip(gameDir, exportSkip))
+	})
+}
+
+func writeZipFile(dest string, write func(*zip.Writer) error) error {
 	out, err := os.Create(dest)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 	zw := zip.NewWriter(out)
-	defer zw.Close()
-	if err := addZipBytes(zw, "mmc-pack.json", packData); err != nil {
-		return err
+	writeErr := write(zw)
+	zipErr := zw.Close()
+	fileErr := out.Close()
+	if writeErr != nil {
+		return writeErr
 	}
-	if err := addZipBytes(zw, "instance.cfg", []byte(cfg)); err != nil {
-		return err
+	if zipErr != nil {
+		return zipErr
 	}
-	if err := addDirToZip(zw, gameDir, "minecraft", exportSkip); err != nil {
-		return err
+	return fileErr
+}
+
+// modpackSkip removes user-specific saves and options from a portable
+// modpack. MultiMC backups use exportSkip below so they remain full backups.
+func modpackSkip(rel string, info os.FileInfo) bool {
+	if exportSkip(rel, info) {
+		return true
 	}
-	return zw.Close()
+	first := strings.SplitN(filepath.ToSlash(rel), "/", 2)[0]
+	switch first {
+	case "saves", "screenshots":
+		return true
+	}
+	switch filepath.Base(rel) {
+	case "options.txt", "optionsof.txt", "servers.dat":
+		return true
+	}
+	return false
+}
+
+func portableExportSkip(gameDir string, base func(string, os.FileInfo) bool) func(string, os.FileInfo) bool {
+	versionName := filepath.Base(gameDir)
+	versionJSON := strings.ToLower(versionName + ".json")
+	versionJar := strings.ToLower(versionName + ".jar")
+	nativesName := strings.ToLower(versionName + "-natives")
+	return func(rel string, info os.FileInfo) bool {
+		if base(rel, info) {
+			return true
+		}
+		slashed := filepath.ToSlash(rel)
+		lower := strings.ToLower(slashed)
+		if !strings.Contains(slashed, "/") && (lower == versionJSON || lower == versionJar) {
+			return true
+		}
+		return lower == "natives" || strings.HasPrefix(lower, "natives/") ||
+			lower == nativesName || strings.HasPrefix(lower, nativesName+"/")
+	}
 }
 
 func exportSkip(rel string, info os.FileInfo) bool {
@@ -805,11 +886,14 @@ func exportSkip(rel string, info os.FileInfo) bool {
 		return true
 	}
 	base := filepath.Base(rel)
-	switch base {
+	lowerBase := strings.ToLower(base)
+	switch lowerBase {
 	case "usercache.json", "launcher_profiles.json", "realms_persistence.json":
 		return true
 	}
-	return strings.HasSuffix(base, ".log")
+	return strings.HasSuffix(lowerBase, ".log") ||
+		strings.HasSuffix(lowerBase, ".old") || strings.HasSuffix(lowerBase, ".dis") ||
+		strings.Contains(lowerBase, ".old.") || strings.Contains(lowerBase, ".dis.")
 }
 
 func addDirToZip(zw *zip.Writer, root, prefix string, skip func(rel string, info os.FileInfo) bool) error {

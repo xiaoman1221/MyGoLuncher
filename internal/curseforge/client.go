@@ -368,6 +368,12 @@ func (c *Client) DownloadURL(ctx context.Context, file File) (string, error) {
 
 // DownloadFile downloads one project file into dir and returns its path.
 func (c *Client) DownloadFile(ctx context.Context, file File, dir string) (string, error) {
+	return c.DownloadFileAny(ctx, file, dir, nil)
+}
+
+// DownloadFileAny downloads one project file through optional mirror
+// candidates. The original URL is always the final fallback.
+func (c *Client) DownloadFileAny(ctx context.Context, file File, dir string, rewriter func(string) []string) (string, error) {
 	downloadURL, err := c.DownloadURL(ctx, file)
 	if err != nil {
 		return "", err
@@ -380,8 +386,14 @@ func (c *Client) DownloadFile(ctx context.Context, file File, dir string) (strin
 		return "", err
 	}
 	dest := filepath.Join(dir, name)
-	if err := httpx.Download(ctx, httpx.File{
-		URL: downloadURL, Dest: dest, SHA1: file.SHA1(), Size: file.FileLength, Verify: file.SHA1() != "",
+	urls := []string{downloadURL}
+	if rewriter != nil {
+		if candidates := rewriter(downloadURL); len(candidates) > 0 {
+			urls = candidates
+		}
+	}
+	if err := httpx.DownloadAny(ctx, urls, httpx.File{
+		Dest: dest, SHA1: file.SHA1(), Size: file.FileLength, Verify: file.SHA1() != "",
 	}); err != nil {
 		return "", err
 	}
@@ -441,6 +453,37 @@ func (c *Client) InstallDependencies(ctx context.Context, parent File, gameVersi
 	return installed, nil
 }
 
+// FingerprintMatch is an exact CurseForge fingerprint lookup result.
+type FingerprintMatch struct {
+	ID          int64  `json:"id"`
+	File        File   `json:"file"`
+	LatestFiles []File `json:"latestFiles"`
+}
+
+// FingerprintMatches resolves installed file fingerprints. CurseForge limits
+// each request, so callers should keep the batch around 100 items.
+func (c *Client) FingerprintMatches(ctx context.Context, fingerprints []uint32) ([]FingerprintMatch, error) {
+	if c.APIKey == "" {
+		return nil, ErrNoAPIKey
+	}
+	if len(fingerprints) == 0 {
+		return []FingerprintMatch{}, nil
+	}
+	var payload struct {
+		Data struct {
+			ExactMatches []FingerprintMatch `json:"exactMatches"`
+		} `json:"data"`
+	}
+	body := map[string]any{"fingerprints": fingerprints}
+	if err := c.postJSON(ctx, c.baseURL+"/fingerprints", body, &payload); err != nil {
+		return nil, err
+	}
+	if payload.Data.ExactMatches == nil {
+		return []FingerprintMatch{}, nil
+	}
+	return payload.Data.ExactMatches, nil
+}
+
 // LatestCompatibleFile returns the newest preferred release for a project.
 func (c *Client) LatestCompatibleFile(ctx context.Context, projectID int64, gameVersion, loader string) (File, error) {
 	return c.latestFile(ctx, projectID, gameVersion, loader)
@@ -491,6 +534,40 @@ func sortField(sort string) int {
 	default:
 		return 2
 	}
+}
+
+func (c *Client) postJSON(ctx context.Context, endpoint string, body any, out any) error {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(string(raw)))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("x-api-key", c.APIKey)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", httpx.UserAgent)
+	resp, err := httpx.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("CurseForge 网络请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message := strings.TrimSpace(string(responseBody))
+		if len(message) > 300 {
+			message = message[:300]
+		}
+		return fmt.Errorf("CurseForge API HTTP %d: %s", resp.StatusCode, message)
+	}
+	if err := json.Unmarshal(responseBody, out); err != nil {
+		return fmt.Errorf("解析 CurseForge 响应失败: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) getJSON(ctx context.Context, endpoint string, out any) error {

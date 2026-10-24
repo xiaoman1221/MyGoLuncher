@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -22,19 +23,25 @@ const (
 	KindBMCLAPI       Kind = "bmclapi"
 	KindCustomBMCLAPI Kind = "custom-bmclapi"
 	KindCustomProxy   Kind = "custom-proxy"
+	KindTunaAdoptium  Kind = "tuna-adoptium"
 )
 
 // Resource identifies what kind of file is being resolved.
 type Resource string
 
 const (
-	ResourceManifest   Resource = "manifest"
-	ResourceVersion    Resource = "version"
-	ResourceClient     Resource = "client"
-	ResourceLibrary    Resource = "library"
-	ResourceAsset      Resource = "asset"
-	ResourceAssetIndex Resource = "asset-index"
-	ResourceLogging    Resource = "logging"
+	ResourceManifest       Resource = "manifest"
+	ResourceVersion        Resource = "version"
+	ResourceClient         Resource = "client"
+	ResourceLibrary        Resource = "library"
+	ResourceAsset          Resource = "asset"
+	ResourceAssetIndex     Resource = "asset-index"
+	ResourceServer         Resource = "server"
+	ResourceLogging        Resource = "logging"
+	ResourceLoaderMeta     Resource = "loader-meta"
+	ResourceLoaderArtifact Resource = "loader-artifact"
+	ResourceJavaMeta       Resource = "java-meta"
+	ResourceJavaArtifact   Resource = "java-artifact"
 )
 
 // Source is one download origin.
@@ -56,6 +63,7 @@ type CustomConfig struct {
 
 const (
 	BMCLAPIBase      = "https://bmclapi2.bangbang93.com"
+	TunaAdoptiumBase = "https://mirrors.tuna.tsinghua.edu.cn/Adoptium"
 	OfficialManifest = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 )
 
@@ -69,6 +77,11 @@ func BMCLAPI() Source {
 	return Source{ID: "bmclapi", Name: "BMCLAPI", BaseURL: BMCLAPIBase, Kind: KindBMCLAPI}
 }
 
+// TunaAdoptium is the Tsinghua mirror for Adoptium Java archives.
+func TunaAdoptium() Source {
+	return Source{ID: "tuna-adoptium", Name: "清华 Adoptium", BaseURL: TunaAdoptiumBase, Kind: KindTunaAdoptium}
+}
+
 // Build returns official, BMCLAPI and all valid custom sources.
 func Build(customs []CustomConfig) []Source {
 	sources := []Source{Official(), BMCLAPI()}
@@ -79,6 +92,14 @@ func Build(customs []CustomConfig) []Source {
 		}
 		sources = append(sources, source)
 	}
+	return sources
+}
+
+// JavaSources includes the ordinary game mirrors plus the Tsinghua Adoptium
+// archive mirror used for Java runtime downloads.
+func JavaSources(customs []CustomConfig) []Source {
+	sources := Build(customs)
+	sources = append(sources, TunaAdoptium())
 	return sources
 }
 
@@ -123,13 +144,16 @@ func (s Source) Supports(resource Resource) bool {
 		return true
 	case KindBMCLAPI, KindCustomBMCLAPI:
 		switch resource {
-		case ResourceManifest, ResourceVersion, ResourceClient, ResourceLibrary, ResourceAsset:
+		case ResourceManifest, ResourceVersion, ResourceClient, ResourceServer, ResourceLibrary, ResourceAsset,
+			ResourceLoaderMeta, ResourceLoaderArtifact:
 			return true
 		default:
 			return false
 		}
 	case KindCustomProxy:
 		return true
+	case KindTunaAdoptium:
+		return resource == ResourceJavaArtifact
 	default:
 		return false
 	}
@@ -152,7 +176,16 @@ func (s Source) URL(resource Resource, original, versionID string) (string, bool
 		if path == "" {
 			path = "/"
 		}
-		return strings.TrimRight(s.BaseURL, "/") + path, true
+		result := strings.TrimRight(s.BaseURL, "/") + path
+		if parsed.RawQuery != "" {
+			result += "?" + parsed.RawQuery
+		}
+		return result, true
+	case KindTunaAdoptium:
+		if resource != ResourceJavaArtifact {
+			return "", false
+		}
+		return tunaArchiveURL(s.BaseURL, original, versionID)
 	case KindBMCLAPI, KindCustomBMCLAPI:
 		base := strings.TrimRight(s.BaseURL, "/")
 		switch resource {
@@ -168,21 +201,247 @@ func (s Source) URL(resource Resource, original, versionID string) (string, bool
 				return "", false
 			}
 			return base + "/version/" + url.PathEscape(versionID) + "/client", true
-		case ResourceLibrary:
-			parsed, err := url.Parse(original)
-			if err != nil || !strings.EqualFold(parsed.Hostname(), "libraries.minecraft.net") {
+		case ResourceServer:
+			if versionID == "" {
 				return "", false
 			}
-			return base + "/libraries" + parsed.EscapedPath(), true
+			return base + "/version/" + url.PathEscape(versionID) + "/server", true
+		case ResourceLibrary:
+			parsed, err := url.Parse(original)
+			if err != nil {
+				return "", false
+			}
+			switch {
+			case strings.EqualFold(parsed.Hostname(), "libraries.minecraft.net"):
+				return base + "/libraries" + parsed.EscapedPath(), true
+			case isMavenHost(parsed.Hostname()):
+				return base + "/maven" + bmclapiMavenPath(parsed), true
+			}
+			return "", false
 		case ResourceAsset:
 			parsed, err := url.Parse(original)
 			if err != nil || !strings.EqualFold(parsed.Hostname(), "resources.download.minecraft.net") {
 				return "", false
 			}
 			return base + "/assets" + parsed.EscapedPath(), true
+		case ResourceLoaderMeta:
+			parsed, err := url.Parse(original)
+			if err != nil {
+				return "", false
+			}
+			switch strings.ToLower(parsed.Hostname()) {
+			case "meta.fabricmc.net":
+				return base + "/fabric-meta" + parsed.EscapedPath(), true
+			case "meta.quiltmc.org":
+				return base + "/quilt-meta" + parsed.EscapedPath(), true
+			case "files.minecraftforge.net":
+				return base + "/maven" + bmclapiMavenPath(parsed), true
+			}
+			if isMavenHost(parsed.Hostname()) {
+				return base + "/maven" + bmclapiMavenPath(parsed), true
+			}
+			return "", false
+		case ResourceLoaderArtifact:
+			parsed, err := url.Parse(original)
+			if err != nil || !isMavenHost(parsed.Hostname()) {
+				return "", false
+			}
+			return base + "/maven" + bmclapiMavenPath(parsed), true
 		}
 	}
 	return "", false
+}
+
+func bmclapiMavenPath(parsed *url.URL) string {
+	path := parsed.EscapedPath()
+	if strings.EqualFold(parsed.Hostname(), "maven.neoforged.net") {
+		path = strings.TrimPrefix(path, "/releases")
+	}
+	return path
+}
+
+func isMavenHost(host string) bool {
+	switch strings.ToLower(strings.TrimSpace(host)) {
+	case "maven.fabricmc.net", "maven.quiltmc.org", "maven.minecraftforge.net",
+		"maven.neoforged.net", "files.minecraftforge.net":
+		return true
+	default:
+		return false
+	}
+}
+
+func tunaArchiveURL(base, original, feature string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(original))
+	if err != nil || parsed.Host == "" {
+		return "", false
+	}
+	base = strings.TrimRight(base, "/")
+	if strings.HasPrefix(strings.ToLower(parsed.String()), strings.ToLower(base)+"/") {
+		return parsed.String(), true
+	}
+	name := path.Base(parsed.Path)
+	if name == "" || name == "." {
+		return "", false
+	}
+	lowerName := strings.ToLower(name)
+	marker := "-jre_"
+	markerIndex := strings.Index(lowerName, marker)
+	if markerIndex < 0 {
+		return "", false
+	}
+	parts := strings.Split(name[markerIndex+len(marker):], "_")
+	if len(parts) < 2 {
+		return "", false
+	}
+	arch, osName := parts[0], parts[1]
+	if feature == "" {
+		prefix := name[:markerIndex]
+		digits := strings.TrimPrefix(strings.ToUpper(prefix), "OPENJDK")
+		end := 0
+		for end < len(digits) && digits[end] >= '0' && digits[end] <= '9' {
+			end++
+		}
+		feature = digits[:end]
+	}
+	if feature == "" {
+		return "", false
+	}
+	return base + "/" + url.PathEscape(feature) + "/jre/" + url.PathEscape(arch) + "/" +
+		url.PathEscape(osName) + "/" + url.PathEscape(name), true
+}
+
+// ResourceSource is a download mirror for Modrinth/CurseForge files. It is
+// separate from game mirrors because those rewrite Mojang metadata URLs.
+type ResourceSource struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	BaseURL  string `json:"baseUrl"`
+	Kind     string `json:"kind"` // official, mcim or proxy
+	Official bool   `json:"official"`
+	Custom   bool   `json:"custom"`
+}
+
+const MCIMBase = "https://mod.mcimirror.top"
+
+// ResourceSources returns the built-in resource mirrors followed by valid
+// custom entries.
+func ResourceSources(customs []CustomConfig) []ResourceSource {
+	sources := []ResourceSource{
+		{ID: "official", Name: "官方源", Kind: "official", Official: true},
+		{ID: "mcim", Name: "MCIM 镜像", BaseURL: MCIMBase, Kind: "mcim"},
+	}
+	for _, custom := range customs {
+		source, err := NormalizeResourceCustom(custom)
+		if err != nil {
+			continue
+		}
+		sources = append(sources, source)
+	}
+	return sources
+}
+
+// NormalizeResourceCustom validates a custom Modrinth/CurseForge mirror.
+func NormalizeResourceCustom(custom CustomConfig) (ResourceSource, error) {
+	raw := strings.TrimSpace(custom.URL)
+	if raw == "" {
+		return ResourceSource{}, errors.New("镜像地址不能为空")
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return ResourceSource{}, errors.New("镜像地址格式无效")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ResourceSource{}, errors.New("镜像地址只支持 http/https")
+	}
+	kind := "mcim"
+	if strings.EqualFold(strings.TrimSpace(custom.Kind), "proxy") {
+		kind = "proxy"
+	}
+	name := strings.TrimSpace(custom.Name)
+	if name == "" {
+		name = parsed.Host
+	}
+	id := strings.TrimSpace(custom.ID)
+	if id == "" {
+		id = "resource-" + sanitizeID(parsed.Host)
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return ResourceSource{
+		ID: id, Name: name, BaseURL: strings.TrimRight(parsed.String(), "/"),
+		Kind: kind, Custom: true,
+	}, nil
+}
+
+// FindResourceSource resolves a configured resource mirror by ID.
+func FindResourceSource(id string, customs []CustomConfig) ResourceSource {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = "official"
+	}
+	for _, source := range ResourceSources(customs) {
+		if source.ID == id {
+			return source
+		}
+	}
+	return ResourceSource{ID: "official", Name: "官方源", Kind: "official", Official: true}
+}
+
+// RewriteResourceURL rewrites a Modrinth/CurseForge download URL through a
+// mirror. It returns false when the host is not handled by that mirror.
+func (s ResourceSource) RewriteResourceURL(original string) (string, bool) {
+	original = strings.TrimSpace(original)
+	if original == "" || s.Kind == "" || s.Kind == "official" || s.BaseURL == "" {
+		return original, original != ""
+	}
+	parsed, err := url.Parse(original)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return "", false
+	}
+	base := strings.TrimRight(s.BaseURL, "/")
+	switch s.Kind {
+	case "proxy":
+		if strings.HasPrefix(strings.ToLower(original), strings.ToLower(base)+"/") || strings.EqualFold(original, base) {
+			return original, true
+		}
+		result := base + parsed.EscapedPath()
+		if parsed.RawQuery != "" {
+			result += "?" + parsed.RawQuery
+		}
+		return result, true
+	case "mcim":
+		switch strings.ToLower(parsed.Hostname()) {
+		case "api.modrinth.com":
+			return base + "/modrinth" + parsed.EscapedPath(), true
+		case "cdn.modrinth.com":
+			return base + parsed.EscapedPath(), true
+		case "api.curseforge.com":
+			return base + "/curseforge" + parsed.EscapedPath(), true
+		case "edge.forgecdn.net", "mediafilez.forgecdn.net":
+			return base + parsed.EscapedPath(), true
+		}
+	}
+	return "", false
+}
+
+// ResourceURLs returns mirror candidates followed by the original URL. The
+// original is always the final fallback so a dead mirror never blocks a pack.
+func ResourceURLs(source ResourceSource, original string) []string {
+	original = strings.TrimSpace(original)
+	if original == "" {
+		return nil
+	}
+	urls := make([]string, 0, 2)
+	if rewritten, ok := source.RewriteResourceURL(original); ok && rewritten != "" {
+		if rewritten != original {
+			urls = append(urls, rewritten)
+		}
+	}
+	urls = append(urls, original)
+	return urls
 }
 
 // ManifestURLs returns all candidate manifest URLs.

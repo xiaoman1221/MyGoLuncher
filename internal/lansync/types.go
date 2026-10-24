@@ -5,9 +5,11 @@ package lansync
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -51,6 +53,144 @@ type Manifest struct {
 	Dirs      []string     `json:"dirs"`
 	Files     []FileEntry  `json:"files"`
 	CreatedAt string       `json:"createdAt"`
+}
+
+// FileChange describes one file that a LAN sync would write.
+type FileChange struct {
+	Path       string `json:"path"`
+	State      string `json:"state"` // new or changed
+	Reason     string `json:"reason,omitempty"`
+	LocalSize  int64  `json:"localSize"`
+	RemoteSize int64  `json:"remoteSize"`
+}
+
+// Plan is a read-only comparison between a peer manifest and a local instance.
+type Plan struct {
+	TotalFiles   int          `json:"totalFiles"`
+	NewFiles     int          `json:"newFiles"`
+	ChangedFiles int          `json:"changedFiles"`
+	SameFiles    int          `json:"sameFiles"`
+	ExtraFiles   int          `json:"extraFiles"`
+	NewBytes     int64        `json:"newBytes"`
+	ChangedBytes int64        `json:"changedBytes"`
+	Changes      []FileChange `json:"changes"`
+	Extras       []string     `json:"extras"`
+	Digest       string       `json:"digest"`
+}
+
+// BuildPlan compares a manifest with localDir without writing anything.
+func BuildPlan(localDir string, manifest Manifest) (Plan, error) {
+	var plan Plan
+	stat, err := os.Stat(localDir)
+	if err != nil || !stat.IsDir() {
+		return plan, errors.New("目标游戏目录不存在")
+	}
+	dirs, err := NormalizeDirs(manifest.Dirs)
+	if err != nil {
+		return plan, err
+	}
+	manifest.Dirs = dirs
+	plan.Digest = manifestDigest(manifest)
+	plan.TotalFiles = len(manifest.Files)
+	plan.Changes = []FileChange{}
+	plan.Extras = []string{}
+	known := map[string]bool{}
+	for _, entry := range manifest.Files {
+		rel, err := safeRelativePath(entry.Path, manifest.Dirs)
+		if err != nil {
+			return plan, err
+		}
+		known[rel] = true
+		full, err := localPath(localDir, rel)
+		if err != nil {
+			return plan, err
+		}
+		localInfo, statErr := os.Stat(full)
+		if errors.Is(statErr, os.ErrNotExist) {
+			plan.NewFiles++
+			plan.NewBytes += entry.Size
+			plan.appendChange(FileChange{Path: rel, State: "new", RemoteSize: entry.Size})
+			continue
+		}
+		if statErr != nil {
+			return plan, fmt.Errorf("读取本地文件 %s 失败: %w", rel, statErr)
+		}
+		if localInfo.IsDir() {
+			return plan, fmt.Errorf("本地路径是目录: %s", rel)
+		}
+		if localInfo.Size() != entry.Size {
+			plan.ChangedFiles++
+			plan.ChangedBytes += entry.Size
+			plan.appendChange(FileChange{
+				Path: rel, State: "changed", Reason: "size",
+				LocalSize: localInfo.Size(), RemoteSize: entry.Size,
+			})
+			continue
+		}
+		localHash, err := hashFile(full)
+		if err != nil {
+			return plan, fmt.Errorf("校验本地文件 %s 失败: %w", rel, err)
+		}
+		if !strings.EqualFold(localHash, entry.SHA256) {
+			plan.ChangedFiles++
+			plan.ChangedBytes += entry.Size
+			plan.appendChange(FileChange{
+				Path: rel, State: "changed", Reason: "hash",
+				LocalSize: localInfo.Size(), RemoteSize: entry.Size,
+			})
+			continue
+		}
+		plan.SameFiles++
+	}
+
+	for _, dir := range manifest.Dirs {
+		base := filepath.Join(localDir, dir)
+		if stat, err := os.Stat(base); err != nil || !stat.IsDir() {
+			continue
+		}
+		_ = filepath.WalkDir(base, func(filePath string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+				return nil
+			}
+			if skipSyncName(entry.Name()) {
+				return nil
+			}
+			rel, err := filepath.Rel(localDir, filePath)
+			if err != nil {
+				return nil
+			}
+			rel = filepath.ToSlash(rel)
+			if _, err := safeRelativePath(rel, manifest.Dirs); err != nil {
+				return nil
+			}
+			if !known[rel] {
+				plan.ExtraFiles++
+				if len(plan.Extras) < 100 {
+					plan.Extras = append(plan.Extras, rel)
+				}
+			}
+			return nil
+		})
+	}
+	if plan.Changes == nil {
+		plan.Changes = []FileChange{}
+	}
+	if plan.Extras == nil {
+		plan.Extras = []string{}
+	}
+	return plan, nil
+}
+
+func (p *Plan) appendChange(change FileChange) {
+	if len(p.Changes) < 200 {
+		p.Changes = append(p.Changes, change)
+	}
+}
+
+func manifestDigest(manifest Manifest) string {
+	raw, _ := json.Marshal(manifest)
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 // SyncResult summarizes a receiver-side sync.
@@ -144,11 +284,14 @@ func localPath(root, rel string) (string, error) {
 }
 
 func skipSyncName(name string) bool {
-	switch strings.ToLower(name) {
+	lower := strings.ToLower(name)
+	switch lower {
 	case ".ds_store", "thumbs.db", "desktop.ini", ".gitkeep":
 		return true
 	}
-	return strings.HasSuffix(strings.ToLower(name), ".tmp")
+	return strings.HasSuffix(lower, ".tmp") ||
+		strings.HasSuffix(lower, ".old") || strings.HasSuffix(lower, ".dis") ||
+		strings.Contains(lower, ".old.") || strings.Contains(lower, ".dis.")
 }
 
 func hashFile(filePath string) (string, error) {

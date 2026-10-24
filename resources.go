@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -60,16 +61,17 @@ type ResourceProject struct {
 
 // ResourceSearchResult is a merged page from both platforms.
 type ResourceSearchResult struct {
-	Items           []ResourceProject `json:"items"`
-	Total           int               `json:"total"`
-	Offset          int               `json:"offset"`
-	Limit           int               `json:"limit"`
-	Warnings        []string          `json:"warnings"`
-	CurseForgeReady bool              `json:"curseForgeReady"`
-	QueryUsed       string            `json:"queryUsed"`
-	AIUsed          bool              `json:"aiUsed"`
-	AIError         string            `json:"aiError"`
-	CJKQuery        bool              `json:"cjkQuery"`
+	Items             []ResourceProject `json:"items"`
+	Total             int               `json:"total"`
+	Offset            int               `json:"offset"`
+	Limit             int               `json:"limit"`
+	Warnings          []string          `json:"warnings"`
+	CurseForgeReady   bool              `json:"curseForgeReady"`
+	QueryUsed         string            `json:"queryUsed"`
+	QueryAlternatives []string          `json:"queryAlternatives"`
+	AIUsed            bool              `json:"aiUsed"`
+	AIError           string            `json:"aiError"`
+	CJKQuery          bool              `json:"cjkQuery"`
 }
 
 // ResourceVersion is a normalized download row.
@@ -161,7 +163,8 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 	}
 	settings := a.store.Settings()
 	originalQuery := strings.TrimSpace(req.Query)
-	searchQuery := aisearch.NormalizeQuery(originalQuery)
+	normalizedQuery := aisearch.NormalizeQuery(originalQuery)
+	searchQuery := normalizedQuery
 	result := ResourceSearchResult{
 		Items: []ResourceProject{}, Offset: req.Offset, Limit: req.Limit,
 		CurseForgeReady: strings.TrimSpace(settings.CurseForgeAPIKey) != "", Warnings: []string{},
@@ -180,9 +183,34 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 			result.AIUsed = true
 		}
 	}
-	result.QueryUsed = searchQuery
-	result.CJKQuery = aisearch.HasCJK(searchQuery)
-	req.Query = searchQuery
+	// Search the normalized English keywords first, then the original Chinese
+	// text (some projects have Chinese titles) and finally the unmodified query.
+	// The first query is always the primary one used for pagination and sorting.
+	queries := []string{}
+	seenQueries := map[string]bool{}
+	addQuery := func(value string) {
+		value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+		if seenQueries[strings.ToLower(value)] {
+			return
+		}
+		seenQueries[strings.ToLower(value)] = true
+		queries = append(queries, value)
+	}
+	addQuery(searchQuery)
+	addQuery(normalizedQuery)
+	addQuery(originalQuery)
+	if len(queries) == 0 {
+		queries = []string{""}
+	}
+	if req.Offset > 0 {
+		// Multi-query result pages cannot be merged without duplicates. Keep
+		// pagination stable and use the primary query for later pages.
+		queries = queries[:1]
+	}
+	result.QueryAlternatives = append([]string(nil), queries...)
+	result.QueryUsed = queries[0]
+	result.CJKQuery = aisearch.HasCJK(queries[0]) && !result.AIUsed
+	req.Query = queries[0]
 	if req.Sort == "" {
 		if req.Query == "" {
 			req.Sort = "downloads"
@@ -221,18 +249,37 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			found, err := modrinth.Search(a.context(), modrinth.SearchRequest{
-				Query: req.Query, ProjectType: modrinthType(req.Type),
-				GameVersion: gameVersion, Loader: loaderName,
-				Offset: req.Offset, Limit: req.Limit, Sort: req.Sort,
-			})
-			if err != nil {
-				mrErr = err
+			seen := map[string]bool{}
+			successful := 0
+			for _, query := range queries {
+				found, err := modrinth.Search(a.context(), modrinth.SearchRequest{
+					Query: query, ProjectType: modrinthType(req.Type),
+					GameVersion: gameVersion, Loader: loaderName,
+					Offset: req.Offset, Limit: req.Limit, Sort: req.Sort,
+				})
+				if err != nil {
+					mrErr = err
+					continue
+				}
+				successful++
+				if found.TotalHits > mrTotal {
+					mrTotal = found.TotalHits
+				}
+				for _, project := range found.Hits {
+					if seen[project.ProjectID] {
+						continue
+					}
+					seen[project.ProjectID] = true
+					mrProjects = append(mrProjects, mapModrinthProject(project, req.Type))
+				}
+			}
+			if successful == 0 {
 				return
 			}
-			mrTotal = found.TotalHits
-			for _, project := range found.Hits {
-				mrProjects = append(mrProjects, mapModrinthProject(project, req.Type))
+			mrErr = nil
+			rankResourceProjects(mrProjects, queries[0])
+			if len(mrProjects) > req.Limit {
+				mrProjects = mrProjects[:req.Limit]
 			}
 		}()
 	}
@@ -252,17 +299,38 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 			} else if req.Type == resourceTypeMod {
 				cfLoader = loaderName
 			}
-			found, err := curseforge.New(key).Search(a.context(), curseforge.SearchRequest{
-				Query: req.Query, ClassID: classID, GameVersion: cfGameVersion,
-				Loader: cfLoader, Offset: req.Offset, Limit: req.Limit, Sort: req.Sort,
-			})
-			if err != nil {
-				cfErr = err
+			client := curseforge.New(key)
+			seen := map[string]bool{}
+			successful := 0
+			for _, query := range queries {
+				found, err := client.Search(a.context(), curseforge.SearchRequest{
+					Query: query, ClassID: classID, GameVersion: cfGameVersion,
+					Loader: cfLoader, Offset: req.Offset, Limit: req.Limit, Sort: req.Sort,
+				})
+				if err != nil {
+					cfErr = err
+					continue
+				}
+				successful++
+				if found.Total > cfTotal {
+					cfTotal = found.Total
+				}
+				for _, project := range found.Projects {
+					projectID := strconv.FormatInt(project.ID, 10)
+					if seen[projectID] {
+						continue
+					}
+					seen[projectID] = true
+					cfProjects = append(cfProjects, mapCurseForgeProject(project, req.Type))
+				}
+			}
+			if successful == 0 {
 				return
 			}
-			cfTotal = found.Total
-			for _, project := range found.Projects {
-				cfProjects = append(cfProjects, mapCurseForgeProject(project, req.Type))
+			cfErr = nil
+			rankResourceProjects(cfProjects, queries[0])
+			if len(cfProjects) > req.Limit {
+				cfProjects = cfProjects[:req.Limit]
 			}
 		}()
 	}
@@ -281,6 +349,7 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 	} else if includeCF {
 		result.Items = cfProjects
 	}
+	rankResourceProjects(result.Items, queries[0])
 	result.Total = mrTotal + cfTotal
 	if len(result.Items) == 0 && mrErr != nil && cfErr != nil {
 		return result, errors.New("两个平台均搜索失败")
@@ -479,13 +548,13 @@ func loaderTokens(values []string) []string {
 
 // InstallResource installs a Modrinth or CurseForge mod, shader, resource pack
 // or data pack. Modpacks use InstallResourceModpack.
-func (a *App) InstallResource(instanceID, source, projectID, versionID string) (result InstallProjectResult, err error) {
+func (a *App) InstallResource(instanceID, source, projectID, versionID, mirrorID string, force bool) (result InstallProjectResult, err error) {
 	if err := a.ready(); err != nil {
 		return InstallProjectResult{}, err
 	}
 	source = normalizeResourceSource(source)
 	if source == sourceModrinth {
-		return a.InstallProject(instanceID, projectID, versionID)
+		return a.installProject(instanceID, projectID, versionID, mirrorID, force)
 	}
 	if source != sourceCurseForge {
 		return InstallProjectResult{}, errors.New("请选择具体资源平台")
@@ -540,19 +609,39 @@ func (a *App) InstallResource(instanceID, source, projectID, versionID string) (
 	defer func() { t.finish(err) }()
 	t.update("download", "正在下载 "+project.Name+"…", 0, 0)
 	dir := filepath.Join(a.instanceDir(inst), subdir)
-	path, err := client.DownloadFile(a.context(), file, dir)
+	rewriter := resourceRewriter(a.resourceSource(mirrorID))
+	var path string
+	if resourceType == resourceTypeMod {
+		cacheDir := filepath.Join(a.paths.Cache, "resources")
+		tempPath, downloadErr := client.DownloadFileAny(a.context(), file, cacheDir, rewriter)
+		if downloadErr != nil {
+			return InstallProjectResult{}, downloadErr
+		}
+		conflicts := detectModConflicts(a.instanceDir(inst), tempPath, nil, curseForgeIncompatibilities(file))
+		if len(conflicts) > 0 && !force {
+			_ = os.Remove(tempPath)
+			return InstallProjectResult{}, &ResourceConflictError{Conflicts: conflicts}
+		}
+		path, err = installDownloadedFile(tempPath, dir)
+	} else {
+		path, err = client.DownloadFileAny(a.context(), file, dir, rewriter)
+	}
 	if err != nil {
 		return InstallProjectResult{}, err
 	}
 	result = InstallProjectResult{
 		FileName: filepath.Base(path), Path: path, VersionID: versionID,
 		VersionName: firstNonEmpty(file.DisplayName, file.FileName), GameVersion: gameVersion, Loader: loaderName,
+		Dependencies: []string{},
 	}
 	if resourceType == resourceTypeMod {
 		t.update("dependencies", "正在检查前置模组…", 0, 0)
 		deps, depErr := client.InstallDependencies(a.context(), file, gameVersion, loaderName, dir, 6, func(message string) {
 			t.update("dependencies", message, 0, 0)
 		})
+		if deps == nil {
+			deps = []string{}
+		}
 		result.Dependencies = deps
 		if depErr != nil {
 			return result, depErr
@@ -565,13 +654,13 @@ func (a *App) InstallResource(instanceID, source, projectID, versionID string) (
 
 // InstallResourceModpack installs a modpack from either platform and creates a
 // new instance. It does not use an existing instance's game version.
-func (a *App) InstallResourceModpack(source, projectID, versionID string) (resp ModpackImportResponse, err error) {
+func (a *App) InstallResourceModpack(source, projectID, versionID, mirrorID string) (resp ModpackImportResponse, err error) {
 	if err := a.ready(); err != nil {
 		return ModpackImportResponse{}, err
 	}
 	source = normalizeResourceSource(source)
 	if source == sourceModrinth {
-		return a.InstallModpackProject(projectID, versionID)
+		return a.InstallModpackProject(projectID, versionID, mirrorID)
 	}
 	if source != sourceCurseForge {
 		return ModpackImportResponse{}, errors.New("请选择具体资源平台")
@@ -602,11 +691,12 @@ func (a *App) InstallResourceModpack(source, projectID, versionID string) (resp 
 	t := a.newTask("安装整合包")
 	defer func() { t.finish(err) }()
 	t.update("download", "正在下载 CurseForge 整合包…", 0, 0)
-	path, err := client.DownloadFile(a.context(), file, cacheDir)
+	sourceMirror := a.resourceSource(mirrorID)
+	path, err := client.DownloadFileAny(a.context(), file, cacheDir, resourceRewriter(sourceMirror))
 	if err != nil {
 		return ModpackImportResponse{}, err
 	}
-	return a.importModpack(a.context(), path, t)
+	return a.importModpack(a.context(), path, t, sourceMirror)
 }
 
 // OpenResourceURL is kept for frontend links and validates the scheme.

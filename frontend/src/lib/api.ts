@@ -1,4 +1,3 @@
-import { mockCall } from './mock';
 import type {
   AccountLoginEvent,
   AccountState,
@@ -7,6 +6,7 @@ import type {
   Bootstrap,
   MirrorConfig,
   MirrorSpeedResult,
+  ResourceMirror,
   CreateInstanceRequest,
   CustomImportRequest,
   DeviceCodeView,
@@ -19,9 +19,12 @@ import type {
   JavaReleaseInfo,
   JavaRuntime,
   LanSnapshot,
+  LanSyncPreview,
   LanSyncResult,
   McsmConnectRequest,
   ModpackImportResponse,
+  ModUpdateApplyRequest,
+  ModUpdateReport,
   ProjectVersion,
   ResourceSearchRequest,
   ResourceSearchResult,
@@ -33,7 +36,9 @@ import type {
   ServerProfile,
   ServerProfileRequest,
   ServerStatus,
+  ServerSyncFile,
   ServerSyncResult,
+  ServerBackup,
   Settings,
   UpdateInstanceRequest,
   VersionList,
@@ -62,6 +67,9 @@ async function call<T>(method: string, ...args: unknown[]): Promise<T> {
     if (!fn) throw new Error(`客户端绑定缺失: ${method}`);
     return fn(...args) as Promise<T>;
   }
+  // The demo backend is loaded on demand so its large fixture set is not part
+  // of the production desktop bundle.
+  const { mockCall } = await import('./mock');
   return mockCall<T>(method, args);
 }
 
@@ -74,6 +82,7 @@ export const api = {
   cancelOrcaRouterLogin: () => call<void>('CancelOrcaRouterLogin'),
   testDownloadMirrors: (customs: MirrorConfig[]) =>
     call<MirrorSpeedResult[]>('TestDownloadMirrors', customs),
+  listResourceMirrors: () => call<ResourceMirror[]>('ListResourceMirrors'),
 
   getAccounts: () => call<AccountState>('GetAccounts'),
   selectAccount: (id: string) => call<AccountState>('SelectAccount', id),
@@ -104,6 +113,9 @@ export const api = {
   launchInstanceToServer: (id: string, language: string, address: string) =>
     call<void>('LaunchInstanceToServer', id, language, address),
   stopInstance: (id: string) => call<void>('StopInstance', id),
+  checkModUpdates: (instanceId: string) => call<ModUpdateReport>('CheckModUpdates', instanceId),
+  applyModUpdate: (request: ModUpdateApplyRequest) =>
+    call<InstallProjectResult>('ApplyModUpdate', request),
   getInstanceLog: (id: string) => call<string[]>('GetInstanceLog', id),
   openInstanceFolder: (id: string) => call<void>('OpenInstanceFolder', id),
   openDataFolder: () => call<void>('OpenDataFolder'),
@@ -114,18 +126,18 @@ export const api = {
     call<ResourceSearchResult>('SearchResources', request),
   listResourceVersions: (instanceId: string, source: string, projectId: string, type: string) =>
     call<ResourceVersion[]>('ListResourceVersions', instanceId, source, projectId, type),
-  installResource: (instanceId: string, source: string, projectId: string, versionId: string) =>
-    call<InstallProjectResult>('InstallResource', instanceId, source, projectId, versionId),
-  installResourceModpack: (source: string, projectId: string, versionId: string) =>
-    call<ModpackImportResponse>('InstallResourceModpack', source, projectId, versionId),
+  installResource: (instanceId: string, source: string, projectId: string, versionId: string, mirrorId = '', force = false) =>
+    call<InstallProjectResult>('InstallResource', instanceId, source, projectId, versionId, mirrorId, force),
+  installResourceModpack: (source: string, projectId: string, versionId: string, mirrorId = '') =>
+    call<ModpackImportResponse>('InstallResourceModpack', source, projectId, versionId, mirrorId),
   searchProjects: (request: SearchRequest) => call<SearchResult>('SearchProjects', request),
   listProjectVersions: (instanceId: string, projectId: string) =>
     call<ProjectVersion[]>('ListProjectVersions', instanceId, projectId),
   installProject: (instanceId: string, projectId: string, versionId: string) =>
     call<InstallProjectResult>('InstallProject', instanceId, projectId, versionId),
-  importModpackDialog: () => call<ModpackImportResponse>('ImportModpackDialog'),
-  installModpackProject: (projectId: string, versionId: string) =>
-    call<ModpackImportResponse>('InstallModpackProject', projectId, versionId),
+  importModpackDialog: (mirrorId = '') => call<ModpackImportResponse>('ImportModpackDialog', mirrorId),
+  installModpackProject: (projectId: string, versionId: string, mirrorId = '') =>
+    call<ModpackImportResponse>('InstallModpackProject', projectId, versionId, mirrorId),
   exportModpackDialog: (instanceId: string) =>
     call<string>('ExportModpackDialog', instanceId),
   exportInstanceBackupDialog: (instanceId: string) =>
@@ -160,6 +172,12 @@ export const api = {
   stopServer: (id: string) => call<void>('StopServer', id),
   restartServer: (id: string) => call<void>('RestartServer', id),
   syncServerProfile: (id: string) => call<ServerSyncResult>('SyncServerProfile', id),
+  previewServerSync: (id: string) => call<ServerSyncFile[]>('PreviewServerSync', id),
+  syncServerProfileSelected: (id: string, files: string[]) =>
+    call<ServerSyncResult>('SyncServerProfileSelected', id, files),
+  getServerBackups: (id: string) => call<ServerBackup[]>('GetServerBackups', id),
+  rollbackServer: (id: string, backupId: string) => call<void>('RollbackServer', id, backupId),
+  syncLauncherProfiles: () => call<void>('SyncLauncherProfiles'),
 
   startLanDiscovery: (instanceId: string, broadcast: boolean) =>
     call<LanSnapshot>('StartLanDiscovery', instanceId, broadcast),
@@ -167,8 +185,10 @@ export const api = {
   startLanShare: (instanceId: string, dirs: string[]) =>
     call<LanSnapshot>('StartLanShare', instanceId, dirs),
   stopLanShare: () => call<LanSnapshot>('StopLanShare'),
-  syncFromLanPeer: (peerId: string, targetInstanceId: string) =>
-    call<LanSyncResult>('SyncFromLanPeer', peerId, targetInstanceId),
+  previewLanSync: (peerId: string, targetInstanceId: string) =>
+    call<LanSyncPreview>('PreviewLanSync', peerId, targetInstanceId),
+  syncFromLanPeer: (peerId: string, targetInstanceId: string, expectedDigest: string) =>
+    call<LanSyncResult>('SyncFromLanPeer', peerId, targetInstanceId, expectedDigest),
   setLanBroadcast: (enabled: boolean) => call<LanSnapshot>('SetLanBroadcast', enabled),
   getLanSnapshot: () => call<LanSnapshot>('GetLanSnapshot'),
   scanLanSubnets: () => call<LanSnapshot>('ScanLanSubnets'),

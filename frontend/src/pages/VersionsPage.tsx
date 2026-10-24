@@ -156,11 +156,15 @@ export function VersionsPage() {
     let success = 0;
     let lastInstanceID = '';
     const errors: string[] = [];
+    const warnings: string[] = [];
     for (const entry of selected) {
       try {
         const imported = await api.importExternalInstance(entry.root, entry.candidate.id, entry.candidate.name);
         success += 1;
         lastInstanceID = imported.instance.id;
+        if (imported.warnings.length > 0) {
+          warnings.push(`${entry.candidate.name}: ${imported.warnings[0]}`);
+        }
       } catch (reason) {
         errors.push(`${entry.candidate.name}: ${(reason as Error).message}`);
       }
@@ -169,7 +173,8 @@ export function VersionsPage() {
     if (lastInstanceID) selectInstance(lastInstanceID);
     setScanOpen(false);
     if (success > 0) {
-      pushToast('success', t('versions.added'), t('local.importSummary', { success, failed: errors.length }));
+      const summary = t('local.importSummary', { success, failed: errors.length });
+      pushToast('success', t('versions.added'), warnings[0] ? `${summary} · ${warnings[0]}` : summary);
       navigate('home');
     }
     if (errors.length > 0) {
@@ -241,6 +246,7 @@ export function VersionsPage() {
           </button>
         </div>
         <p className="panel-note">{t('versions.localHint')}</p>
+        <p className="panel-note">{t('versions.importCompat')}</p>
       </section>
 
       <section className="panel">

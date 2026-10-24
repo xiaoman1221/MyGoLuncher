@@ -11,8 +11,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"MyMinecraftGoLuncher/internal/mirror"
 	"MyMinecraftGoLuncher/internal/store"
 	"MyMinecraftGoLuncher/internal/sysutil"
 )
@@ -37,11 +39,33 @@ func (r Runtime) Label() string {
 // Manager discovers and installs Java runtimes.
 type Manager struct {
 	paths store.Paths
+
+	sourceMu sync.Mutex
+	sources  []mirror.Source
 }
 
 // NewManager creates a Java manager rooted at the launcher data directory.
 func NewManager(paths store.Paths) *Manager {
-	return &Manager{paths: paths}
+	return &Manager{paths: paths, sources: []mirror.Source{mirror.Official()}}
+}
+
+// SetSources configures Java metadata and archive download mirrors.
+func (m *Manager) SetSources(sources []mirror.Source) {
+	if len(sources) == 0 {
+		sources = []mirror.Source{mirror.Official()}
+	}
+	m.sourceMu.Lock()
+	m.sources = append([]mirror.Source(nil), sources...)
+	m.sourceMu.Unlock()
+}
+
+func (m *Manager) sourceList() []mirror.Source {
+	m.sourceMu.Lock()
+	defer m.sourceMu.Unlock()
+	if len(m.sources) == 0 {
+		return []mirror.Source{mirror.Official()}
+	}
+	return append([]mirror.Source(nil), m.sources...)
 }
 
 // Probe inspects a Java executable or home directory.

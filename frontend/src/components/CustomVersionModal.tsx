@@ -61,7 +61,7 @@ export function CustomVersionModal({ open, onClose, onImported }: CustomVersionM
 
   const applyDetected = (entry: DetectedVersion) => {
     setSelectedVersionKey(entry.key);
-    setSourceDir(entry.scan.root);
+    setSourceDir(entry.candidate.contentDir || entry.scan.root);
     setMcVersion(entry.candidate.mcVersion);
     setLoader(entry.candidate.loader || 'vanilla');
     setLoaderVersion(entry.candidate.loaderVersion || '');

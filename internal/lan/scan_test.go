@@ -1,7 +1,10 @@
 package lan
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -53,6 +56,67 @@ func TestScanSubnetsStopDuringScan(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("scan did not stop")
 	}
+}
+
+func TestScanHostRequiresMinecraftStatus(t *testing.T) {
+	// A plain TCP listener must not be classified as a Minecraft server.
+	open, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		conn, err := open.Accept()
+		if err == nil {
+			_, _ = conn.Write([]byte("this is not a Minecraft status packet"))
+			_ = conn.Close()
+		}
+	}()
+	service := New()
+	port := open.Addr().(*net.TCPAddr).Port
+	service.scanHost(context.Background(), "127.0.0.1", port)
+	_ = open.Close()
+	if len(service.Snapshot().Worlds) != 0 {
+		t.Fatalf("non-Minecraft TCP listener was classified as a server: %#v", service.Snapshot().Worlds)
+	}
+
+	// A real Server List Ping response is required before a world is added.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go serveStatusPing(t, listener)
+	port = listener.Addr().(*net.TCPAddr).Port
+	service.scanHost(context.Background(), "127.0.0.1", port)
+	worlds := service.Snapshot().Worlds
+	if len(worlds) != 1 || worlds[0].Version != "1.21.1" || worlds[0].Source != "scan" {
+		t.Fatalf("valid SLP response was not recorded: %#v", worlds)
+	}
+}
+
+func serveStatusPing(t *testing.T, listener net.Listener) {
+	t.Helper()
+	conn, err := listener.Accept()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	if _, err := readPacket(conn); err != nil {
+		return
+	}
+	if _, err := readPacket(conn); err != nil {
+		return
+	}
+	status := map[string]any{
+		"version":     map[string]any{"name": "1.21.1"},
+		"players":     map[string]any{"max": 20, "online": 0},
+		"description": map[string]any{"text": "Scanned"},
+	}
+	raw, _ := json.Marshal(status)
+	payload := &bytes.Buffer{}
+	writeVarInt(payload, 0)
+	writeString(payload, string(raw))
+	_ = writePacket(conn, payload.Bytes())
 }
 
 func TestScanSubnetsRejectsConcurrentScan(t *testing.T) {

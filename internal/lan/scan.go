@@ -4,18 +4,17 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"net"
 	"sort"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
 const (
-	scanWorkers   = 64
-	scanDialLimit = 350 * time.Millisecond
-	maxScanNets   = 4
+	scanWorkers = 64
+	maxScanNets = 4
 )
 
 // ScanSubnets probes Minecraft's default port on the local IPv4 /24 networks.
@@ -80,13 +79,11 @@ func (s *Service) ScanSubnets(ctx context.Context, progress func(done, total int
 					return
 				}
 				host := hosts[index]
-				if dialMinecraft(scanCtx, host) {
-					if result, err := pingMinecraft(scanCtx, host, 25565, 1500*time.Millisecond); err == nil {
-						s.observeScannedResult(host, result)
-					} else {
-						s.observeScanned(host, 25565)
-					}
-				}
+				// A successful TCP connection alone is not enough: proxies,
+				// unrelated services and closed-but-listening ports all accept
+				// connections. Only add a world after a real Server List Ping
+				// response has been parsed successfully.
+				s.scanHost(scanCtx, host, 25565)
 				value := atomic.AddInt64(&done, 1)
 				if value%8 == 0 || value == int64(len(hosts)) {
 					report()
@@ -102,15 +99,27 @@ func (s *Service) ScanSubnets(ctx context.Context, progress func(done, total int
 	return nil
 }
 
-func (s *Service) observeScannedResult(host string, result pingResult) {
-	key := net.JoinHostPort(host, "25565")
+// scanHost probes one address and records it only when the target completed a
+// Minecraft Server List Ping exchange. This is intentionally stricter than a
+// TCP dial: the requirement is an exact 25565 status response, not merely an
+// open port.
+func (s *Service) scanHost(ctx context.Context, host string, port int) {
+	result, err := pingMinecraft(ctx, host, port, 2*time.Second)
+	if err != nil {
+		return
+	}
+	s.observeScannedResult(host, port, result)
+}
+
+func (s *Service) observeScannedResult(host string, port int, result pingResult) {
+	key := net.JoinHostPort(host, strconv.Itoa(port))
 	now := time.Now()
 	s.mu.Lock()
 	entry, exists := s.worlds[key]
 	if !exists {
 		entry = &worldEntry{
 			World: World{
-				ID: key, Host: host, Port: 25565, Address: key,
+				ID: key, Host: host, Port: port, Address: key,
 				Source: "scan", Players: []PlayerInfo{},
 			},
 		}
@@ -125,16 +134,6 @@ func (s *Service) observeScannedResult(host string, result pingResult) {
 	entry.Players = append([]PlayerInfo{}, result.Players...)
 	s.mu.Unlock()
 	s.notify()
-}
-
-func dialMinecraft(ctx context.Context, host string) bool {
-	dialer := net.Dialer{Timeout: scanDialLimit}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, "25565"))
-	if err != nil {
-		return false
-	}
-	_ = conn.Close()
-	return true
 }
 
 // scanHosts returns injective host addresses for each local private /24.
@@ -202,9 +201,4 @@ func scanNetworks() ([]uint32, map[uint32]bool) {
 		out = out[:maxScanNets]
 	}
 	return out, own
-}
-
-// String makes scan errors easier to report from the app layer.
-func scanSummary(total int) string {
-	return fmt.Sprintf("扫描 %d 个局域网地址", total)
 }

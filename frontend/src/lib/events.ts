@@ -1,5 +1,4 @@
 import { isDesktop } from './api';
-import { mockSubscribe } from './mock';
 
 type WailsWindow = Window & {
   runtime?: {
@@ -12,5 +11,13 @@ export function onEvent<T>(event: string, handler: (payload: T) => void): () => 
   if (isDesktop && runtime?.EventsOn) {
     return runtime.EventsOn(event, (payload) => handler(payload as T));
   }
-  return mockSubscribe(event, (payload) => handler(payload as T));
+  let disposed = false;
+  let unsubscribe = () => {};
+  void import('./mock').then(({ mockSubscribe }) => {
+    if (!disposed) unsubscribe = mockSubscribe(event, (payload) => handler(payload as T));
+  });
+  return () => {
+    disposed = true;
+    unsubscribe();
+  };
 }

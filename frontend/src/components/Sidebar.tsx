@@ -94,7 +94,7 @@ export function Sidebar() {
       <div className="sidebar-foot">
         <span>v{bootstrap?.version ?? '1.0.0'}</span>
         <span className="foot-dot" />
-        <span>MYGO</span>
+        <span title={t('fun.mygoSlogan')}>MYGO</span>
       </div>
     </aside>
   );

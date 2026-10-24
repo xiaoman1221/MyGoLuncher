@@ -244,7 +244,10 @@ func TestStoreLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(paths.Instances, inst.ID, "mods")); err != nil {
+	if inst.VersionID == "" {
+		t.Fatal("instance version ID was not assigned")
+	}
+	if _, err := os.Stat(filepath.Join(paths.Versions, inst.VersionID, "mods")); err != nil {
 		t.Fatalf("instance directories were not created: %v", err)
 	}
 
@@ -283,8 +286,83 @@ func TestStoreLifecycle(t *testing.T) {
 	if len(st.Instances()) != 0 {
 		t.Fatal("instance was not deleted")
 	}
-	if _, err := os.Stat(filepath.Join(paths.Instances, inst.ID)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(paths.Versions, inst.VersionID)); !os.IsNotExist(err) {
 		t.Fatal("instance directory was not deleted")
+	}
+}
+
+func TestInstanceVersionIDsAreFriendlyAndUnique(t *testing.T) {
+	paths := PathsFor(t.TempDir())
+	st, err := Open(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.CreateInstance(Instance{Name: "JinXiuYuan", MCVersion: "1.21.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.VersionID != "JinXiuYuan" {
+		t.Fatalf("version ID = %q", first.VersionID)
+	}
+	second, err := st.CreateInstance(Instance{Name: "JinXiuYuan", MCVersion: "1.21.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.VersionID != "JinXiuYuan-2" {
+		t.Fatalf("collision version ID = %q", second.VersionID)
+	}
+}
+
+func TestInstanceVersionIDAvoidsRealVersionFolder(t *testing.T) {
+	paths := PathsFor(t.TempDir())
+	if err := os.MkdirAll(filepath.Join(paths.Versions, "1.21.1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, err := st.CreateInstance(Instance{Name: "1.21.1", MCVersion: "1.21.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inst.VersionID != "1.21.1-2" {
+		t.Fatalf("version ID = %q", inst.VersionID)
+	}
+}
+
+func TestMigrateLegacyInstanceFolder(t *testing.T) {
+	base := t.TempDir()
+	paths := PathsFor(base)
+	st, err := Open(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inst, err := st.CreateInstance(Instance{Name: "Portable", MCVersion: "1.21.1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionDir := filepath.Join(paths.Versions, inst.VersionID)
+	legacy := filepath.Join(paths.Instances, inst.ID)
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(versionDir, legacy); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "mods", "kept.jar"), []byte("mod"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrated := filepath.Join(paths.Versions, reopened.Instances()[0].VersionID)
+	if data, err := os.ReadFile(filepath.Join(migrated, "mods", "kept.jar")); err != nil || string(data) != "mod" {
+		t.Fatalf("legacy data was not migrated: %v", err)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatal("legacy instance directory should be moved")
 	}
 }
 

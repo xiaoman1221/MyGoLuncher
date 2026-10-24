@@ -2,6 +2,8 @@ package lansync
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,6 +12,17 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestSkipRollbackMods(t *testing.T) {
+	for _, name := range []string{"sodium.jar.old", "sodium.jar.old.1", "Sodium.JAR.OLD", "mod.jar.old.1699999999", "sodium.jar.dis"} {
+		if !skipSyncName(name) {
+			t.Errorf("rollback file %q should not be synced", name)
+		}
+	}
+	if skipSyncName("sodium.jar") {
+		t.Fatal("normal jar should still be synced")
+	}
+}
 
 func TestShareAndSync(t *testing.T) {
 	source := t.TempDir()
@@ -76,6 +89,42 @@ func TestShareAndSync(t *testing.T) {
 	if again.Downloaded != 0 || again.Skipped != 4 {
 		t.Fatalf("second sync = %#v", again)
 	}
+}
+
+func TestBuildPlanReportsVersionDifferences(t *testing.T) {
+	local := t.TempDir()
+	writeTestFile(t, filepath.Join(local, "mods", "same.jar"), "same")
+	writeTestFile(t, filepath.Join(local, "mods", "old.jar"), "old")
+	writeTestFile(t, filepath.Join(local, "mods", "local-only.jar"), "extra")
+	manifest := Manifest{
+		Dirs: []string{"mods"},
+		Files: []FileEntry{
+			{Path: "mods/same.jar", Size: 4, SHA256: sha("same")},
+			{Path: "mods/new.jar", Size: 3, SHA256: sha("new")},
+			{Path: "mods/old.jar", Size: 4, SHA256: sha("new-old")},
+		},
+	}
+	plan, err := BuildPlan(local, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.NewFiles != 1 || plan.ChangedFiles != 1 || plan.SameFiles != 1 || plan.ExtraFiles != 1 {
+		t.Fatalf("plan = %#v", plan)
+	}
+	if plan.Digest == "" || len(plan.Changes) != 2 {
+		t.Fatalf("plan changes = %#v", plan)
+	}
+	if plan.Changes[0].Path != "mods/new.jar" || plan.Changes[0].State != "new" {
+		t.Fatalf("first change = %#v", plan.Changes[0])
+	}
+	if plan.Extras[0] != "mods/local-only.jar" {
+		t.Fatalf("extras = %#v", plan.Extras)
+	}
+}
+
+func sha(value string) string {
+	sum := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(sum[:])
 }
 
 func TestShareServerRejectsTraversalAndMissingToken(t *testing.T) {

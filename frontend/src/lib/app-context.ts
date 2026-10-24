@@ -7,7 +7,6 @@ import type {
   InstanceView,
   PageKey,
   Settings,
-  TaskProgress,
   Theme,
 } from './types';
 
@@ -52,7 +51,6 @@ export interface AppContextValue {
   stop: (id: string) => Promise<void>;
   openConsole: (id: string) => void;
   pushToast: (kind: ToastKind, title: string, message?: string) => void;
-  tasks: TaskProgress[];
   lanPeerCount: number;
   isDemo: boolean;
 }

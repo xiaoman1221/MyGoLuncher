@@ -1,10 +1,13 @@
 package modrinth
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -173,6 +176,55 @@ func ListVersions(ctx context.Context, projectID, gameVersion, loader string) ([
 	return versions, nil
 }
 
+// VersionsByHashes resolves installed file hashes to Modrinth versions using
+// the batch endpoint. Algorithm is normally "sha1" or "sha512".
+func VersionsByHashes(ctx context.Context, hashes []string, algorithm string) (map[string]Version, error) {
+	return versionsByHashesAt(ctx, API, hashes, algorithm)
+}
+
+func versionsByHashesAt(ctx context.Context, base string, hashes []string, algorithm string) (map[string]Version, error) {
+	if len(hashes) == 0 {
+		return map[string]Version{}, nil
+	}
+	if algorithm == "" {
+		algorithm = "sha1"
+	}
+	body, err := json.Marshal(map[string]any{"hashes": hashes, "algorithm": algorithm})
+	if err != nil {
+		return nil, err
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodPost, base+"/version_files", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", httpx.UserAgent)
+	resp, err := httpx.Client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求 Modrinth 失败: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		message := strings.TrimSpace(string(raw))
+		if len(message) > 300 {
+			message = message[:300]
+		}
+		return nil, fmt.Errorf("Modrinth HTTP %d: %s", resp.StatusCode, message)
+	}
+	var out map[string]Version
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("解析 Modrinth 版本响应失败: %w", err)
+	}
+	if out == nil {
+		out = map[string]Version{}
+	}
+	return out, nil
+}
+
 // VersionByID fetches one published version.
 func VersionByID(ctx context.Context, id string) (Version, error) {
 	var v Version
@@ -264,6 +316,12 @@ func BestVersion(ctx context.Context, projectID, gameVersion, loader string) (Ve
 
 // DownloadFile downloads a version's primary file into dir and returns its path.
 func DownloadFile(ctx context.Context, v Version, dir string) (string, error) {
+	return DownloadFileAny(ctx, v, dir, nil)
+}
+
+// DownloadFileAny downloads a version's primary file through optional mirror
+// candidates. The original URL is always the final fallback.
+func DownloadFileAny(ctx context.Context, v Version, dir string, rewriter func(string) []string) (string, error) {
 	f, err := v.Primary()
 	if err != nil {
 		return "", err
@@ -276,8 +334,13 @@ func DownloadFile(ctx context.Context, v Version, dir string) (string, error) {
 		return "", err
 	}
 	dest := filepath.Join(dir, name)
-	err = httpx.Download(ctx, httpx.File{
-		URL:    f.URL,
+	urls := []string{f.URL}
+	if rewriter != nil {
+		if candidates := rewriter(f.URL); len(candidates) > 0 {
+			urls = candidates
+		}
+	}
+	err = httpx.DownloadAny(ctx, urls, httpx.File{
 		Dest:   dest,
 		SHA512: f.Hashes["sha512"],
 		SHA1:   f.Hashes["sha1"],

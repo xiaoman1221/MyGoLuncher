@@ -1,5 +1,6 @@
 import type { InstanceView } from '../lib/types';
 import { useApp } from '../lib/app-context';
+import { useFunLine } from '../lib/fun';
 import { loaderLabel } from '../lib/format';
 
 interface LaunchOverlayProps {
@@ -11,7 +12,8 @@ interface LaunchOverlayProps {
 const faces = ['front', 'back', 'right', 'left', 'top', 'bottom'];
 
 export function LaunchOverlay({ instance, phase, onDismiss }: LaunchOverlayProps) {
-  const { t } = useApp();
+  const { t, language } = useApp();
+  const funLine = useFunLine(language);
   return (
     <div className="launch-overlay" role="status" aria-live="polite">
       <div className="launch-glow" aria-hidden="true" />
@@ -37,6 +39,7 @@ export function LaunchOverlay({ instance, phase, onDismiss }: LaunchOverlayProps
         <p className="launch-status">
           {phase === 'preparing' ? t('launch.preparing') : t('launch.waitingWindow')}
         </p>
+        <p className="launch-fun">{funLine}</p>
         <p className="launch-hint">{t('launch.hint')}</p>
         <button type="button" className="btn btn-ghost btn-sm" onClick={onDismiss}>
           {t('launch.dismiss')}

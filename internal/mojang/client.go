@@ -414,6 +414,12 @@ func pickProbeAsset(catalog AssetCatalog) string {
 // InstallProfile downloads a client loader profile (Fabric/Quilt) and its
 // libraries. The inherited vanilla version must be installed separately.
 func (c *Client) InstallProfile(ctx context.Context, profile Version, workers int, progress ProgressFunc) error {
+	return c.InstallProfileWithSources(ctx, profile, workers, progress, c.sourceList())
+}
+
+// InstallProfileWithSources is InstallProfile with an explicit ranked mirror
+// list, so loader libraries follow the same network selection as metadata.
+func (c *Client) InstallProfileWithSources(ctx context.Context, profile Version, workers int, progress ProgressFunc, sources []mirror.Source) error {
 	if profile.ID == "" {
 		return errors.New("加载器档案缺少 ID")
 	}
@@ -438,7 +444,7 @@ func (c *Client) InstallProfile(ctx context.Context, profile Version, workers in
 		return err
 	}
 	report(progress, "loader", "正在解析加载器运行库…", 0, 1)
-	files, natives, err := c.libraryDownloads(profile, c.sourceList())
+	files, natives, err := c.libraryDownloads(profile, sources)
 	if err != nil {
 		return err
 	}

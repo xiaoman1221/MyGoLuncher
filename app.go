@@ -22,6 +22,7 @@ import (
 	"MyMinecraftGoLuncher/internal/java"
 	"MyMinecraftGoLuncher/internal/lan"
 	"MyMinecraftGoLuncher/internal/launcher"
+	"MyMinecraftGoLuncher/internal/launcherprofiles"
 	"MyMinecraftGoLuncher/internal/loader"
 	"MyMinecraftGoLuncher/internal/mcsm"
 	"MyMinecraftGoLuncher/internal/mirror"
@@ -137,18 +138,42 @@ func NewApp() *App {
 	}
 	a.lanSvc = lan.New()
 	a.mojang = mojang.New(paths)
-	a.applyMirrorSources()
 	a.javaMgr = java.NewManager(paths)
 	a.loaders = loader.New(a.mojang, paths)
 	a.launcher = launcher.New(a.mojang, paths)
+	a.applyMirrorSources()
 	return a
 }
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.syncLauncherProfiles()
 	// Peer/world discovery runs for the lifetime of the app so other launcher
 	// clients on the LAN are discovered even when the LAN page is closed.
 	a.startLanBackground()
+}
+
+// syncLauncherProfiles keeps .minecraft/launcher_profiles.json in sync with
+// the instance list. The file makes the portable .minecraft folder directly
+// usable by the official launcher and launchers that understand its profile
+// format, without requiring MyGoLuncher to be running.
+func (a *App) syncLauncherProfiles() {
+	if a.store == nil {
+		return
+	}
+	a.ensurePortableVersions()
+	settings := a.store.Settings()
+	_ = launcherprofiles.Sync(a.paths.Data, a.store.Instances(), settings.VersionIsolation)
+}
+
+// SyncLauncherProfiles regenerates the portable launcher profile file.
+func (a *App) SyncLauncherProfiles() error {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	a.ensurePortableVersions()
+	settings := a.store.Settings()
+	return launcherprofiles.Sync(a.paths.Data, a.store.Instances(), settings.VersionIsolation)
 }
 
 func (a *App) shutdown(ctx context.Context) {
@@ -208,6 +233,7 @@ func (a *App) ready() error {
 }
 
 func (a *App) emitInstancesChanged() {
+	a.syncLauncherProfiles()
 	if a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "instances:changed", nil)
 	}
@@ -420,12 +446,25 @@ func (a *App) GetInstances() ([]InstanceView, error) {
 	return out, nil
 }
 
-func (a *App) applyMirrorSources() {
-	customs := make([]mirror.CustomConfig, 0, len(a.store.Settings().CustomMirrors))
-	for _, item := range a.store.Settings().CustomMirrors {
-		customs = append(customs, mirror.CustomConfig{ID: item.ID, Name: item.Name, URL: item.URL, Kind: item.Kind})
+func customsForMirrors(items []store.MirrorConfig) []mirror.CustomConfig {
+	out := make([]mirror.CustomConfig, 0, len(items))
+	for _, item := range items {
+		out = append(out, mirror.CustomConfig{ID: item.ID, Name: item.Name, URL: item.URL, Kind: item.Kind})
 	}
-	a.mojang.SetSources(mirror.Build(customs))
+	return out
+}
+
+func (a *App) applyMirrorSources() {
+	settings := a.store.Settings()
+	customs := customsForMirrors(settings.CustomMirrors)
+	sources := mirror.Build(customs)
+	a.mojang.SetSources(sources)
+	if a.loaders != nil {
+		a.loaders.SetSources(sources)
+	}
+	if a.javaMgr != nil {
+		a.javaMgr.SetSources(mirror.JavaSources(customs))
+	}
 }
 
 func normalizeCustomMirrors(items []store.MirrorConfig) ([]store.MirrorConfig, error) {
@@ -450,6 +489,49 @@ func normalizeCustomMirrors(items []store.MirrorConfig) ([]store.MirrorConfig, e
 		out = append(out, store.MirrorConfig{ID: source.ID, Name: source.Name, URL: source.BaseURL, Kind: kind})
 	}
 	return out, nil
+}
+
+func normalizeResourceMirrors(items []store.MirrorConfig) ([]store.MirrorConfig, error) {
+	out := make([]store.MirrorConfig, 0, len(items))
+	seen := map[string]bool{}
+	for _, item := range items {
+		if strings.TrimSpace(item.URL) == "" && strings.TrimSpace(item.Name) == "" {
+			continue
+		}
+		source, err := mirror.NormalizeResourceCustom(mirror.CustomConfig{
+			ID: item.ID, Name: item.Name, URL: item.URL, Kind: item.Kind,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("资源镜像「%s」无效: %w", firstNonEmpty(item.Name, item.URL), err)
+		}
+		if seen[source.BaseURL] {
+			continue
+		}
+		seen[source.BaseURL] = true
+		out = append(out, store.MirrorConfig{ID: source.ID, Name: source.Name, URL: source.BaseURL, Kind: source.Kind})
+	}
+	return out, nil
+}
+
+func (a *App) resourceSource(id string) mirror.ResourceSource {
+	if a.store == nil {
+		return mirror.FindResourceSource("official", nil)
+	}
+	settings := a.store.Settings()
+	customs := customsForMirrors(settings.CustomResourceMirrors)
+	if strings.TrimSpace(id) == "" {
+		id = settings.ResourceMirror
+	}
+	return mirror.FindResourceSource(id, customs)
+}
+
+// ListResourceMirrors returns the built-in and configured Modrinth/CurseForge
+// download mirrors. It contains no secrets.
+func (a *App) ListResourceMirrors() []mirror.ResourceSource {
+	if a.store == nil {
+		return mirror.ResourceSources(nil)
+	}
+	return mirror.ResourceSources(customsForMirrors(a.store.Settings().CustomResourceMirrors))
 }
 
 // TestDownloadMirrors measures configured sources using their version manifest.
@@ -482,11 +564,31 @@ func (a *App) SaveSettings(next store.Settings) (store.Settings, error) {
 		return store.Settings{}, err
 	}
 	next.CustomMirrors = normalizedMirrors
+	normalizedResourceMirrors, err := normalizeResourceMirrors(next.CustomResourceMirrors)
+	if err != nil {
+		return store.Settings{}, err
+	}
+	next.CustomResourceMirrors = normalizedResourceMirrors
+	next.ResourceMirror = strings.TrimSpace(next.ResourceMirror)
+	if next.ResourceMirror == "" {
+		next.ResourceMirror = "official"
+	}
+	validResourceMirror := false
+	for _, source := range mirror.ResourceSources(customsForMirrors(next.CustomResourceMirrors)) {
+		if source.ID == next.ResourceMirror {
+			validResourceMirror = true
+			break
+		}
+	}
+	if !validResourceMirror {
+		next.ResourceMirror = "official"
+	}
 	saved, err := a.store.SaveSettings(next)
 	if err != nil {
 		return store.Settings{}, err
 	}
 	a.applyMirrorSources()
+	a.syncLauncherProfiles()
 	return saved, nil
 }
 
@@ -1018,7 +1120,7 @@ func (a *App) CreateInstance(req CreateInstanceRequest) (view InstanceView, err 
 
 	if loaderType != "vanilla" && loaderVersion == "" {
 		t.update("metadata", "正在选择 "+loaderType+" 版本…", 0, 0)
-		loaderVersion, err = loader.LatestVersion(a.context(), loaderType, req.MCVersion)
+		loaderVersion, err = a.loaders.LatestVersion(a.context(), loaderType, req.MCVersion)
 		if err != nil {
 			return InstanceView{}, err
 		}
@@ -1074,7 +1176,7 @@ func (a *App) installInstanceRuntime(ctx context.Context, inst *store.Instance, 
 	if loaderVersion == "" {
 		t.update("metadata", "正在选择加载器版本…", 0, 0)
 		var err error
-		loaderVersion, err = loader.LatestVersion(ctx, loaderType, inst.MCVersion)
+		loaderVersion, err = a.loaders.LatestVersion(ctx, loaderType, inst.MCVersion)
 		if err != nil {
 			return err
 		}
@@ -1495,10 +1597,21 @@ type InstallProjectResult struct {
 	GameVersion  string   `json:"gameVersion"`
 	Loader       string   `json:"loader"`
 	Dependencies []string `json:"dependencies"`
+	RollbackPath string   `json:"rollbackPath,omitempty"`
+}
+
+func resourceRewriter(source mirror.ResourceSource) func(string) []string {
+	return func(original string) []string {
+		return mirror.ResourceURLs(source, original)
+	}
 }
 
 // InstallProject installs a mod, shader or resource pack into an instance.
 func (a *App) InstallProject(instanceID, projectID, versionID string) (result InstallProjectResult, err error) {
+	return a.installProject(instanceID, projectID, versionID, "", false)
+}
+
+func (a *App) installProject(instanceID, projectID, versionID, mirrorID string, force bool) (result InstallProjectResult, err error) {
 	if err := a.ready(); err != nil {
 		return InstallProjectResult{}, err
 	}
@@ -1540,13 +1653,31 @@ func (a *App) InstallProject(instanceID, projectID, versionID string) (result In
 	defer func() { t.finish(err) }()
 	t.update("download", "正在下载 "+project.Title+"…", 0, 0)
 	dir := filepath.Join(a.instanceDir(inst), subdir)
-	path, err := modrinth.DownloadFile(a.context(), version, dir)
+	rewriter := resourceRewriter(a.resourceSource(mirrorID))
+	var path string
+	if project.ProjectType == modrinth.TypeMod {
+		cacheDir := filepath.Join(a.paths.Cache, "resources")
+		tempPath, downloadErr := modrinth.DownloadFileAny(a.context(), version, cacheDir, rewriter)
+		if downloadErr != nil {
+			return InstallProjectResult{}, downloadErr
+		}
+		incompatibleFiles, incompatibleIDs := modrinthIncompatibilities(version)
+		conflicts := detectModConflicts(a.instanceDir(inst), tempPath, incompatibleFiles, incompatibleIDs)
+		if len(conflicts) > 0 && !force {
+			_ = os.Remove(tempPath)
+			return InstallProjectResult{}, &ResourceConflictError{Conflicts: conflicts}
+		}
+		path, err = installDownloadedFile(tempPath, dir)
+	} else {
+		path, err = modrinth.DownloadFileAny(a.context(), version, dir, rewriter)
+	}
 	if err != nil {
 		return InstallProjectResult{}, err
 	}
 	result = InstallProjectResult{
 		FileName: filepath.Base(path), Path: path, VersionID: version.ID,
 		VersionName: version.Name, GameVersion: inst.MCVersion, Loader: loaderName,
+		Dependencies: []string{},
 	}
 	if project.ProjectType == modrinth.TypeMod {
 		t.update("dependencies", "正在检查前置模组…", 0, 0)
@@ -1554,6 +1685,9 @@ func (a *App) InstallProject(instanceID, projectID, versionID string) (result In
 			a.context(), version, inst.MCVersion, loaderName, dir, 6,
 			func(message string) { t.update("dependencies", message, 0, 0) },
 		)
+		if deps == nil {
+			deps = []string{}
+		}
 		result.Dependencies = deps
 		if depErr != nil {
 			return result, depErr
@@ -1573,8 +1707,10 @@ type ModpackImportResponse struct {
 	Warnings     []string     `json:"warnings"`
 }
 
-// ImportModpackDialog lets the user pick and import a modpack.
-func (a *App) ImportModpackDialog() (resp ModpackImportResponse, err error) {
+// ImportModpackDialog lets the user pick and import a modpack. mirrorID
+// selects the Modrinth/CurseForge download mirror; empty uses the configured
+// default.
+func (a *App) ImportModpackDialog(mirrorID string) (resp ModpackImportResponse, err error) {
 	if err := a.ready(); err != nil {
 		return ModpackImportResponse{}, err
 	}
@@ -1592,15 +1728,18 @@ func (a *App) ImportModpackDialog() (resp ModpackImportResponse, err error) {
 	}
 	t := a.newTask("导入整合包")
 	defer func() { t.finish(err) }()
-	return a.importModpack(a.context(), path, t)
+	return a.importModpack(a.context(), path, t, a.resourceSource(mirrorID))
 }
 
-func (a *App) importModpack(ctx context.Context, path string, t *progressTask) (ModpackImportResponse, error) {
+func (a *App) importModpack(ctx context.Context, path string, t *progressTask, source mirror.ResourceSource) (ModpackImportResponse, error) {
 	ins, err := modpack.Inspect(path)
 	if err != nil {
 		return ModpackImportResponse{}, err
 	}
-	opts := modpack.ImportOptions{CurseForgeAPIKey: a.store.Settings().CurseForgeAPIKey}
+	opts := modpack.ImportOptions{
+		CurseForgeAPIKey: a.store.Settings().CurseForgeAPIKey,
+		URLRewriter:      resourceRewriter(source),
+	}
 	if !a.store.Settings().VersionIsolation {
 		opts.GameDir = a.paths.Data
 	}
@@ -1642,10 +1781,11 @@ func (a *App) importModpack(ctx context.Context, path string, t *progressTask) (
 }
 
 // InstallModpackProject downloads and imports a Modrinth modpack version.
-func (a *App) InstallModpackProject(projectID, versionID string) (resp ModpackImportResponse, err error) {
+func (a *App) InstallModpackProject(projectID, versionID, mirrorID string) (resp ModpackImportResponse, err error) {
 	if err := a.ready(); err != nil {
 		return ModpackImportResponse{}, err
 	}
+	source := a.resourceSource(mirrorID)
 	t := a.newTask("安装整合包")
 	defer func() { t.finish(err) }()
 	version, err := modrinth.VersionByID(a.context(), versionID)
@@ -1665,8 +1805,8 @@ func (a *App) InstallModpackProject(projectID, versionID string) (resp ModpackIm
 	}
 	t.update("download", "正在下载整合包…", 0, 0)
 	dest := filepath.Join(dir, filepath.Base(file.Filename))
-	if err := httpx.Download(a.context(), httpx.File{
-		URL: file.URL, Dest: dest, SHA512: file.Hashes["sha512"], SHA1: file.Hashes["sha1"],
+	if err := httpx.DownloadAny(a.context(), mirror.ResourceURLs(source, file.URL), httpx.File{
+		Dest: dest, SHA512: file.Hashes["sha512"], SHA1: file.Hashes["sha1"],
 		Size: file.Size, Verify: true,
 		Progress: func(done, total int64) {
 			t.update("download", "正在下载整合包…", done, total)
@@ -1674,7 +1814,7 @@ func (a *App) InstallModpackProject(projectID, versionID string) (resp ModpackIm
 	}); err != nil {
 		return ModpackImportResponse{}, err
 	}
-	return a.importModpack(a.context(), dest, t)
+	return a.importModpack(a.context(), dest, t, source)
 }
 
 // PickExternalLauncher lets the user select another launcher's data or
@@ -1881,6 +2021,61 @@ type ExternalImportResponse struct {
 	Warnings            []string     `json:"warnings"`
 }
 
+// resolveExternalMCVersion validates the detected game version and, when a
+// launcher used a custom profile name, finds the official version ID inside the
+// candidate name. This keeps imports working even when the version JSON was
+// renamed by another launcher.
+func (a *App) resolveExternalMCVersion(ctx context.Context, candidate external.Candidate) (string, error) {
+	if version := strings.TrimSpace(candidate.MCVersion); version != "" {
+		if _, err := a.mojang.ManifestEntry(ctx, version); err == nil {
+			return version, nil
+		}
+	}
+	manifest, err := a.mojang.Manifest(ctx)
+	if err != nil {
+		return "", fmt.Errorf("无法读取 Minecraft 版本清单: %w", err)
+	}
+	texts := []string{candidate.MCVersion, candidate.Name}
+	for _, entry := range manifest.Versions {
+		for _, text := range texts {
+			if containsVersionToken(text, entry.ID) {
+				return entry.ID, nil
+			}
+		}
+	}
+	if version := strings.TrimSpace(candidate.MCVersion); version != "" {
+		return "", fmt.Errorf("Minecraft %s 不在官方版本清单中，请使用自定义导入选择正确的版本", version)
+	}
+	return "", errors.New("无法识别该版本的 Minecraft 版本，请使用自定义导入填写")
+}
+
+func containsVersionToken(text, version string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	version = strings.ToLower(strings.TrimSpace(version))
+	if text == "" || version == "" {
+		return false
+	}
+	for offset := 0; offset <= len(text)-len(version); {
+		index := strings.Index(text[offset:], version)
+		if index < 0 {
+			return false
+		}
+		index += offset
+		end := index + len(version)
+		beforeOK := index == 0 || !isVersionTokenChar(text[index-1])
+		afterOK := end == len(text) || !isVersionTokenChar(text[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		offset = index + 1
+	}
+	return false
+}
+
+func isVersionTokenChar(char byte) bool {
+	return (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9') || char == '_'
+}
+
 // ImportExternalInstance copies user content and rebuilds the game runtime for
 // a version found in another launcher.
 func (a *App) ImportExternalInstance(root, candidateID, nameOverride string) (response ExternalImportResponse, err error) {
@@ -1891,12 +2086,11 @@ func (a *App) ImportExternalInstance(root, candidateID, nameOverride string) (re
 	if err != nil {
 		return ExternalImportResponse{}, err
 	}
-	if strings.TrimSpace(candidate.MCVersion) == "" {
-		return ExternalImportResponse{}, errors.New("无法识别该版本的 Minecraft 版本")
+	mcVersion, err := a.resolveExternalMCVersion(a.context(), candidate)
+	if err != nil {
+		return ExternalImportResponse{}, err
 	}
-	if _, err := a.mojang.ManifestEntry(a.context(), candidate.MCVersion); err != nil {
-		return ExternalImportResponse{}, fmt.Errorf("Minecraft %s 不在官方版本清单中，无法准备游戏文件: %w", candidate.MCVersion, err)
-	}
+	candidate.MCVersion = mcVersion
 	name := strings.TrimSpace(nameOverride)
 	if name == "" {
 		name = candidate.Name
@@ -1932,6 +2126,12 @@ func (a *App) ImportExternalInstance(root, candidateID, nameOverride string) (re
 	}
 	t.update("copy", "版本内容复制完成", 1, 1)
 	warnings := append([]string{}, candidate.Warnings...)
+	if candidate.Loader != "" && candidate.Loader != "vanilla" && strings.TrimSpace(candidate.LoaderVersion) == "" {
+		warnings = append(warnings, "未识别到加载器版本，已按最新版本准备运行环境；如整合包需要固定加载器版本，请使用自定义导入填写")
+	}
+	if candidate.Loader == "vanilla" && candidate.ModCount > 0 {
+		warnings = append(warnings, "该版本包含模组但未声明模组加载器，导入后可能无法加载这些模组")
+	}
 	if err := a.installInstanceRuntime(a.context(), &inst, t); err != nil {
 		warnings = append(warnings, "版本内容已导入，但游戏/加载器安装失败："+err.Error())
 	}
@@ -2006,6 +2206,7 @@ func (a *App) ExportServerPackDialog(instanceID string) (response ServerPackExpo
 		GameDir:   a.instanceDir(inst),
 		Dest:      dest,
 		JavaMajor: a.requiredJava(inst),
+		Sources:   mirror.Build(customsForMirrors(a.store.Settings().CustomMirrors)),
 		Progress: func(stage, message string, current, total int) {
 			t.update(stage, message, int64(current), int64(total))
 		},

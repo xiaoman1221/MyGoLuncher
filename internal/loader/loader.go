@@ -11,9 +11,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"MyMinecraftGoLuncher/internal/httpx"
+	"MyMinecraftGoLuncher/internal/mirror"
 	"MyMinecraftGoLuncher/internal/mojang"
 	"MyMinecraftGoLuncher/internal/store"
 	"MyMinecraftGoLuncher/internal/sysutil"
@@ -21,19 +23,32 @@ import (
 )
 
 const (
-	FabricMeta = "https://meta.fabricmc.net/v2"
-	QuiltMeta  = "https://meta.quiltmc.org/v3"
+	FabricMeta         = "https://meta.fabricmc.net/v2"
+	QuiltMeta          = "https://meta.quiltmc.org/v3"
+	forgePromotionsURL = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
+	forgeMavenMetadata = "https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml"
+	neoforgeMavenBase  = "https://maven.neoforged.net/releases/net/neoforged/neoforge"
+	neoforgeLegacyBase = "https://maven.neoforged.net/releases/net/neoforged/forge"
 )
 
 // Installer coordinates mod loader profile creation.
 type Installer struct {
 	Mojang *mojang.Client
 	Paths  store.Paths
+
+	sourceMu  sync.Mutex
+	sources   []mirror.Source
+	ranked    []mirror.Source
+	rankedKey string
+	rankedAt  time.Time
 }
 
 // New creates a loader installer.
 func New(client *mojang.Client, paths store.Paths) *Installer {
-	return &Installer{Mojang: client, Paths: paths}
+	return &Installer{
+		Mojang: client, Paths: paths,
+		sources: []mirror.Source{mirror.Official()},
+	}
 }
 
 type fabricLoader struct {
@@ -45,13 +60,31 @@ type fabricLoaderEntry struct {
 	Loader fabricLoader `json:"loader"`
 }
 
-// LatestVersion resolves the newest stable loader for a game version.
+// LatestVersion resolves the newest stable loader for a game version using the
+// official source. Use Installer.LatestVersion to honour configured mirrors.
 func LatestVersion(ctx context.Context, loaderType, mcVersion string) (string, error) {
+	return latestVersionWithSources(ctx, nil, loaderType, mcVersion)
+}
+
+// LatestVersion resolves the newest stable loader through the ranked mirror
+// sources for the current loader.
+func (i *Installer) LatestVersion(ctx context.Context, loaderType, mcVersion string) (string, error) {
+	return latestVersionWithSources(ctx, i.rankedSources(ctx, loaderType, mcVersion), loaderType, mcVersion)
+}
+
+// LatestVersionWithSources resolves a loader version through explicit mirror
+// sources. It is exported for server-pack/runtime exports.
+func LatestVersionWithSources(ctx context.Context, sources []mirror.Source, loaderType, mcVersion string) (string, error) {
+	return latestVersionWithSources(ctx, sources, loaderType, mcVersion)
+}
+
+func latestVersionWithSources(ctx context.Context, sources []mirror.Source, loaderType, mcVersion string) (string, error) {
 	switch Normalize(loaderType) {
 	case "fabric":
 		var entries []fabricLoaderEntry
 		endpoint := fmt.Sprintf("%s/versions/loader/%s", FabricMeta, mcVersion)
-		if err := httpx.GetJSON(ctx, endpoint, &entries); err != nil {
+		urls := loaderCandidates(sources, mirror.ResourceLoaderMeta, endpoint, mcVersion)
+		if err := getJSONCandidates(ctx, urls, &entries); err != nil {
 			return "", err
 		}
 		for _, e := range entries {
@@ -65,7 +98,8 @@ func LatestVersion(ctx context.Context, loaderType, mcVersion string) (string, e
 	case "quilt":
 		var entries []fabricLoaderEntry
 		endpoint := fmt.Sprintf("%s/versions/loader/%s", QuiltMeta, mcVersion)
-		if err := httpx.GetJSON(ctx, endpoint, &entries); err != nil {
+		urls := loaderCandidates(sources, mirror.ResourceLoaderMeta, endpoint, mcVersion)
+		if err := getJSONCandidates(ctx, urls, &entries); err != nil {
 			return "", err
 		}
 		for _, e := range entries {
@@ -78,7 +112,7 @@ func LatestVersion(ctx context.Context, loaderType, mcVersion string) (string, e
 			return entries[0].Loader.Version, nil
 		}
 	case "forge":
-		promotions, err := forgePromotions(ctx)
+		promotions, err := forgePromotions(ctx, sources)
 		if err != nil {
 			return "", err
 		}
@@ -90,7 +124,7 @@ func LatestVersion(ctx context.Context, loaderType, mcVersion string) (string, e
 		}
 		return "", fmt.Errorf("Forge 没有适用于 %s 的版本", mcVersion)
 	case "neoforge":
-		return latestNeoForge(ctx, mcVersion)
+		return latestNeoForge(ctx, sources, mcVersion)
 	default:
 		return "", errors.New("该加载器不支持自动选择版本")
 	}
@@ -103,16 +137,19 @@ type mavenMetadata struct {
 	} `xml:"versioning"`
 }
 
-func latestNeoForge(ctx context.Context, mcVersion string) (string, error) {
-	base := "https://maven.neoforged.net/releases/net/neoforged/neoforge"
+func neoforgeMetadataURL(mcVersion string) string {
+	base := neoforgeMavenBase
+	if mcVersion == "1.20.1" {
+		base = neoforgeLegacyBase
+	}
+	return base + "/maven-metadata.xml"
+}
+
+func latestNeoForge(ctx context.Context, sources []mirror.Source, mcVersion string) (string, error) {
 	prefix := strings.TrimPrefix(mcVersion, "1.") + "."
 	legacy := mcVersion == "1.20.1"
-	if legacy {
-		base = "https://maven.neoforged.net/releases/net/neoforged/forge"
-	}
-	requestCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-	raw, err := httpx.GetRaw(requestCtx, base+"/maven-metadata.xml")
+	endpoint := neoforgeMetadataURL(mcVersion)
+	raw, err := getRawCandidates(ctx, loaderCandidates(sources, mirror.ResourceLoaderMeta, endpoint, mcVersion))
 	if err != nil {
 		return "", fmt.Errorf("无法获取 NeoForge 版本列表: %w", err)
 	}
@@ -174,11 +211,11 @@ func compareVersions(left, right string) int {
 	return strings.Compare(left, right)
 }
 
-func forgePromotions(ctx context.Context) (map[string]string, error) {
+func forgePromotions(ctx context.Context, sources []mirror.Source) (map[string]string, error) {
 	var raw struct {
 		Promos map[string]string `json:"promos"`
 	}
-	if err := httpx.GetJSON(ctx, "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json", &raw); err != nil {
+	if err := getJSONCandidates(ctx, loaderCandidates(sources, mirror.ResourceLoaderMeta, forgePromotionsURL, ""), &raw); err != nil {
 		return nil, err
 	}
 	return raw.Promos, nil
@@ -197,41 +234,42 @@ func (i *Installer) Ensure(ctx context.Context, mcVersion, loaderType, loaderVer
 			return "", fmt.Errorf("安装原版游戏失败: %w", err)
 		}
 	}
+	sources := i.rankedSources(ctx, loaderType, mcVersion)
 	if loaderVersion == "" {
 		var err error
-		loaderVersion, err = LatestVersion(ctx, loaderType, mcVersion)
+		loaderVersion, err = latestVersionWithSources(ctx, sources, loaderType, mcVersion)
 		if err != nil {
 			return "", err
 		}
 	}
 	switch loaderType {
 	case "fabric", "quilt":
-		profile, err := i.fetchProfile(ctx, loaderType, mcVersion, loaderVersion)
+		profile, err := i.fetchProfile(ctx, sources, loaderType, mcVersion, loaderVersion)
 		if err != nil {
 			return "", err
 		}
 		if i.Mojang.IsProfileInstalled(profile.ID) {
 			return profile.ID, nil
 		}
-		if err := i.Mojang.InstallProfile(ctx, profile, workers, progress); err != nil {
+		if err := i.Mojang.InstallProfileWithSources(ctx, profile, workers, progress, sources); err != nil {
 			return "", fmt.Errorf("安装加载器失败: %w", err)
 		}
 		return profile.ID, nil
 	case "forge", "neoforge":
-		return i.installForge(ctx, mcVersion, loaderType, loaderVersion, javaPath, progress)
+		return i.installForge(ctx, sources, mcVersion, loaderType, loaderVersion, javaPath, progress)
 	default:
 		return "", fmt.Errorf("不支持的加载器: %s", loaderType)
 	}
 }
 
-func (i *Installer) fetchProfile(ctx context.Context, loaderType, mcVersion, loaderVersion string) (mojang.Version, error) {
+func (i *Installer) fetchProfile(ctx context.Context, sources []mirror.Source, loaderType, mcVersion, loaderVersion string) (mojang.Version, error) {
 	base := FabricMeta
 	if loaderType == "quilt" {
 		base = QuiltMeta
 	}
 	endpoint := fmt.Sprintf("%s/versions/loader/%s/%s/profile/json", base, mcVersion, loaderVersion)
 	var profile mojang.Version
-	if err := httpx.GetJSON(ctx, endpoint, &profile); err != nil {
+	if err := getJSONCandidates(ctx, loaderCandidates(sources, mirror.ResourceLoaderMeta, endpoint, mcVersion), &profile); err != nil {
 		return mojang.Version{}, fmt.Errorf("获取 %s 安装档案失败: %w", strings.ToUpper(loaderType[:1])+loaderType[1:], err)
 	}
 	if profile.ID == "" {
@@ -243,7 +281,7 @@ func (i *Installer) fetchProfile(ctx context.Context, loaderType, mcVersion, loa
 	return profile, nil
 }
 
-func (i *Installer) installForge(ctx context.Context, mcVersion, loaderType, loaderVersion, javaPath string, progress mojang.ProgressFunc) (string, error) {
+func (i *Installer) installForge(ctx context.Context, sources []mirror.Source, mcVersion, loaderType, loaderVersion, javaPath string, progress mojang.ProgressFunc) (string, error) {
 	if strings.TrimSpace(javaPath) == "" {
 		return "", errors.New("安装 Forge/NeoForge 需要可用的 Java")
 	}
@@ -260,7 +298,9 @@ func (i *Installer) installForge(ctx context.Context, mcVersion, loaderType, loa
 	if progress != nil {
 		progress("loader", "正在下载 "+displayLoader(loaderType)+" 安装器…", 0, 1)
 	}
-	if err := httpx.Download(ctx, httpx.File{URL: installerURL, Dest: installerPath, Size: 0}); err != nil {
+	if err := downloadCandidates(ctx, loaderCandidates(sources, mirror.ResourceLoaderArtifact, installerURL, mcVersion), httpx.File{
+		Dest: installerPath, Size: 0,
+	}); err != nil {
 		return "", fmt.Errorf("下载加载器安装器失败: %w", err)
 	}
 	// Forge's installer is run from the data root so libraries and version

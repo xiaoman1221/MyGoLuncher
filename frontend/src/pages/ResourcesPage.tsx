@@ -5,6 +5,7 @@ import {
   Image,
   LoaderCircle,
   PackageOpen,
+  RefreshCw,
   Search,
   Sparkles,
   TriangleAlert,
@@ -13,7 +14,10 @@ import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
+import { ModUpdatesModal } from '../components/ModUpdatesModal';
 import type {
+  InstanceView,
+  ResourceMirror,
   ResourceProject,
   ResourceSearchResult,
   ResourceType,
@@ -43,6 +47,21 @@ export function ResourcesPage() {
   const [installing, setInstalling] = useState<string | null>(null);
   const aiEnabled = settings?.aiSearchEnabled === true;
   const [useAI, setUseAI] = useState(aiEnabled);
+  const [mirrors, setMirrors] = useState<ResourceMirror[]>([]);
+  const [mirrorId, setMirrorId] = useState(settings?.resourceMirror || 'official');
+  const [updatesTarget, setUpdatesTarget] = useState<InstanceView | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.listResourceMirrors()
+      .then((rows) => { if (alive) setMirrors(rows); })
+      .catch(() => { if (alive) setMirrors([]); });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (settings?.resourceMirror) setMirrorId(settings.resourceMirror);
+  }, [settings?.resourceMirror]);
 
   const needsInstance = type !== 'modpack';
   const hasInstance = instances.some((instance) => instance.id === targetId);
@@ -113,7 +132,7 @@ export function ResourcesPage() {
     setInstalling(key);
     try {
       if (project.type === 'modpack') {
-        const response = await api.installResourceModpack(project.source, project.projectId, '');
+        const response = await api.installResourceModpack(project.source, project.projectId, '', mirrorId);
         await refreshInstances();
         if (response.instance.id) selectInstance(response.instance.id);
         pushToast('success', t('resources.modpackDone'), t('resources.modpackDetail', { name: response.instance.name }));
@@ -122,8 +141,21 @@ export function ResourcesPage() {
           pushToast('error', t('resources.needsInstance'));
           return;
         }
-        const response = await api.installResource(targetId, project.source, project.projectId, '');
-        pushToast('success', t('resources.installDone'), t('resources.installDoneDetail', { name: response.versionName || project.title }));
+        let response;
+        try {
+          response = await api.installResource(targetId, project.source, project.projectId, '', mirrorId, false);
+        } catch (reason) {
+          const message = (reason as Error).message;
+          if (!message.includes('检测到模组冲突')) throw reason;
+          if (!window.confirm(message)) return;
+          response = await api.installResource(targetId, project.source, project.projectId, '', mirrorId, true);
+        }
+        const detail = t('resources.installDoneDetail', { name: response.versionName || project.title });
+        const dependencyCount = response.dependencies?.length ?? 0;
+        const dependencyNote = dependencyCount > 0
+          ? ' · ' + t('resources.depsInstalled', { count: dependencyCount })
+          : '';
+        pushToast('success', t('resources.installDone'), detail + dependencyNote);
       }
     } catch (reason) {
       pushToast('error', t('resources.installFailed'), (reason as Error).message);
@@ -159,43 +191,65 @@ export function ResourcesPage() {
         </div>
 
         <div className="toolbar resource-toolbar">
-          {needsInstance && (
-            <label className="resource-target">
-              <span>{t('resources.target')}</span>
-              <select
-                className="text-input"
-                value={targetId}
-                onChange={(event) => setTargetId(event.target.value)}
-              >
-                {instances.map((instance) => (
-                  <option key={instance.id} value={instance.id}>
-                    {instance.name} · {instance.mcVersion}
-                  </option>
+          <div className="resource-toolbar-main">
+            {needsInstance && (
+              <label className="resource-target">
+                <span>{t('resources.target')}</span>
+                <select
+                  className="text-input"
+                  value={targetId}
+                  onChange={(event) => setTargetId(event.target.value)}
+                >
+                  {instances.map((instance) => (
+                    <option key={instance.id} value={instance.id}>
+                      {instance.name} · {instance.mcVersion}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label className="resource-mirror">
+              <span>{t('resources.mirrorLabel')}</span>
+              <select className="text-input" value={mirrorId} onChange={(event) => setMirrorId(event.target.value)}>
+                {(mirrors.length > 0 ? mirrors : [{ id: 'official', name: t('settings.mirrorOfficial') } as ResourceMirror]).map((source) => (
+                  <option key={source.id} value={source.id}>{source.name}</option>
                 ))}
               </select>
             </label>
-          )}
-          <div className="search-field">
-            <Search size={15} />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t('resources.searchPlaceholder')}
-              aria-label={t('resources.searchPlaceholder')}
-            />
+            <div className="search-field">
+              <Search size={15} />
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t('resources.searchPlaceholder')}
+                aria-label={t('resources.searchPlaceholder')}
+              />
+            </div>
           </div>
-          {aiEnabled ? (
-            <label className="ai-search-toggle">
-              <input type="checkbox" checked={useAI} onChange={(event) => setUseAI(event.target.checked)} />
-              <Sparkles size={13} />
-              <span>{t('resources.aiSearch')}</span>
-            </label>
-          ) : (
-            <button type="button" className="text-button ai-enable" onClick={() => navigate('settings')}>
-              <Sparkles size={13} /> {t('resources.aiEnable')}
-            </button>
-          )}
-          <span className="toolbar-count">{result ? `${result.total}` : ''}</span>
+          <div className="resource-toolbar-actions">
+            {aiEnabled ? (
+              <label className="ai-search-toggle">
+                <input type="checkbox" checked={useAI} onChange={(event) => setUseAI(event.target.checked)} />
+                <Sparkles size={13} />
+                <span>{t('resources.aiSearch')}</span>
+              </label>
+            ) : (
+              <button type="button" className="text-button ai-enable" onClick={() => navigate('settings')}>
+                <Sparkles size={13} /> {t('resources.aiEnable')}
+              </button>
+            )}
+            {needsInstance && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={!targetId}
+                onClick={() => setUpdatesTarget(instances.find((instance) => instance.id === targetId) ?? null)}
+              >
+                <RefreshCw size={14} /> {t('modUpdates.check')}
+              </button>
+            )}
+            <span className="toolbar-count">{result ? `${result.total}` : ''}</span>
+          </div>
         </div>
 
         {needsInstance && !targetId ? (
@@ -212,6 +266,14 @@ export function ResourcesPage() {
               <div className="ai-search-note">
                 <Sparkles size={13} />
                 <span>{t('resources.aiUsed', { query: result.queryUsed })}</span>
+              </div>
+            )}
+            {result && !result.aiUsed && (result.queryAlternatives?.length ?? 0) > 1 && (
+              <div className="ai-search-note">
+                <Search size={13} />
+                <span>{t('resources.queryExpanded', {
+                  query: (result.queryAlternatives ?? []).slice(0, 2).join(' / '),
+                })}</span>
               </div>
             )}
             {result?.aiError && (
@@ -319,6 +381,14 @@ export function ResourcesPage() {
           </>
         )}
       </section>
+
+      {updatesTarget && (
+        <ModUpdatesModal
+          instance={updatesTarget}
+          onClose={() => setUpdatesTarget(null)}
+          onUpdated={refreshInstances}
+        />
+      )}
     </div>
   );
 }

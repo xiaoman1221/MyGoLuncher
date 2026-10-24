@@ -101,6 +101,27 @@ func TestTranslateQueryDeepSeek(t *testing.T) {
 	}
 }
 
+func TestQueryCandidatesChineseAliases(t *testing.T) {
+	cases := map[string][]string{
+		"钠 优化":        {"sodium optimization", "钠 优化"},
+		"机械动力 模组":     {"create mod", "机械动力 模组"},
+		"物品管理器":       {"jei just enough items", "物品管理器"},
+		"未知中文模组":      {"未知中文mod", "未知中文模组"},
+		"Create 机械动力": {"Create create", "Create 机械动力"},
+	}
+	for query, want := range cases {
+		got := QueryCandidates(query)
+		if len(got) != len(want) {
+			t.Fatalf("QueryCandidates(%q) = %#v, want %#v", query, got, want)
+		}
+		for index := range want {
+			if got[index] != want[index] {
+				t.Fatalf("QueryCandidates(%q) = %#v, want %#v", query, got, want)
+			}
+		}
+	}
+}
+
 func TestProviderDefaults(t *testing.T) {
 	if DefaultModelForProvider(ProviderDeepSeek) != "deepseek-chat" {
 		t.Fatal("unexpected DeepSeek default model")

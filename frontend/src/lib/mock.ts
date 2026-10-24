@@ -15,7 +15,9 @@ import type {
   JavaReleaseInfo,
   JavaRuntime,
   LanSnapshot,
+  LanSyncPreview,
   LaunchState,
+  ModUpdateReport,
   ModpackImportResponse,
   Project,
   ProjectVersion,
@@ -82,6 +84,9 @@ const initialSettings: Settings = {
   schemaVersion: 3,
   microsoftClientID: '',
   customMirrors: [],
+  resourceMirror: 'official',
+  customResourceMirrors: [],
+  serverBackupDisabled: false,
 };
 
 const instanceSeed: Array<Partial<InstanceView> & { id: string; name: string; mcVersion: string; loader: string }> = [
@@ -928,7 +933,7 @@ function mockCreateModpackInstance(title: string, mcVersion: string, loader: str
     launchVersionId: `${loader}-${mcVersion}-mock`,
     memoryMB: 6144, javaPath: '', createdAt: new Date().toISOString(), lastPlayed: '',
     playTimeMinutes: 0, source: 'modpack', notes: '从资源中心安装',
-    gameDir: `${paths.instances}/${id}`, requiredJava: javaMajorFor(mcVersion), versionInstalled: true,
+    gameDir: `${paths.versions}/${id}`, requiredJava: javaMajorFor(mcVersion), versionInstalled: true,
     running: false, modCount: 87, shaderCount: 1, resourcePackCount: 2, hasJavaOverride: false,
     autoMemory: false, effectiveMemoryMB: 6144,
   };
@@ -1107,7 +1112,7 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
         launchVersionId: req.mcVersion, memoryMB: req.memoryMB || settings.defaultMemoryMB,
         javaPath: '', createdAt: new Date().toISOString(), lastPlayed: '',
         playTimeMinutes: 0, source: 'manual', notes: '',
-        gameDir: `${paths.instances}/${id}`, requiredJava: javaMajorFor(req.mcVersion),
+        gameDir: `${paths.versions}/${id}`, requiredJava: javaMajorFor(req.mcVersion),
         versionInstalled: true, running: false, modCount: 0, shaderCount: 0,
         resourcePackCount: 0, hasJavaOverride: false,
         autoMemory: !req.memoryMB, effectiveMemoryMB: req.memoryMB || 8192,
@@ -1245,7 +1250,8 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       return {
         items: clone(merged), total: modrinth.length + curseforge.length,
         offset: req.offset, limit: req.limit, warnings: [], curseForgeReady: true,
-        queryUsed, aiUsed, aiError: '', cjkQuery,
+        queryUsed, queryAlternatives: queryUsed !== rawQuery ? [queryUsed, rawQuery] : [queryUsed],
+        aiUsed, aiError: '', cjkQuery,
       } satisfies ResourceSearchResult as T;
     }
     case 'ListResourceVersions': {
@@ -1264,6 +1270,47 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
         path: '/mock/download.jar', versionId: 'auto', versionName: `${item?.title ?? '资源'} 最新兼容版`,
         gameVersion: instances.find((entry) => entry.id === String(args[0]))?.mcVersion ?? '1.21.1',
         loader: item?.type === 'mod' ? 'fabric' : '', dependencies: item?.slug === 'iris' ? ['Sodium'] : [],
+      } satisfies InstallProjectResult as T;
+    }
+    case 'CheckModUpdates': {
+      const instance = instances.find((entry) => entry.id === String(args[0])) ?? instances[0];
+      await sleep(900);
+      return {
+        instanceId: instance?.id ?? '', identified: 3, updates: 2, unidentified: 1,
+        warnings: ['未配置 CurseForge API Key，仅使用 Modrinth 哈希识别。'],
+        files: [
+          {
+            fileName: 'sodium-0.5.8.jar', relativePath: 'mods/sodium-0.5.8.jar', name: 'Sodium',
+            currentVersion: '0.5.8', source: 'modrinth', projectId: 'AANobbMI',
+            versionId: 'old-version', latestVersion: '0.6.0', latestName: 'Sodium 0.6.0',
+            fileSize: 1_200_000, updateAvailable: true, identified: true,
+          },
+          {
+            fileName: 'iris-1.7.0.jar', relativePath: 'mods/iris-1.7.0.jar', name: 'Iris Shaders',
+            currentVersion: '1.7.0', source: 'modrinth', projectId: 'YL57xq9U',
+            versionId: 'old-iris', latestVersion: '1.8.0', latestName: 'Iris 1.8.0',
+            fileSize: 2_300_000, updateAvailable: true, identified: true,
+          },
+          {
+            fileName: 'lithium-0.12.jar', relativePath: 'mods/lithium-0.12.jar', name: 'Lithium',
+            currentVersion: '0.12', source: 'modrinth', projectId: 'gvQqBUqZ',
+            versionId: 'latest-lithium', latestVersion: '0.12', latestName: 'Lithium 0.12',
+            fileSize: 900_000, updateAvailable: false, identified: true,
+          },
+          {
+            fileName: 'unknown-mod.jar', relativePath: 'mods/unknown-mod.jar', name: 'unknown-mod',
+            currentVersion: '1.0', fileSize: 100_000, updateAvailable: false, identified: false,
+            error: '未通过 Modrinth SHA-1 或 CurseForge 指纹识别',
+          },
+        ],
+      } satisfies ModUpdateReport as T;
+    }
+    case 'ApplyModUpdate': {
+      await progressTask('更新模组', ['正在下载更新…', '正在校验文件…', '正在替换旧模组…', '更新完成'], 1600);
+      return {
+        fileName: 'updated.jar', path: '/mock/mods/updated.jar', versionId: 'new',
+        versionName: 'Updated Mod', gameVersion: '1.21.1', loader: 'fabric', dependencies: [],
+        rollbackPath: '/mock/mods/updated.jar.old',
       } satisfies InstallProjectResult as T;
     }
     case 'InstallResourceModpack': {
@@ -1316,7 +1363,7 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
         loaderVersion: '0.16.10', launchVersionId: 'fabric-loader-0.16.10-1.20.1',
         memoryMB: 6144, javaPath: '', createdAt: new Date().toISOString(), lastPlayed: '',
         playTimeMinutes: 0, source: 'mrpack', notes: '从整合包导入',
-        gameDir: `${paths.instances}/${id}`, requiredJava: 17, versionInstalled: true,
+        gameDir: `${paths.versions}/${id}`, requiredJava: 17, versionInstalled: true,
         running: false, modCount: 147, shaderCount: 2, resourcePackCount: 6, hasJavaOverride: false,
         autoMemory: false, effectiveMemoryMB: 6144,
       };
@@ -1392,7 +1439,7 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
         launchVersionId: forge ? `forge-${mcVersion}` : `fabric-loader-0.16.10-${mcVersion}`,
         memoryMB: 6144, javaPath: '', createdAt: new Date().toISOString(), lastPlayed: '',
         playTimeMinutes: 0, source: 'external:HMCL', notes: `从 HMCL 版本 ${importedName} 导入`,
-        gameDir: `${paths.instances}/${id}`, requiredJava: mcVersion === '1.20.1' ? 17 : 21,
+        gameDir: `${paths.versions}/${id}`, requiredJava: mcVersion === '1.20.1' ? 17 : 21,
         versionInstalled: true, running: false, modCount: 37, shaderCount: 2,
         resourcePackCount: 3, hasJavaOverride: false, autoMemory: false, effectiveMemoryMB: 6144,
       };
@@ -1417,7 +1464,7 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
         launchVersionId: request.mcVersion || '1.21.1',
         memoryMB: 4096, javaPath: '', createdAt: new Date().toISOString(), lastPlayed: '',
         playTimeMinutes: 0, source: 'custom', notes: '自定义版本导入',
-        gameDir: `${paths.instances}/${id}`, requiredJava: 21, versionInstalled: true,
+        gameDir: `${paths.versions}/${id}`, requiredJava: 21, versionInstalled: true,
         running: false, modCount: request.sourceDir ? 12 : 0, shaderCount: 0,
         resourcePackCount: 0, hasJavaOverride: false, autoMemory: false, effectiveMemoryMB: 4096,
       };
@@ -1528,8 +1575,63 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
         ? { ...item, lastSync: new Date().toISOString() }
         : item);
       emit('servers:changed', null);
-      return { uploaded: 3, skipped: 12, deleted: 0, bytes: 24_000_000 } satisfies ServerSyncResult as T;
+      return { uploaded: 3, skipped: 12, deleted: 0, filtered: 2, bytes: 24_000_000 } satisfies ServerSyncResult as T;
     }
+    case 'PreviewServerSync': {
+      const id = String(args[0]);
+      const profile = serverProfiles.find((item) => item.id === id);
+      const rows = (profile?.syncDirs ?? ['mods']).flatMap((dir) => [
+        { path: `${dir}/example-a.jar`, dir, size: 1_240_000, clientOnly: false },
+        { path: `${dir}/example-b.toml`, dir, size: 4_096, clientOnly: false },
+        ...(dir === 'mods'
+          ? [{ path: 'mods/sodium-client.jar', dir, size: 890_000, clientOnly: true, reason: 'fabric.mod.json environment=client' }]
+          : []),
+      ]);
+      return rows as T;
+    }
+    case 'SyncServerProfileSelected': {
+      const id = String(args[0]);
+      const profile = serverProfiles.find((item) => item.id === id);
+      await progressTask(`同步到服务器 · ${profile?.name ?? 'MCSM'}`, [
+        '正在创建回滚快照…', '正在扫描本地文件…', '正在对比远端文件…', '正在上传变化文件…', '同步完成',
+      ], 2100);
+      const files = Array.isArray(args[1]) ? (args[1] as string[]) : [];
+      serverProfiles = serverProfiles.map((item) => item.id === id
+        ? { ...item, lastSync: new Date().toISOString() }
+        : item);
+      emit('servers:changed', null);
+      return { uploaded: files.length, skipped: 0, deleted: 0, filtered: 0, bytes: files.length * 512_000 } satisfies ServerSyncResult as T;
+    }
+    case 'GetServerBackups': {
+      const id = String(args[0]);
+      const profile = serverProfiles.find((item) => item.id === id);
+      if (profile?.backups?.length) return clone(profile.backups) as T;
+      return [{
+        id: 'snapshot-demo', createdAt: nowMinus(35), reason: 'sync',
+        dirs: profile?.syncDirs ?? ['mods', 'config'],
+        missingDirs: [], emptyDirs: [],
+      }] as T;
+    }
+    case 'RollbackServer': {
+      const id = String(args[0]);
+      await progressTask('回滚服务器', ['正在检查服务器状态…', '正在恢复快照…', '回滚完成'], 1600);
+      serverProfiles = serverProfiles.map((item) => item.id === id
+        ? { ...item, lastRollback: new Date().toISOString() }
+        : item);
+      emit('servers:changed', null);
+      return undefined as T;
+    }
+    case 'SyncLauncherProfiles':
+      return undefined as T;
+    case 'ListResourceMirrors':
+      return [
+        { id: 'official', name: '官方源', baseUrl: '', kind: 'official', official: true, custom: false },
+        { id: 'mcim', name: 'MCIM 镜像', baseUrl: 'https://mod.mcimirror.top', kind: 'mcim', official: false, custom: false },
+        ...settings.customResourceMirrors.map((item) => ({
+          id: item.id, name: item.name || item.url, baseUrl: item.url,
+          kind: item.kind, official: false, custom: true,
+        })),
+      ] as T;
     case 'StartLanDiscovery':
       lanSnapshot = { ...lanSnapshot, running: true, broadcast: Boolean(args[1]) };
       emit('lan:changed', clone(lanSnapshot));
@@ -1552,7 +1654,37 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       lanSnapshot = { ...lanSnapshot, sharing: false, sharedInstanceId: '', shareDirs: [] };
       emit('lan:changed', clone(lanSnapshot));
       return clone(lanSnapshot) as T;
+    case 'PreviewLanSync': {
+      const peer = lanSnapshot.peers.find((item) => item.id === String(args[0]));
+      const target = instances.find((item) => item.id === String(args[1]));
+      if (!target) throw new Error('目标本地版本不存在');
+      const digest = 'mock-lan-digest';
+      return {
+        peer: {
+          id: peer?.instanceId ?? 'remote', name: peer?.instance ?? 'Remote Pack',
+          mcVersion: peer?.mcVersion ?? '1.21.1', loader: peer?.loader ?? 'fabric',
+          loaderVersion: peer?.loaderVersion ?? '0.16.10', launchVersionId: '',
+        },
+        target: {
+          id: target.id, name: target.name, mcVersion: target.mcVersion,
+          loader: target.loader, loaderVersion: target.loaderVersion, launchVersionId: target.launchVersionId,
+        },
+        dirs: ['mods', 'config', 'shaderpacks'],
+        plan: {
+          totalFiles: 12, newFiles: 2, changedFiles: 1, sameFiles: 9, extraFiles: 0,
+          newBytes: 12_000_000, changedBytes: 4_000_000,
+          changes: [
+            { path: 'mods/example-new.jar', state: 'new', localSize: 0, remoteSize: 8_000_000 },
+            { path: 'mods/example-update.jar', state: 'changed', reason: 'hash', localSize: 4_000_000, remoteSize: 4_000_000 },
+          ],
+          extras: [], digest,
+        },
+        digest, versionMismatch: false, loaderMismatch: false, loaderVersionMismatch: false,
+        running: target.running, blocking: false, warnings: [],
+      } satisfies LanSyncPreview as T;
+    }
     case 'SyncFromLanPeer':
+      if (!String(args[2] ?? '')) throw new Error('请先确认局域网版本差异');
       await progressTask('局域网同步', ['正在读取共享清单…', '正在校验本地文件…', '正在下载模组与光影…', '同步完成'], 1800);
       return { downloaded: 4, skipped: 7, bytes: 18_000_000 } as T;
     case 'SetLanBroadcast':

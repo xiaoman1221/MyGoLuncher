@@ -1102,3 +1102,57 @@ select.text-input option {
     transition-duration: 0.001ms !important;
   }
 }
+
+.boot-fun {
+  max-width: 300px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.5;
+  text-align: center;
+  animation: boot-fun-in 0.45s var(--ease-out);
+}
+
+@keyframes boot-fun-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+
+/* ---- Content protection: no text/image selection or copying ---- */
+html,
+body,
+#app {
+  -webkit-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+}
+
+*,
+*::before,
+*::after {
+  -webkit-user-drag: none !important;
+}
+
+input,
+textarea,
+select,
+[contenteditable="true"],
+[contenteditable="plaintext-only"] {
+  -webkit-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+}
+
+img,
+svg,
+canvas,
+video {
+  -webkit-user-drag: none !important;
+  user-select: none !important;
+}
+
+::selection {
+  background: transparent !important;
+  color: inherit !important;
+}

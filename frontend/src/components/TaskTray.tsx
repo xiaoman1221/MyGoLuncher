@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   CheckCircle2,
   ChevronDown,
@@ -9,6 +9,7 @@ import {
 import type { TaskProgress } from '../lib/types';
 import type { MessageKey } from '../lib/i18n';
 import { useApp } from '../lib/app-context';
+import { onEvent } from '../lib/events';
 
 const stageKeys: Record<string, MessageKey> = {
   prepare: 'stage.prepare',
@@ -34,9 +35,40 @@ const stageKeys: Record<string, MessageKey> = {
   scan: 'stage.scan',
 };
 
-export function TaskTray({ tasks }: { tasks: TaskProgress[] }) {
+export function TaskTray() {
   const { t } = useApp();
   const [minimized, setMinimized] = useState(false);
+  const [taskMap, setTaskMap] = useState<Record<string, TaskProgress>>({});
+  const timers = useRef(new Map<string, number>());
+
+  useEffect(() => {
+    const dispose = onEvent<TaskProgress>('task:progress', (task) => {
+      setTaskMap((current) => ({ ...current, [task.taskId]: task }));
+      const existing = timers.current.get(task.taskId);
+      if (existing) window.clearTimeout(existing);
+      if (!task.done) {
+        timers.current.delete(task.taskId);
+        return;
+      }
+      const timer = window.setTimeout(() => {
+        setTaskMap((current) => {
+          const next = { ...current };
+          delete next[task.taskId];
+          return next;
+        });
+        timers.current.delete(task.taskId);
+      }, task.failed ? 8000 : 4200);
+      timers.current.set(task.taskId, timer);
+    });
+    const activeTimers = timers.current;
+    return () => {
+      dispose();
+      activeTimers.forEach((timer) => window.clearTimeout(timer));
+      activeTimers.clear();
+    };
+  }, []);
+
+  const tasks = Object.values(taskMap);
   if (tasks.length === 0) return null;
 
   const stageLabel = (stage: string) => {

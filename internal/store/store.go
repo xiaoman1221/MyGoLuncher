@@ -12,9 +12,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"MyMinecraftGoLuncher/internal/hitokoto"
 	"MyMinecraftGoLuncher/internal/secretstore"
+	"MyMinecraftGoLuncher/internal/util"
 )
 
 // Paths contains every directory owned by the launcher.
@@ -122,7 +124,7 @@ func PathsFor(base string) Paths {
 
 // Ensure creates all necessary directories.
 func (p Paths) Ensure() error {
-	for _, dir := range []string{p.Base, p.Root, p.Data, p.Instances, p.Versions, p.Libraries, p.Assets, p.Runtimes, p.Meta, p.Cache} {
+	for _, dir := range []string{p.Base, p.Root, p.Data, p.Versions, p.Libraries, p.Assets, p.Runtimes, p.Meta, p.Cache} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
@@ -140,50 +142,56 @@ type MirrorConfig struct {
 
 // Settings are user preferences persisted between runs.
 type Settings struct {
-	PlayerName           string         `json:"playerName"`
-	DefaultMemoryMB      int            `json:"defaultMemoryMB"`
-	DefaultJavaPath      string         `json:"defaultJavaPath"`
-	CurseForgeAPIKey     string         `json:"curseForgeAPIKey,omitempty"`
-	MicrosoftClientID    string         `json:"microsoftClientID"`
-	ExtraJVMArgs         string         `json:"extraJvmArgs"`
-	CustomMirrors        []MirrorConfig `json:"customMirrors"`
-	DownloadWorkers      int            `json:"downloadWorkers"`
-	ShowGameConsole      bool           `json:"showGameConsole"`
-	ShowLauncherOnLaunch bool           `json:"showLauncherOnLaunch"`
-	HitokotoAPIURL       string         `json:"hitokotoApiUrl"`
-	LanguageAuto         bool           `json:"languageAuto"`
-	Language             string         `json:"language"`
-	VersionIsolation     bool           `json:"versionIsolation"`
-	AISearchEnabled      bool           `json:"aiSearchEnabled"`
-	AISearchProvider     string         `json:"aiSearchProvider"`
-	AISearchBaseURL      string         `json:"aiSearchBaseUrl"`
-	AISearchAPIKey       string         `json:"aiSearchApiKey,omitempty"`
-	AISearchModel        string         `json:"aiSearchModel"`
-	SchemaVersion        int            `json:"schemaVersion"`
-	ConcurrencyWarned    bool           `json:"-"`
+	PlayerName            string         `json:"playerName"`
+	DefaultMemoryMB       int            `json:"defaultMemoryMB"`
+	DefaultJavaPath       string         `json:"defaultJavaPath"`
+	CurseForgeAPIKey      string         `json:"curseForgeAPIKey,omitempty"`
+	MicrosoftClientID     string         `json:"microsoftClientID"`
+	ExtraJVMArgs          string         `json:"extraJvmArgs"`
+	CustomMirrors         []MirrorConfig `json:"customMirrors"`
+	ResourceMirror        string         `json:"resourceMirror"`
+	CustomResourceMirrors []MirrorConfig `json:"customResourceMirrors"`
+	DownloadWorkers       int            `json:"downloadWorkers"`
+	ShowGameConsole       bool           `json:"showGameConsole"`
+	ShowLauncherOnLaunch  bool           `json:"showLauncherOnLaunch"`
+	HitokotoAPIURL        string         `json:"hitokotoApiUrl"`
+	LanguageAuto          bool           `json:"languageAuto"`
+	Language              string         `json:"language"`
+	VersionIsolation      bool           `json:"versionIsolation"`
+	ServerBackupDisabled  bool           `json:"serverBackupDisabled"`
+	AISearchEnabled       bool           `json:"aiSearchEnabled"`
+	AISearchProvider      string         `json:"aiSearchProvider"`
+	AISearchBaseURL       string         `json:"aiSearchBaseUrl"`
+	AISearchAPIKey        string         `json:"aiSearchApiKey,omitempty"`
+	AISearchModel         string         `json:"aiSearchModel"`
+	SchemaVersion         int            `json:"schemaVersion"`
+	ConcurrencyWarned     bool           `json:"-"`
 }
 
 // DefaultSettings builds first-run preferences.
 func DefaultSettings() Settings {
 	return Settings{
-		PlayerName:       "Steve",
-		DefaultMemoryMB:  0, // automatic
-		CustomMirrors:    []MirrorConfig{},
-		DownloadWorkers:  8,
-		ShowGameConsole:  true,
-		HitokotoAPIURL:   hitokoto.DefaultAPIURL,
-		LanguageAuto:     true,
-		Language:         "zh-CN",
-		VersionIsolation: true,
-		AISearchProvider: "deepseek",
-		AISearchModel:    "deepseek-chat",
-		SchemaVersion:    3,
+		PlayerName:            "Steve",
+		DefaultMemoryMB:       0, // automatic
+		CustomMirrors:         []MirrorConfig{},
+		ResourceMirror:        "official",
+		CustomResourceMirrors: []MirrorConfig{},
+		DownloadWorkers:       8,
+		ShowGameConsole:       true,
+		HitokotoAPIURL:        hitokoto.DefaultAPIURL,
+		LanguageAuto:          true,
+		Language:              "zh-CN",
+		VersionIsolation:      true,
+		AISearchProvider:      "deepseek",
+		AISearchModel:         "deepseek-chat",
+		SchemaVersion:         3,
 	}
 }
 
 // Instance is a playable, isolated game directory.
 type Instance struct {
 	ID              string    `json:"id"`
+	VersionID       string    `json:"versionId,omitempty"`
 	Name            string    `json:"name"`
 	MCVersion       string    `json:"mcVersion"`
 	Loader          string    `json:"loader"`
@@ -299,6 +307,13 @@ func OpenWithSecrets(paths Paths, secrets secretstore.Store) (*Store, error) {
 	if s.settings.CustomMirrors == nil {
 		s.settings.CustomMirrors = []MirrorConfig{}
 	}
+	if s.settings.CustomResourceMirrors == nil {
+		s.settings.CustomResourceMirrors = []MirrorConfig{}
+	}
+	if strings.TrimSpace(s.settings.ResourceMirror) == "" {
+		s.settings.ResourceMirror = "official"
+		settingsDirty = true
+	}
 	if strings.TrimSpace(s.settings.HitokotoAPIURL) == "" {
 		s.settings.HitokotoAPIURL = hitokoto.DefaultAPIURL
 		settingsDirty = true
@@ -343,6 +358,11 @@ func OpenWithSecrets(paths Paths, secrets secretstore.Store) (*Store, error) {
 			s.instances[idx].ID = newID()
 			instancesDirty = true
 		}
+		if !validVersionID(s.instances[idx].VersionID) ||
+			s.versionIDTaken(s.instances[idx].VersionID, s.instances[idx].ID) {
+			s.instances[idx].VersionID = s.allocateVersionID(s.instances[idx].Name, s.instances[idx].ID)
+			instancesDirty = true
+		}
 		if strings.Contains(s.instances[idx].Name, "实例") {
 			s.instances[idx].Name = strings.ReplaceAll(s.instances[idx].Name, "实例", "版本")
 			instancesDirty = true
@@ -358,6 +378,9 @@ func OpenWithSecrets(paths Paths, secrets secretstore.Store) (*Store, error) {
 	}
 	if instancesDirty {
 		_ = saveJSON(paths.InstanceDB, instanceDB{Instances: s.instances})
+	}
+	if err := s.MigrateInstanceLayout(); err != nil && s.loadErr == nil {
+		s.loadErr = err
 	}
 	if s.loadErr != nil {
 		return s, s.loadErr
@@ -392,9 +415,153 @@ func (s *Store) Paths() Paths {
 // DataDir returns the root of shared game data.
 func (s *Store) DataDir() string { return s.Paths().Data }
 
-// InstanceDir returns the isolated game directory for an instance.
+// InstanceDir returns the isolated game directory for an instance. Isolated
+// instances live in versions/<versionId>, matching PCL/HMCL and other
+// launchers. The legacy .minecraft/instances folder is only used during
+// migration.
 func (s *Store) InstanceDir(id string) string {
-	return filepath.Join(s.Paths().Instances, id)
+	versionID := strings.TrimSpace(id)
+	if inst, ok := s.Instance(id); ok && strings.TrimSpace(inst.VersionID) != "" {
+		versionID = inst.VersionID
+	}
+	return filepath.Join(s.Paths().Versions, versionID)
+}
+
+func versionFolderBase(name string) string {
+	name = strings.TrimSpace(name)
+	var builder strings.Builder
+	lastDash := false
+	for _, char := range name {
+		switch {
+		case unicode.IsLetter(char) || unicode.IsDigit(char):
+			builder.WriteRune(char)
+			lastDash = false
+		case char == '-' || char == '_' || char == ' ':
+			builder.WriteRune(char)
+			lastDash = false
+		case char == '.' && builder.Len() > 0:
+			builder.WriteRune(char)
+			lastDash = false
+		default:
+			if !lastDash {
+				builder.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	out := strings.Trim(builder.String(), " .-_")
+	if out == "" {
+		out = "version"
+	}
+	runes := []rune(out)
+	if len(runes) > 48 {
+		out = strings.Trim(string(runes[:48]), " .-_")
+	}
+	switch strings.ToUpper(out) {
+	case "CON", "PRN", "AUX", "NUL",
+		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		out += "-version"
+	}
+	return out
+}
+
+func validVersionID(value string) bool {
+	if value == "" || value != strings.TrimSpace(value) || strings.HasSuffix(value, ".") ||
+		value != filepath.Base(value) || strings.HasPrefix(value, ".") {
+		return false
+	}
+	return !strings.ContainsAny(value, `/\:*?"<>|`)
+}
+
+func (s *Store) versionIDTaken(candidate, selfID string) bool {
+	for _, other := range s.instances {
+		if other.ID == selfID {
+			continue
+		}
+		if strings.EqualFold(other.VersionID, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Store) allocateVersionID(name, selfID string) string {
+	base := versionFolderBase(name)
+	if base == "" {
+		base = "version"
+	}
+	for index := 0; index < 1000; index++ {
+		candidate := base
+		if index > 0 {
+			candidate = fmt.Sprintf("%s-%d", base, index+1)
+		}
+		if s.versionIDTaken(candidate, selfID) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(s.paths.Versions, candidate)); err == nil {
+			// Do not overwrite a real Minecraft version with the same folder name.
+			continue
+		}
+		return candidate
+	}
+	return fmt.Sprintf("%s-%d", base, time.Now().UnixNano())
+}
+
+func mergeDirTree(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil || rel == "." {
+			return nil
+		}
+		target := filepath.Join(dst, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return nil
+		}
+		if _, err := os.Stat(target); err == nil {
+			return nil
+		}
+		return util.CopyFile(path, target)
+	})
+}
+
+// MigrateInstanceLayout moves legacy .minecraft/instances/<id> game data into
+// .minecraft/versions/<versionId>. It is idempotent and safe to call at startup.
+func (s *Store) MigrateInstanceLayout() error {
+	for _, inst := range s.Instances() {
+		versionID := strings.TrimSpace(inst.VersionID)
+		if versionID == "" {
+			continue
+		}
+		legacy := filepath.Join(s.paths.Instances, inst.ID)
+		target := filepath.Join(s.paths.Versions, versionID)
+		info, err := os.Stat(legacy)
+		if err != nil || !info.IsDir() {
+			continue
+		}
+		if _, err := os.Stat(target); os.IsNotExist(err) {
+			if renameErr := os.Rename(legacy, target); renameErr == nil {
+				continue
+			}
+			if copyErr := util.CopyDirTree(legacy, target); copyErr != nil {
+				return fmt.Errorf("迁移版本 %s 失败: %w", inst.Name, copyErr)
+			}
+			_ = os.RemoveAll(legacy)
+			continue
+		}
+		if err := mergeDirTree(legacy, target); err != nil {
+			return fmt.Errorf("合并版本 %s 失败: %w", inst.Name, err)
+		}
+		_ = os.RemoveAll(legacy)
+	}
+	_ = os.Remove(s.paths.Instances)
+	return nil
 }
 
 // Settings returns a copy of current settings.
@@ -440,6 +607,12 @@ func (s *Store) SaveSettings(next Settings) (Settings, error) {
 	}
 	if next.CustomMirrors == nil {
 		next.CustomMirrors = []MirrorConfig{}
+	}
+	if next.CustomResourceMirrors == nil {
+		next.CustomResourceMirrors = []MirrorConfig{}
+	}
+	if strings.TrimSpace(next.ResourceMirror) == "" {
+		next.ResourceMirror = "official"
 	}
 	next.SchemaVersion = 3
 	if err := s.saveSecrets(next); err != nil {
@@ -548,6 +721,9 @@ func (s *Store) CreateInstance(inst Instance) (Instance, error) {
 	if _, err := SafeName(inst.Name); err != nil {
 		return Instance{}, err
 	}
+	if !validVersionID(inst.VersionID) || s.versionIDTaken(inst.VersionID, inst.ID) {
+		inst.VersionID = s.allocateVersionID(inst.Name, inst.ID)
+	}
 	if inst.Loader == "" {
 		inst.Loader = "vanilla"
 	}
@@ -567,11 +743,12 @@ func (s *Store) CreateInstance(inst Instance) (Instance, error) {
 	if inst.Source == "" {
 		inst.Source = "manual"
 	}
-	if err := os.MkdirAll(s.InstanceDir(inst.ID), 0o755); err != nil {
+	versionDir := filepath.Join(s.paths.Versions, inst.VersionID)
+	if err := os.MkdirAll(versionDir, 0o755); err != nil {
 		return Instance{}, err
 	}
-	for _, sub := range []string{"mods", "shaderpacks", "resourcepacks", "saves", "logs"} {
-		if err := os.MkdirAll(filepath.Join(s.InstanceDir(inst.ID), sub), 0o755); err != nil {
+	for _, sub := range []string{"mods", "config", "shaderpacks", "resourcepacks", "saves", "logs"} {
+		if err := os.MkdirAll(filepath.Join(versionDir, sub), 0o755); err != nil {
 			return Instance{}, err
 		}
 	}
@@ -641,9 +818,13 @@ func (s *Store) DeleteInstance(id string, deleteFiles bool) error {
 		s.mu.Unlock()
 		return errors.New("版本不存在")
 	}
+	versionID := strings.TrimSpace(s.instances[idx].VersionID)
+	if versionID == "" {
+		versionID = id
+	}
 	s.instances = append(s.instances[:idx], s.instances[idx+1:]...)
 	err := saveJSON(s.paths.InstanceDB, instanceDB{Instances: s.instances})
-	dir := filepath.Join(s.paths.Instances, id)
+	dir := filepath.Join(s.paths.Versions, versionID)
 	s.mu.Unlock()
 	if err != nil {
 		return err

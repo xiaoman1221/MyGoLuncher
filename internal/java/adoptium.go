@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"MyMinecraftGoLuncher/internal/httpx"
+	"MyMinecraftGoLuncher/internal/mirror"
 	"MyMinecraftGoLuncher/internal/util"
 )
 
@@ -98,7 +99,7 @@ func (m *Manager) PackageInfo(ctx context.Context, feature int) (Archive, error)
 	q.Set("vendor", "eclipse")
 	endpoint := fmt.Sprintf("%s/assets/latest/%d/hotspot?%s", adoptiumAPI, feature, q.Encode())
 	var assets []assetResponse
-	if err := httpx.GetJSON(ctx, endpoint, &assets); err != nil {
+	if err := getJSONMirrors(ctx, mirror.CandidateURLs(m.sourceList(), mirror.ResourceJavaMeta, endpoint, ""), &assets); err != nil {
 		return Archive{}, fmt.Errorf("查询 Java %d 失败: %w", feature, err)
 	}
 	if len(assets) == 0 || assets[0].Binary.Package.Link == "" {
@@ -148,8 +149,8 @@ func (m *Manager) Install(ctx context.Context, feature int, progress ProgressFun
 	if progress != nil {
 		progress("download", fmt.Sprintf("正在下载 Temurin Java %d…", feature), 0, pkg.Size)
 	}
-	err = httpx.Download(ctx, httpx.File{
-		URL:    pkg.URL,
+	urls := mirror.RankURLs(ctx, mirror.CandidateURLs(m.sourceList(), mirror.ResourceJavaArtifact, pkg.URL, strconv.Itoa(feature)), 4*time.Second)
+	err = httpx.DownloadAny(ctx, urls, httpx.File{
 		Dest:   archivePath,
 		SHA256: pkg.SHA256,
 		Size:   pkg.Size,
@@ -249,6 +250,25 @@ func moveDir(src, dst string) error {
 		return err
 	}
 	return nil
+}
+
+func getJSONMirrors(ctx context.Context, urls []string, out any) error {
+	if len(urls) == 0 {
+		return errors.New("没有可用的 Java 下载地址")
+	}
+	urls = mirror.RankURLs(ctx, urls, 3*time.Second)
+	var lastErr error
+	for _, endpoint := range urls {
+		if err := httpx.GetJSON(ctx, endpoint, out); err == nil {
+			return nil
+		} else {
+			lastErr = err
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+		}
+	}
+	return lastErr
 }
 
 func adoptiumPlatform() (string, string, error) {

@@ -96,6 +96,74 @@ func TestWritePackIncludesContentAndRuntime(t *testing.T) {
 	}
 }
 
+func TestWritePackExcludesClientOnlyMods(t *testing.T) {
+	gameDir := t.TempDir()
+	writeModJar(t, filepath.Join(gameDir, "mods", "sodium.jar"), "fabric.mod.json",
+		`{"id":"sodium","environment":"client"}`)
+	writeModJar(t, filepath.Join(gameDir, "mods", "lithium.jar"), "fabric.mod.json",
+		`{"id":"lithium","environment":"*"}`)
+	writeTestFile(t, filepath.Join(gameDir, "mods", "unknown.jar"), "not a zip")
+
+	zipPath := filepath.Join(t.TempDir(), "server.zip")
+	out, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(out)
+	if err := writePack(zw, Options{
+		Instance: store.Instance{MCVersion: "1.21.1", Loader: "fabric"},
+		GameDir:  gameDir,
+	}, "", "", runtimeFabric, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	files := map[string]bool{}
+	for _, file := range reader.File {
+		files[file.Name] = true
+	}
+	if files["mods/sodium.jar"] {
+		t.Fatal("client-only mod must not be included")
+	}
+	if !files["mods/lithium.jar"] || !files["mods/unknown.jar"] {
+		t.Fatalf("server-safe mods missing: %#v", files)
+	}
+}
+
+func writeModJar(t *testing.T, path, metadataName, metadata string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	entry, err := writer.Create(metadataName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte(metadata)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestForgeScriptsIncludeInstaller(t *testing.T) {
 	scripts := scriptsFor(runtimeForgeInstaller, store.Instance{
 		MCVersion: "1.20.1", Loader: "forge", LoaderVersion: "47.2.0",

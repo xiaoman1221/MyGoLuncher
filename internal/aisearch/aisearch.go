@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -246,40 +247,105 @@ var aliases = []struct {
 	from string
 	to   string
 }{
-	{"苹果皮", "appleskin"},
-	{"暮色森林", "twilight forest"},
-	{"机械动力", "create"},
-	{"农夫乐事", "farmers delight"},
-	{"匠魂", "tinkers construct"},
-	{"植物魔法", "botania"},
-	{"沉浸工程", "immersive engineering"},
-	{"储物抽屉", "storage drawers"},
-	{"动态光源", "dynamic lights"},
-	{"连接纹理", "connected textures"},
-	{"旅行地图", "journeymap"},
-	{"小地图", "minimap"},
-	{"一键整理", "inventory sorting"},
-	{"区块加载", "chunk loading"},
-	{"钠", "sodium"},
-	{"锂", "lithium"},
-	{"铷", "rubidium"},
-	{"光影", "shader"},
-	{"材质包", "resource pack"},
-	{"资源包", "resource pack"},
-	{"优化", "optimization"},
+	// Type and gameplay terms.
+	{"整合包", "modpack"}, {"模组包", "modpack"}, {"材质包", "resource pack"},
+	{"资源包", "resource pack"}, {"数据包", "datapack"}, {"光影包", "shader"},
+	{"模组", "mod"}, {"插件", "plugin"}, {"光影", "shader"}, {"优化", "optimization"},
+	{"性能", "performance"}, {"家具", "furniture"}, {"农业", "farming"},
+	{"食物", "food"}, {"生物", "mobs"}, {"维度", "dimension"}, {"地牢", "dungeon"},
+	{"武器", "weapon"}, {"工具", "tools"}, {"附魔", "enchantment"}, {"背包", "backpack"},
+	{"任务", "quest"}, {"小地图", "minimap"}, {"地图", "map"}, {"传送", "teleport"},
+	{"联机", "multiplayer"}, {"服务器", "server"}, {"红石", "redstone"},
+	{"自动化", "automation"}, {"能源", "energy"}, {"管道", "pipes"},
+	{"电线", "cables"}, {"反应堆", "reactor"}, {"火箭", "rocket"},
+	{"太空", "space"}, {"枪械", "guns"}, {"载具", "vehicles"}, {"飞机", "plane"},
+	{"汽车", "car"}, {"铁路", "rail"}, {"村民", "villager"}, {"交易", "trading"},
+	{"刷怪", "spawner"}, {"怪物", "monster"}, {"装备", "equipment"}, {"饰品", "trinkets"},
+	{"药水", "potion"}, {"烹饪", "cooking"}, {"饮料", "drink"}, {"咖啡", "coffee"},
+	{"建筑", "building"}, {"冒险", "adventure"}, {"科技", "tech"}, {"魔法", "magic"},
+	{"动态光源", "dynamic lights"}, {"连接纹理", "connected textures"},
+	{"区块加载", "chunk loading"}, {"一键整理", "inventory sorting"},
+	{"物品管理器", "jei just enough items"}, {"配方查看", "recipe viewer"},
+
+	// Popular mods and common Chinese nicknames.
+	{"高清修复", "optifine"}, {"钠", "sodium"}, {"锂", "lithium"}, {"铷", "rubidium"},
+	{"磷", "phosphor"}, {"镁", "magnesium"}, {"锰", "manganese"},
+	{"苹果皮", "appleskin"}, {"旅行地图", "journeymap"}, {"玉", "jade"},
+	{"暮色森林", "twilight forest"}, {"天境", "aether"}, {"机械动力", "create"},
+	{"沉浸工程", "immersive engineering"}, {"通用机械", "mekanism"},
+	{"热力膨胀", "thermal expansion"}, {"工业时代", "industrialcraft"},
+	{"工业", "industrialcraft"}, {"植物魔法", "botania"}, {"神秘时代", "thaumcraft"},
+	{"匠魂", "tinkers construct"}, {"农夫乐事", "farmers delight"},
+	{"潘马斯农场", "pams harvestcraft"}, {"应用能源", "applied energistics"},
+	{"精致存储", "refined storage"}, {"储物抽屉", "storage drawers"},
+	{"简易存储", "simple storage network"}, {"等价交换", "projecte"},
+	{"无尽贪婪", "avaritia"}, {"血魔法", "blood magic"}, {"星辉魔法", "astral sorcery"},
+	{"深渊国度", "abyssalcraft"}, {"虚无世界", "divine rpg"}, {"龙之研究", "draconic evolution"},
+	{"新生魔艺", "ars nouveau"}, {"神秘农业", "mystical agriculture"},
+	{"方块宝可梦", "cobblemon"}, {"精灵宝可梦", "pixelmon"},
+	{"亚历克斯的生物", "alexs mobs"}, {"冰与火", "ice and fire"},
+	{"更好的下界", "better nether"}, {"更好的末地", "better end"},
+	{"遥远地平线", "distant horizons"}, {"精致背包", "sophisticated backpacks"},
+	{"旅行者背包", "travelers backpack"}, {"传送石碑", "waystones"},
+	{"鼠标手势", "mouse tweaks"}, {"按键冲突", "controlling"},
+	{"区块预生成", "chunky"}, {"性能分析", "spark"}, {"实体剔除", "entity culling"},
+	{"合成修改", "crafttweaker"}, {"任务书", "ftb quests"},
+	{"史诗战斗", "epic fight"}, {"战斗", "combat"}, {"神化", "apotheosis"},
+	{"饰品栏", "curios"}, {"手册", "patchouli"}, {"滑翔伞", "paraglider"},
+	{"创世神", "worldedit"}, {"建筑魔杖", "building gadgets"},
+	{"车万女仆", "touhou little maid"}, {"女仆", "maid"},
+	{"幸运方块", "lucky block"}, {"更多生物", "more mobs"},
+	{"更多食物", "more food"}, {"更多附魔", "more enchantments"},
+	{"更多箱子", "iron chests"}, {"铁箱子", "iron chests"},
 }
 
-// NormalizeQuery applies the built-in Chinese alias table.
+func init() {
+	// Replace longer phrases first so "物品管理器" wins over "物品".
+	sort.SliceStable(aliases, func(i, j int) bool {
+		return len([]rune(aliases[i].from)) > len([]rune(aliases[j].from))
+	})
+}
+
+// NormalizeQuery applies the built-in Chinese alias table. Chinese punctuation
+// is treated as a separator so queries copied from a sentence still work.
 func NormalizeQuery(query string) string {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return ""
 	}
+	query = strings.NewReplacer(
+		"，", " ", "。", " ", "！", " ", "？", " ", "、", " ",
+		"：", " ", "；", " ", "（", " ", "）", " ", "【", " ", "】", " ",
+	).Replace(query)
 	result := query
 	for _, alias := range aliases {
 		result = strings.ReplaceAll(result, alias.from, alias.to)
 	}
 	return strings.Join(strings.Fields(result), " ")
+}
+
+// QueryCandidates returns the primary normalized query followed by the
+// original query. Searching both means an unlisted Chinese name can still hit
+// projects that use Chinese titles, while known aliases produce better English
+// results first.
+func QueryCandidates(query string) []string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, 2)
+	add := func(value string) {
+		value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+		if value == "" || seen[strings.ToLower(value)] {
+			return
+		}
+		seen[strings.ToLower(value)] = true
+		out = append(out, value)
+	}
+	add(NormalizeQuery(query))
+	add(query)
+	return out
 }
 
 // HasCJK reports whether the query contains Chinese, Japanese, or Korean text.

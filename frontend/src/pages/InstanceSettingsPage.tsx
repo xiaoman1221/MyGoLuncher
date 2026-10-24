@@ -1,14 +1,18 @@
-import { FolderOpen, Pencil, Plus, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { FolderOpen, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import { useApp } from '../lib/app-context';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
+import { ModUpdatesModal } from '../components/ModUpdatesModal';
 import { cn, loaderLabel, loaderTone } from '../lib/format';
 
 export function InstanceSettingsPage() {
   const {
-    instances, settings, openCreate, openEdit, askDelete, openInstanceFolder, t,
+    instances, settings, openCreate, openEdit, askDelete, openInstanceFolder, refreshInstances, t,
   } = useApp();
   const isolated = settings?.versionIsolation !== false;
+  const [updatesId, setUpdatesId] = useState<string | null>(null);
+  const updateInstance = instances.find((instance) => instance.id === updatesId) ?? null;
 
   return (
     <div className="page instance-settings-page">
@@ -58,6 +62,9 @@ export function InstanceSettingsPage() {
                 <code className="version-settings-dir" title={instance.gameDir}>{instance.gameDir}</code>
               </div>
               <div className="version-settings-actions">
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => setUpdatesId(instance.id)}>
+                  <RefreshCw size={14} /> {t('modUpdates.check')}
+                </button>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => openEdit(instance.id)}>
                   <Pencil size={14} /> {t('instanceSettings.edit')}
                 </button>
@@ -71,6 +78,14 @@ export function InstanceSettingsPage() {
             </div>
           ))}
         </div>
+      )}
+
+      {updateInstance && (
+        <ModUpdatesModal
+          instance={updateInstance}
+          onClose={() => setUpdatesId(null)}
+          onUpdated={refreshInstances}
+        />
       )}
     </div>
   );

@@ -40,6 +40,16 @@ func writeZip(t *testing.T, path string, entries map[string][]byte) {
 	}
 }
 
+func writeTestFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testStore(t *testing.T) *store.Store {
 	t.Helper()
 	st, err := store.Open(store.PathsFor(t.TempDir()))
@@ -47,6 +57,60 @@ func testStore(t *testing.T) *store.Store {
 		t.Fatal(err)
 	}
 	return st
+}
+
+func TestPortableExportSkipVersionMetadata(t *testing.T) {
+	gameDir := filepath.Join(t.TempDir(), "versions", "JinXiuYuan")
+	if err := os.MkdirAll(gameDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	infoFor := func(name string) os.FileInfo {
+		path := filepath.Join(gameDir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return info
+	}
+	skip := portableExportSkip(gameDir, exportSkip)
+	for _, name := range []string{"JinXiuYuan.json", "JinXiuYuan.jar", "JinXiuYuan-natives/lib.dll", "natives/lib.dll"} {
+		if !skip(name, infoFor(name)) {
+			t.Errorf("%s should not be exported", name)
+		}
+	}
+	for _, name := range []string{"mods/example.jar", "config/settings.json"} {
+		if skip(name, infoFor(name)) {
+			t.Errorf("%s should be exported", name)
+		}
+	}
+}
+
+func TestExportSkipRollbackJar(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "example.jar.old")
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exportSkip("mods/example.jar.old", info) {
+		t.Fatal("rollback jar should not be exported")
+	}
+	jarPath := filepath.Join(filepath.Dir(path), "example.jar")
+	if err := os.WriteFile(jarPath, []byte("jar"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	jarInfo, _ := os.Stat(jarPath)
+	if exportSkip("mods/example.jar", jarInfo) {
+		t.Fatal("normal jar should be exported")
+	}
 }
 
 func TestInspectMRPackAndImportExport(t *testing.T) {
@@ -139,6 +203,85 @@ func TestInspectMRPackAndImportExport(t *testing.T) {
 	}
 	if !found["modrinth.index.json"] || !found["overrides/mods/example.jar"] || !found["overrides/config/test.txt"] {
 		t.Fatalf("exported archive missing files: %#v", found)
+	}
+}
+
+func TestImportMRPackUsesMirrorCandidates(t *testing.T) {
+	payload := []byte("mirror mod jar")
+	sum := sha512.Sum512(payload)
+	official := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "official unavailable", http.StatusBadGateway)
+	}))
+	defer official.Close()
+	mirrorServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer mirrorServer.Close()
+
+	index := map[string]any{
+		"formatVersion": 1, "game": "minecraft", "versionId": "1.0.0", "name": "Mirror Pack",
+		"files": []map[string]any{{
+			"path":      "mods/example.jar",
+			"hashes":    map[string]string{"sha512": hex.EncodeToString(sum[:])},
+			"downloads": []string{official.URL + "/example.jar"},
+			"fileSize":  len(payload),
+		}},
+		"dependencies": map[string]string{"minecraft": "1.21.1", "fabric-loader": "0.16.10"},
+	}
+	indexData, _ := json.Marshal(index)
+	path := filepath.Join(t.TempDir(), "mirror.mrpack")
+	writeZip(t, path, map[string][]byte{"modrinth.index.json": indexData})
+
+	st := testStore(t)
+	result, err := Import(context.Background(), st, path, ImportOptions{
+		URLRewriter: func(string) []string {
+			return []string{mirrorServer.URL + "/example.jar", official.URL + "/example.jar"}
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gameDir := st.InstanceDir(result.Instance.ID)
+	data, err := os.ReadFile(filepath.Join(gameDir, "mods", "example.jar"))
+	if err != nil || string(data) != string(payload) {
+		t.Fatalf("mirror file = %q, %v", data, err)
+	}
+}
+
+func TestExportMRPackIsImportableByAnotherStore(t *testing.T) {
+	source := testStore(t)
+	inst, err := source.CreateInstance(store.Instance{
+		Name: "Portable Pack", MCVersion: "1.20.1", Loader: "fabric",
+		LoaderVersion: "0.15.11", LaunchVersionID: "fabric-loader-0.15.11-1.20.1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gameDir := source.InstanceDir(inst.ID)
+	writeTestFile(t, filepath.Join(gameDir, "mods", "a.jar"), "mod")
+	writeTestFile(t, filepath.Join(gameDir, "config", "x.toml"), "config")
+	writeTestFile(t, filepath.Join(gameDir, "saves", "world", "level.dat"), "save")
+	writeTestFile(t, filepath.Join(gameDir, "options.txt"), "fov:70")
+	exportPath := filepath.Join(t.TempDir(), "portable.mrpack")
+	if err := ExportMRPack(context.Background(), inst, gameDir, exportPath); err != nil {
+		t.Fatal(err)
+	}
+
+	target := testStore(t)
+	result, err := Import(context.Background(), target, exportPath, ImportOptions{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importedDir := target.InstanceDir(result.Instance.ID)
+	for _, name := range []string{"mods/a.jar", "config/x.toml"} {
+		if _, err := os.Stat(filepath.Join(importedDir, filepath.FromSlash(name))); err != nil {
+			t.Fatalf("%s missing after re-import: %v", name, err)
+		}
+	}
+	for _, name := range []string{"saves/world/level.dat", "options.txt"} {
+		if _, err := os.Stat(filepath.Join(importedDir, filepath.FromSlash(name))); err == nil {
+			t.Fatalf("%s should not be part of a portable modpack", name)
+		}
 	}
 }
 
@@ -296,5 +439,16 @@ func TestExportZipProducesMultiMCLayout(t *testing.T) {
 	}
 	if !found["minecraft/mods/a.jar"] || found["minecraft/logs/latest.log"] || !found["mmc-pack.json"] || !found["instance.cfg"] {
 		t.Fatalf("unexpected zip layout: %#v", found)
+	}
+	target := testStore(t)
+	imported, err := Import(context.Background(), target, dest, ImportOptions{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported.Instance.Loader != "fabric" || imported.Instance.MCVersion != "1.20.1" {
+		t.Fatalf("imported backup metadata: %#v", imported.Instance)
+	}
+	if _, err := os.Stat(filepath.Join(target.InstanceDir(imported.Instance.ID), "mods", "a.jar")); err != nil {
+		t.Fatalf("backup mod missing after re-import: %v", err)
 	}
 }

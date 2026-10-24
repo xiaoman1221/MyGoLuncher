@@ -22,7 +22,6 @@ import type {
   LaunchState,
   PageKey,
   Settings,
-  TaskProgress,
   Theme,
 } from './lib/types';
 import { Sidebar } from './components/Sidebar';
@@ -31,6 +30,7 @@ import { TaskTray } from './components/TaskTray';
 import { ToastStack } from './components/ToastStack';
 import { ConsoleDrawer } from './components/ConsoleDrawer';
 import { LogoMark } from './components/LogoMark';
+import { FunLine } from './components/FunLine';
 import { CreateInstanceModal } from './components/CreateInstanceModal';
 import { EditInstanceModal } from './components/EditInstanceModal';
 import { ConfirmDeleteModal } from './components/ConfirmDeleteModal';
@@ -62,10 +62,8 @@ export default function App() {
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [lanPeerCount, setLanPeerCount] = useState(0);
-  const [tasks, setTasks] = useState<Record<string, TaskProgress>>({});
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [consoleId, setConsoleId] = useState<string | null>(null);
-  const [consoleLogs, setConsoleLogs] = useState<Record<string, string[]>>({});
   const [createOpen, setCreateOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -74,7 +72,6 @@ export default function App() {
   const [launchPhase, setLaunchPhase] = useState<'preparing' | 'waiting'>('preparing');
 
   const toastId = useRef(0);
-  const taskTimers = useRef(new Map<string, number>());
   const toastTimers = useRef(new Map<number, number>());
   const settingsRef = useRef<Settings | null>(null);
 
@@ -260,16 +257,8 @@ export default function App() {
     }
   }, [pushToast, t]);
 
-  const openConsole = useCallback(async (id: string) => {
+  const openConsole = useCallback((id: string) => {
     setConsoleId(id);
-    try {
-      const logs = await api.getInstanceLog(id);
-      if (logs.length > 0) {
-        setConsoleLogs((current) => ({ ...current, [id]: logs.slice(-600) }));
-      }
-    } catch {
-      // Live events still populate the console.
-    }
   }, []);
 
   const navigate = useCallback((next: PageKey) => {
@@ -282,29 +271,7 @@ export default function App() {
   useEffect(() => {
     if (!bootstrap || bootError) return () => {};
     const disposers = [
-      onEvent<TaskProgress>('task:progress', (task) => {
-        setTasks((current) => ({ ...current, [task.taskId]: task }));
-        const existing = taskTimers.current.get(task.taskId);
-        if (existing) window.clearTimeout(existing);
-        if (task.done) {
-          const timer = window.setTimeout(() => {
-            setTasks((current) => {
-              const next = { ...current };
-              delete next[task.taskId];
-              return next;
-            });
-            taskTimers.current.delete(task.taskId);
-          }, task.failed ? 8000 : 4200);
-          taskTimers.current.set(task.taskId, timer);
-        }
-      }),
       onEvent<null>('instances:changed', () => { void refreshInstances(); }),
-      onEvent<{ instanceId: string; line: string }>('launch:log', (payload) => {
-        setConsoleLogs((current) => {
-          const lines = current[payload.instanceId] ?? [];
-          return { ...current, [payload.instanceId]: [...lines.slice(-599), payload.line] };
-        });
-      }),
       onEvent<AccountState>('accounts:changed', (state) => {
         setBootstrap((current) => current ? {
           ...current,
@@ -353,11 +320,9 @@ export default function App() {
   }, [Boolean(bootstrap), Boolean(bootError), refreshInstances, openConsole, pushToast, reloadBootstrap, t]);
 
   useEffect(() => {
-    const timers = taskTimers.current;
-    const toastT = toastTimers.current;
+    const timers = toastTimers.current;
     return () => {
       timers.forEach((timer) => window.clearTimeout(timer));
-      toastT.forEach((timer) => window.clearTimeout(timer));
     };
   }, []);
 
@@ -407,7 +372,6 @@ export default function App() {
     stop,
     openConsole: (id: string) => { void openConsole(id); },
     pushToast,
-    tasks: Object.values(tasks),
     lanPeerCount,
     isDemo,
   }), [
@@ -415,7 +379,7 @@ export default function App() {
     language, locale, t, setLanguage,
     navigate, selectedId, selectedInstance, launchingId, selectInstance, refreshInstances,
     reloadBootstrap, saveSettings, openDataFolder, openInstanceFolder, launch, launchToServer, stop, lanPeerCount,
-    openConsole, pushToast, tasks,
+    openConsole, pushToast,
   ]);
 
   if (loading) {
@@ -425,6 +389,7 @@ export default function App() {
         <LogoMark size={72} />
         <div className="boot-title">MYGO</div>
         <div className="boot-sub">{t('app.bootSub')}</div>
+        <FunLine language={language} className="boot-fun" />
         <div className="boot-bar"><span /></div>
       </div>
     );
@@ -487,7 +452,6 @@ export default function App() {
       {activeConsole && (
         <ConsoleDrawer
           instance={activeConsole}
-          logs={consoleLogs[activeConsole.id] ?? []}
           onClose={() => setConsoleId(null)}
           onStop={() => void stop(activeConsole.id)}
           onOpenFolder={() => void openInstanceFolder(activeConsole.id)}
@@ -502,7 +466,7 @@ export default function App() {
         />
       )}
 
-      <TaskTray tasks={Object.values(tasks)} />
+      <TaskTray />
       <ToastStack toasts={toasts} onDismiss={dismissToast} withConsole={Boolean(activeConsole)} />
     </AppContext.Provider>
   );

@@ -1,5 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Files,
+  History,
   KeyRound,
   LoaderCircle,
   Pencil,
@@ -7,6 +9,7 @@ import {
   Plus,
   RefreshCw,
   RotateCw,
+  RotateCcw,
   Server,
   Square,
   Trash2,
@@ -20,10 +23,12 @@ import { Modal } from '../components/Modal';
 import type {
   InstanceView,
   RemoteMcsmInstance,
+  ServerBackup,
   ServerProfile,
   ServerProfileRequest,
   ServerStatus,
   ServerSyncDir,
+  ServerSyncFile,
   ServerSyncResult,
 } from '../lib/types';
 import type { MessageKey } from '../lib/i18n';
@@ -64,17 +69,24 @@ export function ServersPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<ServerProfile | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [syncTarget, setSyncTarget] = useState<ServerProfile | null>(null);
+  const [historyTarget, setHistoryTarget] = useState<ServerProfile | null>(null);
+  const statusBusy = useRef(false);
 
   const instanceName = useCallback((id: string) => (
     instances.find((instance) => instance.id === id)?.name ?? id
   ), [instances]);
 
-  const loadStatuses = useCallback(async () => {
+  const loadStatuses = useCallback(async (silent = false) => {
+    if (statusBusy.current) return;
+    statusBusy.current = true;
     try {
       const rows = await api.getServerStatuses();
       setStatuses(Object.fromEntries(rows.map((row) => [row.profileId, row])));
     } catch (error) {
-      pushToast('error', t('servers.connectionError'), (error as Error).message);
+      if (!silent) pushToast('error', t('servers.connectionError'), (error as Error).message);
+    } finally {
+      statusBusy.current = false;
     }
   }, [pushToast, t]);
 
@@ -97,6 +109,12 @@ export function ServersPage() {
     if (profiles.length > 0) void loadStatuses();
   }, [profiles.length, loadStatuses]);
 
+  useEffect(() => {
+    if (profiles.length === 0) return;
+    const timer = window.setInterval(() => { void loadStatuses(true); }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [profiles.length, loadStatuses]);
+
   const openAdd = () => {
     setEditing(null);
     setFormOpen(true);
@@ -107,19 +125,13 @@ export function ServersPage() {
     setFormOpen(true);
   };
 
-  const runAction = async (id: string, action: 'start' | 'stop' | 'restart' | 'sync') => {
+  const runAction = async (id: string, action: 'start' | 'stop' | 'restart') => {
     setBusy(`${action}:${id}`);
     try {
-      if (action === 'sync') {
-        const result = await api.syncServerProfile(id);
-        pushToast('success', t('servers.syncDone'), syncSummary(result, t));
-        await load();
-      } else {
-        await (action === 'start' ? api.startServer(id) : action === 'stop' ? api.stopServer(id) : api.restartServer(id));
-      }
+      await (action === 'start' ? api.startServer(id) : action === 'stop' ? api.stopServer(id) : api.restartServer(id));
       await loadStatuses();
     } catch (error) {
-      pushToast('error', action === 'sync' ? t('servers.syncFailed') : t('servers.actionFailed'), (error as Error).message);
+      pushToast('error', t('servers.actionFailed'), (error as Error).message);
     } finally {
       setBusy(null);
     }
@@ -226,6 +238,12 @@ export function ServersPage() {
                     <span>{t('servers.lastSync', { time: '' })}</span>
                     <strong>{formatTime(profile.lastSync)}</strong>
                   </div>
+                  {profile.lastRollback && (
+                    <div>
+                      <span>{t('servers.lastRollback', { time: '' })}</span>
+                      <strong>{formatTime(profile.lastRollback)}</strong>
+                    </div>
+                  )}
                 </div>
 
                 <div className="server-dirs">
@@ -243,11 +261,19 @@ export function ServersPage() {
                   <button
                     type="button"
                     className="btn btn-primary btn-sm"
-                    onClick={() => void runAction(profile.id, 'sync')}
+                    onClick={() => setSyncTarget(profile)}
                     disabled={running}
                   >
                     {running ? <LoaderCircle size={14} className="spin" /> : <UploadCloud size={14} />}
                     {running ? t('servers.syncing') : t('servers.sync')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => setHistoryTarget(profile)}
+                    disabled={running}
+                  >
+                    <History size={14} /> {t('servers.rollback')}
                   </button>
                   {online ? (
                     <button type="button" className="btn btn-ghost btn-sm" onClick={() => void runAction(profile.id, 'stop')} disabled={running}>
@@ -287,16 +313,305 @@ export function ServersPage() {
           }}
         />
       )}
+
+      {syncTarget && (
+        <ServerSyncModal
+          profile={syncTarget}
+          onClose={() => setSyncTarget(null)}
+          onDone={async () => {
+            setSyncTarget(null);
+            await load();
+            await loadStatuses();
+          }}
+        />
+      )}
+
+      {historyTarget && (
+        <ServerRollbackModal
+          profile={historyTarget}
+          online={Boolean(statuses[historyTarget.id]?.online)}
+          onClose={() => setHistoryTarget(null)}
+          onDone={async () => {
+            setHistoryTarget(null);
+            await load();
+            await loadStatuses();
+          }}
+        />
+      )}
     </div>
   );
 }
 
+function formatBytes(value: number) {
+  if (value >= 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(0)} KB`;
+  return `${value} B`;
+}
+
+function ServerSyncModal({
+  profile,
+  onClose,
+  onDone,
+}: {
+  profile: ServerProfile;
+  onClose: () => void;
+  onDone: () => Promise<void>;
+}) {
+  const { pushToast, t } = useApp();
+  const [files, setFiles] = useState<ServerSyncFile[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<'selected' | 'full' | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.previewServerSync(profile.id)
+      .then((rows) => {
+        if (!alive) return;
+        setFiles(rows);
+        setSelected(new Set(rows.filter((file) => !file.clientOnly).map((file) => file.path)));
+      })
+      .catch((error: Error) => {
+        if (alive) pushToast('error', t('servers.syncFailed'), error.message);
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => { alive = false; };
+  }, [profile.id, pushToast, t]);
+
+  const groups = useMemo(() => {
+    const map = new Map<ServerSyncDir, ServerSyncFile[]>();
+    for (const file of files) {
+      const list = map.get(file.dir) ?? [];
+      list.push(file);
+      map.set(file.dir, list);
+    }
+    return ALL_DIRS
+      .map((dir) => ({ dir, files: map.get(dir) ?? [] }))
+      .filter((group) => group.files.length > 0);
+  }, [files]);
+
+  const toggle = (file: ServerSyncFile) => {
+    if (file.clientOnly) return;
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(file.path)) next.delete(file.path);
+      else next.add(file.path);
+      return next;
+    });
+  };
+
+  const allSelectable = files.filter((file) => !file.clientOnly);
+  const allSelected = allSelectable.length > 0 && allSelectable.every((file) => selected.has(file.path));
+
+  const selectAll = () => {
+    setSelected(allSelected ? new Set() : new Set(allSelectable.map((file) => file.path)));
+  };
+
+  const run = async (mode: 'selected' | 'full') => {
+    if (mode === 'full' && profile.deleteExtras) {
+      if (!window.confirm(t('servers.fullSyncConfirm'))) return;
+    }
+    setBusy(mode);
+    try {
+      const result = mode === 'selected'
+        ? await api.syncServerProfileSelected(profile.id, Array.from(selected))
+        : await api.syncServerProfile(profile.id);
+      pushToast('success', t('servers.syncDone'), syncSummary(result, t));
+      await onDone();
+    } catch (error) {
+      pushToast('error', t('servers.syncFailed'), (error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      closeable={!busy}
+      title={t('servers.filesTitle')}
+      eyebrow={profile.name}
+      description={t('servers.filesHint')}
+      size="lg"
+      footer={
+        <>
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={Boolean(busy)}>{t('common.cancel')}</button>
+          <button type="button" className="btn btn-ghost" onClick={() => void run('full')} disabled={Boolean(busy) || loading}>
+            {busy === 'full' ? <LoaderCircle size={15} className="spin" /> : <UploadCloud size={15} />}
+            {t('servers.syncAll')}
+          </button>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void run('selected')}
+            disabled={Boolean(busy) || selected.size === 0}
+          >
+            {busy === 'selected' ? <LoaderCircle size={15} className="spin" /> : <Files size={15} />}
+            {t('servers.syncSelected')} · {selected.size}
+          </button>
+        </>
+      }
+    >
+      {loading ? (
+        <div className="skeleton skeleton-line wide" />
+      ) : (
+        <>
+          <div className="file-picker-toolbar">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={selectAll}>
+              {allSelected ? t('servers.clearSelection') : t('servers.selectAll')}
+            </button>
+            <span className="field-hint">
+              {files.filter((file) => file.clientOnly).length > 0
+                ? t('servers.syncFiltered', { count: files.filter((file) => file.clientOnly).length })
+                : ''}
+            </span>
+          </div>
+          <div className="file-picker">
+            {groups.length === 0 && <p className="field-hint">{t('servers.noFiles')}</p>}
+            {groups.map((group) => (
+              <div className="file-group" key={group.dir}>
+                <div className="file-group-head">
+                  <strong>{t(DIR_KEYS[group.dir])}</strong>
+                  <span>{group.files.length}</span>
+                </div>
+                {group.files.map((file) => (
+                  <label
+                    className={cn('file-row', file.clientOnly && 'is-excluded', selected.has(file.path) && 'is-selected')}
+                    key={file.path}
+                    title={file.reason || file.path}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(file.path)}
+                      disabled={file.clientOnly}
+                      onChange={() => toggle(file)}
+                    />
+                    <span className="file-path">{file.path}</span>
+                    <span className="file-size">{formatBytes(file.size)}</span>
+                    {file.clientOnly && <span className="chip chip-warn">{t('servers.clientOnly')}</span>}
+                  </label>
+                ))}
+              </div>
+            ))}
+          </div>
+          {files.length > 0 && (
+            <p className="field-hint">{t('servers.filesCount', { count: files.length, selected: selected.size })}</p>
+          )}
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function ServerRollbackModal({
+  profile,
+  online,
+  onClose,
+  onDone,
+}: {
+  profile: ServerProfile;
+  online: boolean;
+  onClose: () => void;
+  onDone: () => Promise<void>;
+}) {
+  const { pushToast, t, locale } = useApp();
+  const [backups, setBackups] = useState<ServerBackup[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api.getServerBackups(profile.id)
+      .then((rows) => { if (alive) setBackups(rows); })
+      .catch((error: Error) => {
+        if (alive) pushToast('error', t('servers.rollbackFailed'), error.message);
+      })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [profile.id, pushToast, t]);
+
+  const formatTime = (value: string) => {
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString(locale);
+  };
+
+  const restore = async (backup: ServerBackup) => {
+    if (!window.confirm(t('servers.rollbackConfirm', { time: formatTime(backup.createdAt) }))) return;
+    setBusyId(backup.id);
+    try {
+      await api.rollbackServer(profile.id, backup.id);
+      pushToast('success', t('servers.rollbackDone'));
+      await onDone();
+    } catch (error) {
+      pushToast('error', t('servers.rollbackFailed'), (error as Error).message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      closeable={!busyId}
+      title={t('servers.rollbackTitle')}
+      eyebrow={profile.name}
+      description={t('servers.rollbackBody')}
+      size="lg"
+      footer={<button type="button" className="btn btn-ghost" onClick={onClose} disabled={Boolean(busyId)}>{t('common.close')}</button>}
+    >
+      <div className="inline-banner banner-warning">
+        <RotateCcw size={16} />
+        <div>
+          <strong>{online ? t('servers.statusRunningBlock') : t('servers.rollbackWarning')}</strong>
+        </div>
+      </div>
+      {loading ? (
+        <div className="skeleton skeleton-line wide" />
+      ) : backups.length === 0 ? (
+        <EmptyState compact icon={<History size={22} />} title={t('servers.rollback')} body={t('servers.noBackups')} />
+      ) : (
+        <div className="backup-list">
+          {backups.map((backup) => (
+            <div className="backup-row" key={backup.id}>
+              <div className="backup-copy">
+                <strong>{formatTime(backup.createdAt)}</strong>
+                <span>{backup.reason || 'sync'}</span>
+                <div className="chip-row">
+                  {backup.dirs.map((dir) => (
+                    <span className="chip" key={dir}>{DIR_KEYS[dir] ? t(DIR_KEYS[dir]) : dir}</span>
+                  ))}
+                </div>
+              </div>
+              <button
+                type="button"
+                className="btn btn-danger-ghost btn-sm"
+                onClick={() => void restore(backup)}
+                disabled={online || Boolean(busyId)}
+              >
+                {busyId === backup.id ? <LoaderCircle size={14} className="spin" /> : <RotateCcw size={14} />}
+                {busyId === backup.id ? t('servers.restoring') : t('servers.restore')}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function syncSummary(result: ServerSyncResult, t: (key: MessageKey, vars?: Record<string, string | number>) => string) {
-  return t('servers.syncSummary', {
+  const summary = t('servers.syncSummary', {
     uploaded: result.uploaded,
     skipped: result.skipped,
     deleted: result.deleted,
   });
+  return result.filtered > 0
+    ? `${summary} · ${t('servers.syncFiltered', { count: result.filtered })}`
+    : summary;
 }
 
 function ServerForm({

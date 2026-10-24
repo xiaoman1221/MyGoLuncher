@@ -1,6 +1,7 @@
 package mcsm
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"io"
@@ -119,6 +120,137 @@ func TestListInstancesAndStatus(t *testing.T) {
 	}
 }
 
+func TestStatusFallsBackToInstanceDetail(t *testing.T) {
+	fake := newFakeMCSM(t, "key")
+	defer fake.Close()
+	fake.hideUserInstances = true
+
+	client, err := NewClient(fake.URL(), "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := client.Status(context.Background(), "daemon", "instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Nickname != "Test Server" || status.Status != 3 {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestListAllInstancesForAdminKeys(t *testing.T) {
+	fake := newFakeMCSM(t, "key")
+	defer fake.Close()
+
+	client, err := NewClient(fake.URL(), "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instances, err := client.ListAllInstances(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instances) != 1 || instances[0].DaemonID != "daemon" ||
+		instances[0].InstanceUUID != "global-instance" || instances[0].Nickname != "Global Server" {
+		t.Fatalf("instances = %#v", instances)
+	}
+}
+
+func TestListAllInstancesFallsBackToDocumentedEndpoint(t *testing.T) {
+	fake := newFakeMCSM(t, "key")
+	defer fake.Close()
+	fake.noGlobal = true
+
+	client, err := NewClient(fake.URL(), "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instances, err := client.ListAllInstances(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instances) != 1 || instances[0].InstanceUUID != "global-instance" {
+		t.Fatalf("instances = %#v", instances)
+	}
+}
+
+func TestStatusUsesAdminListBeforeForbiddenDetail(t *testing.T) {
+	fake := newFakeMCSM(t, "key")
+	defer fake.Close()
+	fake.hideUserInstances = true
+	fake.setRemote("/mods/a.jar", []byte("x"))
+
+	client, err := NewClient(fake.URL(), "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := client.Status(context.Background(), "daemon", "global-instance")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Nickname != "Global Server" {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
+func TestCreateBackupAndRestore(t *testing.T) {
+	fake := newFakeMCSM(t, "key")
+	defer fake.Close()
+	fake.setRemote("/mods/a.jar", []byte("old-a"))
+	fake.setRemote("/mods/sub/b.jar", []byte("old-b"))
+	client, err := NewClient(fake.URL(), "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup, err := client.CreateBackup(context.Background(), "daemon", "instance", "/", "profile1",
+		[]string{"mods"}, "sync", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if backup.ID == "" || len(backup.Dirs) != 1 || backup.Dirs[0] != "mods" {
+		t.Fatalf("backup = %#v", backup)
+	}
+	if len(backup.MissingDirs) != 0 || len(backup.EmptyDirs) != 0 {
+		t.Fatalf("unexpected backup state: %#v", backup)
+	}
+
+	fake.setRemote("/mods/a.jar", []byte("new-a"))
+	fake.setRemote("/mods/b.jar", []byte("new-b"))
+	if err := client.RestoreBackup(context.Background(), "daemon", "instance", "/", "profile1", backup, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(fake.remoteFile("/mods/a.jar")); got != "old-a" {
+		t.Fatalf("a.jar = %q", got)
+	}
+	if got := string(fake.remoteFile("/mods/sub/b.jar")); got != "old-b" {
+		t.Fatalf("sub/b.jar = %q", got)
+	}
+	if len(fake.remoteFile("/mods/b.jar")) != 0 {
+		t.Fatal("file added after the snapshot was not removed")
+	}
+}
+
+func TestCreateBackupRecordsMissingAndEmptyDirs(t *testing.T) {
+	fake := newFakeMCSM(t, "key")
+	defer fake.Close()
+	fake.dirs["/config"] = true
+	client, err := NewClient(fake.URL(), "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backup, err := client.CreateBackup(context.Background(), "daemon", "instance", "/", "profile1",
+		[]string{"mods", "config"}, "sync", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(backup.MissingDirs) != 1 || backup.MissingDirs[0] != "mods" {
+		t.Fatalf("missing = %#v", backup.MissingDirs)
+	}
+	if len(backup.EmptyDirs) != 1 || backup.EmptyDirs[0] != "config" {
+		t.Fatalf("empty = %#v", backup.EmptyDirs)
+	}
+}
+
 func TestUploadAndIncrementalSync(t *testing.T) {
 	fake := newFakeMCSM(t, "key")
 	defer fake.Close()
@@ -168,6 +300,115 @@ func TestUploadAndIncrementalSync(t *testing.T) {
 	}
 	if !containsStage(stages, "upload") {
 		t.Fatalf("upload stage not reported: %#v", stages)
+	}
+}
+
+func writeModJar(t *testing.T, filePath, metadataName, metadata string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.Create(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := zip.NewWriter(file)
+	entry, err := writer.Create(metadataName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte(metadata)); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncSkipsClientOnlyMods(t *testing.T) {
+	fake := newFakeMCSM(t, "key")
+	defer fake.Close()
+	local := t.TempDir()
+	writeModJar(t, filepath.Join(local, "mods", "sodium.jar"), "fabric.mod.json",
+		`{"id":"sodium","environment":"client"}`)
+	writeModJar(t, filepath.Join(local, "mods", "lithium.jar"), "fabric.mod.json",
+		`{"id":"lithium","environment":"*"}`)
+	mustWrite(t, filepath.Join(local, "config", "server.toml"), "enabled=true")
+
+	client, err := NewClient(fake.URL(), "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.Sync(context.Background(), "daemon", "instance", SyncOptions{
+		LocalDir: local, RemoteRoot: "/", Dirs: []string{"mods", "config"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Uploaded != 2 || result.Filtered != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(fake.remoteFile("/mods/sodium.jar")) != 0 {
+		t.Fatal("client-only mod was uploaded")
+	}
+	if len(fake.remoteFile("/mods/lithium.jar")) == 0 {
+		t.Fatal("server mod was not uploaded")
+	}
+}
+
+func TestSyncManualSelectionDoesNotDeleteUnselected(t *testing.T) {
+	fake := newFakeMCSM(t, "key")
+	defer fake.Close()
+	fake.setRemote("/mods/old.jar", []byte("keep-me"))
+	local := t.TempDir()
+	mustWrite(t, filepath.Join(local, "mods", "a.jar"), "aaa")
+	mustWrite(t, filepath.Join(local, "mods", "b.jar"), "bbb")
+	mustWrite(t, filepath.Join(local, "config", "x.txt"), "xx")
+
+	client, err := NewClient(fake.URL(), "key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.Sync(context.Background(), "daemon", "instance", SyncOptions{
+		LocalDir: local, RemoteRoot: "/", Dirs: []string{"mods", "config"},
+		Files: []string{"mods/a.jar", "config/x.txt"}, DeleteExtras: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Uploaded != 2 || result.Deleted != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(fake.remoteFile("/mods/b.jar")) != 0 {
+		t.Fatal("unselected file was uploaded")
+	}
+	if string(fake.remoteFile("/mods/old.jar")) != "keep-me" {
+		t.Fatal("manual sync deleted an unselected remote file")
+	}
+}
+
+func TestScanFilesMarksClientOnlyMods(t *testing.T) {
+	local := t.TempDir()
+	writeModJar(t, filepath.Join(local, "mods", "sodium.jar"), "fabric.mod.json",
+		`{"id":"sodium","environment":"client"}`)
+	mustWrite(t, filepath.Join(local, "mods", "plain.jar"), "not a zip")
+	files, err := ScanFiles(local, []string{"mods"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("files = %#v", files)
+	}
+	for _, file := range files {
+		if file.Path == "mods/sodium.jar" && !file.ClientOnly {
+			t.Fatalf("sodium should be client-only: %#v", file)
+		}
+		if file.Path == "mods/plain.jar" && file.ClientOnly {
+			t.Fatalf("unknown jar must be kept: %#v", file)
+		}
 	}
 }
 
@@ -238,26 +479,30 @@ type fakeUpload struct {
 }
 
 type fakeMCSM struct {
-	server   *httptest.Server
-	apiKey   string
-	legacy   bool
-	mu       sync.Mutex
-	remote   map[string][]byte
-	dirs     map[string]bool
-	uploads  map[string]string // password -> upload dir
-	sessions map[string]*fakeUpload
-	nextID   int
-	nextPass int
+	server            *httptest.Server
+	apiKey            string
+	legacy            bool
+	hideUserInstances bool
+	noGlobal          bool
+	permission        int
+	mu                sync.Mutex
+	remote            map[string][]byte
+	dirs              map[string]bool
+	uploads           map[string]string // password -> upload dir
+	sessions          map[string]*fakeUpload
+	nextID            int
+	nextPass          int
 }
 
 func newFakeMCSM(t *testing.T, apiKey string) *fakeMCSM {
 	t.Helper()
 	fake := &fakeMCSM{
-		apiKey:   apiKey,
-		remote:   map[string][]byte{},
-		dirs:     map[string]bool{"/": true},
-		uploads:  map[string]string{},
-		sessions: map[string]*fakeUpload{},
+		apiKey:     apiKey,
+		permission: 10,
+		remote:     map[string][]byte{},
+		dirs:       map[string]bool{"/": true},
+		uploads:    map[string]string{},
+		sessions:   map[string]*fakeUpload{},
 	}
 	fake.server = httptest.NewServer(http.HandlerFunc(fake.handle))
 	t.Cleanup(fake.server.Close)
@@ -294,13 +539,49 @@ func (f *fakeMCSM) handle(w http.ResponseWriter, r *http.Request) {
 			writeEnvelope(w, http.StatusForbidden, "API Key disabled")
 			return
 		}
+		instances := []map[string]any{{
+			"daemonId": "daemon", "instanceUuid": "instance",
+			"nickname": "Test Server", "status": 3, "apiKey": "should-not-leak",
+		}}
+		if f.hideUserInstances {
+			instances = []map[string]any{}
+		}
 		writeEnvelope(w, http.StatusOK, map[string]any{
-			"instances": []map[string]any{{
-				"daemonId": "daemon", "instanceUuid": "instance",
-				"nickname": "Test Server", "status": 3, "apiKey": "should-not-leak",
+			"instances": instances, "permission": f.permission,
+		})
+	case p == "/api/service/remote_services_instances_global" && r.Method == http.MethodGet:
+		if f.noGlobal {
+			http.NotFound(w, r)
+			return
+		}
+		writeEnvelope(w, http.StatusOK, map[string]any{
+			"daemon": map[string]any{
+				"instances": []map[string]any{{
+					"instanceUuid": "global-instance", "status": 3,
+					"config": map[string]any{"nickname": "Global Server"},
+				}},
+				"maxPage": 1, "page": 1,
+			},
+		})
+	case p == "/api/service/remote_services_system" && r.Method == http.MethodGet:
+		writeEnvelope(w, http.StatusOK, []map[string]any{{"uuid": "daemon"}})
+	case p == "/api/service/remote_service_instances" && r.Method == http.MethodGet:
+		if r.URL.Query().Get("daemonId") != "daemon" {
+			http.NotFound(w, r)
+			return
+		}
+		writeEnvelope(w, http.StatusOK, map[string]any{
+			"page": 1, "maxPage": 1,
+			"data": []map[string]any{{
+				"instanceUuid": "global-instance", "status": 0,
+				"config": map[string]any{"nickname": "Global Server"},
 			}},
 		})
 	case p == "/api/instance" && r.Method == http.MethodGet:
+		if r.URL.Query().Get("daemonId") != "daemon" || r.URL.Query().Get("uuid") != "instance" {
+			writeEnvelope(w, http.StatusForbidden, "instance not found")
+			return
+		}
 		writeEnvelope(w, http.StatusOK, map[string]any{
 			"instanceUuid": "instance", "status": 3,
 			"config": map[string]any{"nickname": "Test Server"},
@@ -341,8 +622,71 @@ func (f *fakeMCSM) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		for _, target := range body.Targets {
-			delete(f.remote, target)
-			delete(f.dirs, target)
+			prefix := strings.TrimRight(target, "/") + "/"
+			for remotePath := range f.remote {
+				if remotePath == target || strings.HasPrefix(remotePath, prefix) {
+					delete(f.remote, remotePath)
+				}
+			}
+			for dir := range f.dirs {
+				if dir == target || strings.HasPrefix(dir, prefix) {
+					delete(f.dirs, dir)
+				}
+			}
+		}
+		writeEnvelope(w, http.StatusOK, true)
+	case p == "/api/files/move" && r.Method == http.MethodPut:
+		var body struct {
+			Targets [][2]string `json:"targets"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for _, pair := range body.Targets {
+			data, ok := f.remote[pair[0]]
+			if !ok {
+				continue
+			}
+			f.remote[pair[1]] = data
+			delete(f.remote, pair[0])
+			f.dirs[path.Dir(pair[1])] = true
+		}
+		writeEnvelope(w, http.StatusOK, true)
+	case p == "/api/files/compress" && r.Method == http.MethodPost:
+		var body struct {
+			Source  string   `json:"source"`
+			Targets []string `json:"targets"`
+			Type    int      `json:"type"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Type == 1 {
+			entries := map[string][]byte{}
+			for _, target := range body.Targets {
+				base := path.Base(target)
+				if data, ok := f.remote[target]; ok {
+					entries[base] = data
+					continue
+				}
+				prefix := target + "/"
+				for remotePath, data := range f.remote {
+					if strings.HasPrefix(remotePath, prefix) {
+						entries[base+"/"+strings.TrimPrefix(remotePath, prefix)] = data
+					}
+				}
+			}
+			raw, _ := json.Marshal(entries)
+			f.remote[body.Source] = raw
+			f.dirs[path.Dir(body.Source)] = true
+		} else {
+			target := ""
+			if len(body.Targets) > 0 {
+				target = body.Targets[0]
+			}
+			var entries map[string][]byte
+			_ = json.Unmarshal(f.remote[body.Source], &entries)
+			for name, data := range entries {
+				full := path.Join(target, name)
+				f.remote[full] = data
+				f.dirs[path.Dir(full)] = true
+			}
 		}
 		writeEnvelope(w, http.StatusOK, true)
 	case p == "/api/files/upload" && r.Method == http.MethodPost:

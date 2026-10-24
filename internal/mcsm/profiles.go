@@ -150,6 +150,109 @@ func (p *Profiles) Delete(id string) error {
 	return p.saveLocked()
 }
 
+// AddBackup stores snapshot metadata for a profile and keeps only the newest
+// max entries. It returns the backups that fell out of the window so the caller
+// can delete their remote archives.
+func (p *Profiles) AddBackup(id string, backup Backup, max int) ([]Backup, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for idx := range p.items {
+		if p.items[idx].ID != id {
+			continue
+		}
+		if max <= 0 {
+			max = 5
+		}
+		p.items[idx].Backups = append([]Backup{backup}, p.items[idx].Backups...)
+		var removed []Backup
+		if len(p.items[idx].Backups) > max {
+			removed = append(removed, p.items[idx].Backups[max:]...)
+			p.items[idx].Backups = p.items[idx].Backups[:max]
+		}
+		if err := p.saveLocked(); err != nil {
+			return removed, err
+		}
+		return removed, nil
+	}
+	return nil, errors.New("服务器配置不存在")
+}
+
+// TrimBackups keeps only the newest max snapshots and returns the entries that
+// were removed from the metadata.
+func (p *Profiles) TrimBackups(id string, max int) ([]Backup, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if max <= 0 {
+		max = 5
+	}
+	for idx := range p.items {
+		if p.items[idx].ID != id {
+			continue
+		}
+		if len(p.items[idx].Backups) <= max {
+			return nil, nil
+		}
+		removed := append([]Backup(nil), p.items[idx].Backups[max:]...)
+		p.items[idx].Backups = p.items[idx].Backups[:max]
+		if err := p.saveLocked(); err != nil {
+			return nil, err
+		}
+		return removed, nil
+	}
+	return nil, errors.New("服务器配置不存在")
+}
+
+// Backup returns one stored snapshot.
+func (p *Profiles) Backup(id, backupID string) (Profile, Backup, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, item := range p.items {
+		if item.ID != id {
+			continue
+		}
+		for _, backup := range item.Backups {
+			if backup.ID == backupID {
+				return item, backup, true
+			}
+		}
+		return item, Backup{}, false
+	}
+	return Profile{}, Backup{}, false
+}
+
+// RemoveBackup drops one snapshot from a profile's history.
+func (p *Profiles) RemoveBackup(id, backupID string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for idx := range p.items {
+		if p.items[idx].ID != id {
+			continue
+		}
+		out := p.items[idx].Backups[:0]
+		for _, backup := range p.items[idx].Backups {
+			if backup.ID != backupID {
+				out = append(out, backup)
+			}
+		}
+		p.items[idx].Backups = out
+		return p.saveLocked()
+	}
+	return errors.New("服务器配置不存在")
+}
+
+// MarkRolledBack records a successful rollback time.
+func (p *Profiles) MarkRolledBack(id string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for idx := range p.items {
+		if p.items[idx].ID == id {
+			p.items[idx].LastRollback = Now()
+			_ = p.saveLocked()
+			return
+		}
+	}
+}
+
 // MarkSynced records a successful synchronization time.
 func (p *Profiles) MarkSynced(id string) {
 	p.mu.Lock()

@@ -36,7 +36,7 @@ type Version struct {
 	ID                 string              `json:"id"`
 	Type               string              `json:"type"`
 	MainClass          string              `json:"mainClass"`
-	InheritsFrom       string              `json:"inheritsFrom"`
+	InheritsFrom       string              `json:"inheritsFrom,omitempty"`
 	MinecraftArguments string              `json:"minecraftArguments"`
 	MinimumLauncherVer int                 `json:"minimumLauncherVersion"`
 	Arguments          Arguments           `json:"arguments"`

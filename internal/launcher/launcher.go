@@ -141,7 +141,11 @@ func (l *Launcher) Start(ctx context.Context, opts Options) (*Process, error) {
 	}
 	gameDir := strings.TrimSpace(opts.GameDir)
 	if gameDir == "" {
-		gameDir = filepath.Join(l.Paths.Instances, inst.ID)
+		versionID := strings.TrimSpace(inst.VersionID)
+		if versionID == "" {
+			versionID = inst.ID
+		}
+		gameDir = filepath.Join(l.Paths.Versions, versionID)
 	}
 	if !filepath.IsAbs(gameDir) {
 		gameDir, _ = filepath.Abs(gameDir)
@@ -258,6 +262,11 @@ func (l *Launcher) Start(ctx context.Context, opts Options) (*Process, error) {
 func (l *Launcher) prepareNatives(merged mojang.Version, gameDir, versionID string) (string, string, error) {
 	safeVersion := sanitizeComponent(versionID)
 	base := filepath.Join(gameDir, "natives", safeVersion)
+	if filepath.Base(filepath.Dir(gameDir)) == "versions" {
+		// Match PCL/HMCL isolated version folders: the native directory sits
+		// next to the version JSON/JAR instead of inside a nested natives tree.
+		base = filepath.Join(gameDir, filepath.Base(gameDir)+"-natives")
+	}
 	suffix := mojang.NativeDirectorySuffix(merged.Arguments.JVM)
 	effective := base
 	if suffix != "" {

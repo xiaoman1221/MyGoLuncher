@@ -17,6 +17,7 @@ import {
 import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import { PageHeader } from '../components/PageHeader';
+import { DownloadMirrorSettings, ResourceMirrorSettings } from '../components/MirrorSettings';
 import type { Settings } from '../lib/types';
 import {
   accountKindKey,
@@ -346,7 +347,39 @@ export function SettingsPage() {
               {form.versionIsolation !== false ? t('settings.versionIsolationOn') : t('settings.versionIsolationOff')}
             </span>
           </div>
+
+          <div className="field">
+            <label className="toggle-row">
+              <span>
+                <strong>{t('settings.serverBackup')}</strong>
+                <small>{t('settings.serverBackupHint')}</small>
+              </span>
+              <input
+                type="checkbox"
+                className="switch"
+                checked={form.serverBackupDisabled !== true}
+                onChange={(event) => patch('serverBackupDisabled', !event.target.checked)}
+              />
+            </label>
+            <span className="field-hint">{t('settings.serverBackupNote')}</span>
+          </div>
         </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>{t('settings.gameMirrorTitle')}</h2>
+          <p>{t('settings.gameMirrorBody')}</p>
+        </div>
+        <DownloadMirrorSettings form={form} patch={patch} t={t} />
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>{t('settings.resourceMirrorTitle')}</h2>
+          <p>{t('settings.resourceMirrorBody')}</p>
+        </div>
+        <ResourceMirrorSettings form={form} patch={patch} t={t} />
       </section>
 
       <section className="panel">
@@ -509,6 +542,17 @@ export function SettingsPage() {
           </button>
           <button type="button" className="btn btn-ghost btn-sm" onClick={() => void api.openConfigFolder()}>
             <FolderOpen size={15} /> {t('settings.openConfigDir')}
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => {
+              void api.syncLauncherProfiles()
+                .then(() => pushToast('success', t('settings.portableDone')))
+                .catch((error: Error) => pushToast('error', t('settings.portableFailed'), error.message));
+            }}
+          >
+            <Globe2 size={15} /> {t('settings.portableSync')}
           </button>
         </div>
       </section>

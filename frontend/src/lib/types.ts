@@ -2,7 +2,16 @@ export interface MirrorConfig {
   id: string;
   name: string;
   url: string;
-  kind: 'bmclapi' | 'proxy' | string;
+  kind: 'bmclapi' | 'proxy' | 'mcim' | string;
+}
+
+export interface ResourceMirror {
+  id: string;
+  name: string;
+  baseUrl: string;
+  kind: 'official' | 'mcim' | 'proxy' | string;
+  official: boolean;
+  custom: boolean;
 }
 
 export interface MirrorSpeedResult {
@@ -24,6 +33,9 @@ export interface Settings {
   microsoftClientID: string;
   extraJvmArgs: string;
   customMirrors: MirrorConfig[];
+  resourceMirror: string;
+  customResourceMirrors: MirrorConfig[];
+  serverBackupDisabled: boolean;
   downloadWorkers: number;
   showGameConsole: boolean;
   showLauncherOnLaunch: boolean;
@@ -278,6 +290,40 @@ export interface ModpackImportResponse {
   warnings: string[];
 }
 
+export interface ModUpdateFile {
+  fileName: string;
+  relativePath: string;
+  name: string;
+  currentVersion: string;
+  source?: string;
+  projectId?: string;
+  versionId?: string;
+  latestVersion?: string;
+  latestName?: string;
+  fileSize: number;
+  updateAvailable: boolean;
+  identified: boolean;
+  error?: string;
+}
+
+export interface ModUpdateReport {
+  instanceId: string;
+  files: ModUpdateFile[];
+  identified: number;
+  updates: number;
+  unidentified: number;
+  warnings: string[];
+}
+
+export interface ModUpdateApplyRequest {
+  instanceId: string;
+  relativePath: string;
+  source: string;
+  projectId: string;
+  versionId: string;
+  force: boolean;
+}
+
 export interface InstallProjectResult {
   fileName: string;
   path: string;
@@ -286,6 +332,7 @@ export interface InstallProjectResult {
   gameVersion: string;
   loader: string;
   dependencies: string[];
+  rollbackPath?: string;
 }
 
 export interface ExternalCandidate {
@@ -298,6 +345,7 @@ export interface ExternalCandidate {
   modCount: number;
   hasSaves: boolean;
   warnings: string[];
+  contentDir?: string;
 }
 
 export interface ExternalScanResult {
@@ -379,6 +427,7 @@ export interface ResourceSearchResult {
   warnings: string[];
   curseForgeReady: boolean;
   queryUsed: string;
+  queryAlternatives?: string[];
   aiUsed: boolean;
   aiError: string;
   cjkQuery: boolean;
@@ -415,6 +464,15 @@ export type ServerSyncDir =
   | 'resourcepacks'
   | 'shaderpacks';
 
+export interface ServerBackup {
+  id: string;
+  createdAt: string;
+  reason?: string;
+  dirs: ServerSyncDir[];
+  missingDirs?: ServerSyncDir[];
+  emptyDirs?: ServerSyncDir[];
+}
+
 export interface ServerProfile {
   id: string;
   name: string;
@@ -427,6 +485,8 @@ export interface ServerProfile {
   deleteExtras: boolean;
   createdAt?: string;
   lastSync?: string;
+  lastRollback?: string;
+  backups?: ServerBackup[];
   apiKeySet: boolean;
 }
 
@@ -470,7 +530,16 @@ export interface ServerSyncResult {
   uploaded: number;
   skipped: number;
   deleted: number;
+  filtered: number;
   bytes: number;
+}
+
+export interface ServerSyncFile {
+  path: string;
+  dir: ServerSyncDir;
+  size: number;
+  clientOnly: boolean;
+  reason?: string;
 }
 
 export interface LanPlayer {
@@ -518,6 +587,51 @@ export interface LanSnapshot {
   worlds: LanWorld[];
   peers: LanPeer[];
   warnings?: string[];
+}
+
+export interface LanInstanceInfo {
+  id: string;
+  name: string;
+  mcVersion: string;
+  loader: string;
+  loaderVersion: string;
+  launchVersionId: string;
+}
+
+export interface LanSyncFileChange {
+  path: string;
+  state: 'new' | 'changed';
+  reason?: string;
+  localSize: number;
+  remoteSize: number;
+}
+
+export interface LanSyncPlan {
+  totalFiles: number;
+  newFiles: number;
+  changedFiles: number;
+  sameFiles: number;
+  extraFiles: number;
+  newBytes: number;
+  changedBytes: number;
+  changes: LanSyncFileChange[];
+  extras: string[];
+  digest: string;
+}
+
+export interface LanSyncPreview {
+  peer: LanInstanceInfo;
+  target: LanInstanceInfo;
+  dirs: string[];
+  plan: LanSyncPlan;
+  digest: string;
+  versionMismatch: boolean;
+  loaderMismatch: boolean;
+  loaderVersionMismatch: boolean;
+  running: boolean;
+  blocking: boolean;
+  blockingReason?: string;
+  warnings: string[];
 }
 
 export interface LanSyncResult {

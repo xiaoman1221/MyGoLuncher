@@ -15,6 +15,8 @@ import (
 
 	"MyMinecraftGoLuncher/internal/httpx"
 	"MyMinecraftGoLuncher/internal/loader"
+	"MyMinecraftGoLuncher/internal/mirror"
+	"MyMinecraftGoLuncher/internal/modfilter"
 	"MyMinecraftGoLuncher/internal/mojang"
 	"MyMinecraftGoLuncher/internal/store"
 )
@@ -29,6 +31,7 @@ type Options struct {
 	GameDir   string
 	Dest      string
 	JavaMajor int
+	Sources   []mirror.Source
 	Progress  ProgressFunc
 }
 
@@ -78,7 +81,7 @@ func Export(ctx context.Context, opts Options) (Result, error) {
 	}
 	if loaderType := strings.ToLower(strings.TrimSpace(opts.Instance.Loader)); loaderType != "" &&
 		loaderType != "vanilla" && strings.TrimSpace(opts.Instance.LoaderVersion) == "" {
-		if resolved, err := loader.LatestVersion(ctx, loaderType, opts.Instance.MCVersion); err == nil {
+		if resolved, err := loader.LatestVersionWithSources(ctx, opts.Sources, loaderType, opts.Instance.MCVersion); err == nil {
 			opts.Instance.LoaderVersion = resolved
 		}
 	}
@@ -99,7 +102,7 @@ func Export(ctx context.Context, opts Options) (Result, error) {
 	defer os.Remove(tempName)
 
 	zw := zip.NewWriter(tempZip)
-	writeErr := writePack(zw, opts, runtimePath, runtimeName, runtimeKind, result.Warnings)
+	writeErr := writePack(zw, opts, runtimePath, runtimeName, runtimeKind, &result.Warnings)
 	if writeErr == nil {
 		writeErr = zw.Close()
 	} else {
@@ -129,18 +132,19 @@ func downloadRuntime(ctx context.Context, opts Options, tempDir string, progress
 	}
 	loaderVersion := strings.TrimSpace(inst.LoaderVersion)
 	if loaderType != "vanilla" && loaderVersion == "" {
-		resolved, err := loader.LatestVersion(ctx, loaderType, inst.MCVersion)
+		resolved, err := loader.LatestVersionWithSources(ctx, opts.Sources, loaderType, inst.MCVersion)
 		if err == nil {
 			loaderVersion = resolved
 		}
 	}
-	download := func(url, filename string, file httpx.File) (string, bool) {
-		file.URL = url
+	download := func(url, filename string, file httpx.File, resource mirror.Resource) (string, bool) {
 		file.Dest = filepath.Join(tempDir, filename)
 		file.Progress = func(done, total int64) {
 			progress("runtime", "正在下载服务器运行时…", int(done), int(total))
 		}
-		if err := httpx.Download(ctx, file); err != nil {
+		urls := mirror.CandidateURLs(opts.Sources, resource, url, inst.MCVersion)
+		urls = mirror.RankURLs(ctx, urls, 4*time.Second)
+		if err := httpx.DownloadAny(ctx, urls, file); err != nil {
 			warnings = append(warnings, fmt.Sprintf("服务器运行时 %s 下载失败: %v", filename, err))
 			return "", false
 		}
@@ -151,7 +155,7 @@ func downloadRuntime(ctx context.Context, opts Options, tempDir string, progress
 	case "fabric":
 		url, err := loader.FabricServerLauncherURL(ctx, inst.MCVersion, loaderVersion)
 		if err == nil {
-			if path, ok := download(url, "fabric-server-launch.jar", httpx.File{}); ok {
+			if path, ok := download(url, "fabric-server-launch.jar", httpx.File{}, mirror.ResourceLoaderMeta); ok {
 				return path, "fabric-server-launch.jar", runtimeFabric, warnings
 			}
 		} else {
@@ -159,7 +163,7 @@ func downloadRuntime(ctx context.Context, opts Options, tempDir string, progress
 		}
 		installerURL, err := loader.FabricInstallerURL(ctx)
 		if err == nil {
-			if path, ok := download(installerURL, "fabric-installer.jar", httpx.File{}); ok {
+			if path, ok := download(installerURL, "fabric-installer.jar", httpx.File{}, mirror.ResourceLoaderArtifact); ok {
 				warnings = append(warnings, "已将 Fabric 安装器放入服务器包，请先运行 install-server 脚本。")
 				return path, "fabric-installer.jar", runtimeFabricInstaller, warnings
 			}
@@ -169,7 +173,7 @@ func downloadRuntime(ctx context.Context, opts Options, tempDir string, progress
 	case "quilt":
 		url, err := loader.QuiltInstallerURL(ctx)
 		if err == nil {
-			if path, ok := download(url, "quilt-installer.jar", httpx.File{}); ok {
+			if path, ok := download(url, "quilt-installer.jar", httpx.File{}, mirror.ResourceLoaderArtifact); ok {
 				return path, "quilt-installer.jar", runtimeQuiltInstaller, warnings
 			}
 		} else {
@@ -185,7 +189,7 @@ func downloadRuntime(ctx context.Context, opts Options, tempDir string, progress
 		if loaderType == "neoforge" {
 			filename = "neoforge-installer.jar"
 		}
-		if path, ok := download(url, filename, httpx.File{}); ok {
+		if path, ok := download(url, filename, httpx.File{}, mirror.ResourceLoaderArtifact); ok {
 			return path, filename, runtimeForgeInstaller, warnings
 		}
 	default:
@@ -199,7 +203,7 @@ func downloadRuntime(ctx context.Context, opts Options, tempDir string, progress
 			warnings = append(warnings, "该 Minecraft 版本没有可用的官方服务端。")
 			break
 		}
-		if path, ok := download(server.URL, "server.jar", httpx.File{SHA1: server.SHA1, Size: server.Size}); ok {
+		if path, ok := download(server.URL, "server.jar", httpx.File{SHA1: server.SHA1, Size: server.Size}, mirror.ResourceServer); ok {
 			return path, "server.jar", runtimeVanilla, warnings
 		}
 	}
@@ -207,7 +211,7 @@ func downloadRuntime(ctx context.Context, opts Options, tempDir string, progress
 	return "", "", "missing", warnings
 }
 
-func writePack(zw *zip.Writer, opts Options, runtimePath, runtimeName, runtimeKind string, warnings []string) error {
+func writePack(zw *zip.Writer, opts Options, runtimePath, runtimeName, runtimeKind string, warnings *[]string) error {
 	inst := opts.Instance
 	progress := opts.Progress
 	if progress == nil {
@@ -218,7 +222,13 @@ func writePack(zw *zip.Writer, opts Options, runtimePath, runtimeName, runtimeKi
 		if info, err := os.Stat(src); err != nil || !info.IsDir() {
 			continue
 		}
-		if err := addDir(zw, src, dir); err != nil {
+		var err error
+		if dir == "mods" {
+			err = addModsDir(zw, src, dir, warnings)
+		} else {
+			err = addDir(zw, src, dir)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -249,6 +259,10 @@ func writePack(zw *zip.Writer, opts Options, runtimePath, runtimeName, runtimeKi
 			return err
 		}
 	}
+	warningList := []string{}
+	if warnings != nil {
+		warningList = *warnings
+	}
 	manifest := map[string]any{
 		"minecraft":     inst.MCVersion,
 		"loader":        inst.Loader,
@@ -256,13 +270,13 @@ func writePack(zw *zip.Writer, opts Options, runtimePath, runtimeName, runtimeKi
 		"java":          opts.JavaMajor,
 		"runtime":       runtimeKind,
 		"createdAt":     time.Now().Format(time.RFC3339),
-		"warnings":      warnings,
+		"warnings":      warningList,
 	}
 	manifestBytes, _ := json.MarshalIndent(manifest, "", "  ")
 	if err := addBytes(zw, "server-pack.json", manifestBytes, 0o644); err != nil {
 		return err
 	}
-	readme := readmeFor(inst, opts.JavaMajor, runtimeKind, warnings)
+	readme := readmeFor(inst, opts.JavaMajor, runtimeKind, warningList)
 	if err := addBytes(zw, "README.txt", []byte(readme), 0o644); err != nil {
 		return err
 	}
@@ -370,8 +384,8 @@ func readmeFor(inst store.Instance, javaMajor int, runtimeKind string, warnings 
 	}
 	b.WriteString("\nAdjust -Xms/-Xmx in the start script to match your server memory.\n")
 	b.WriteString("请根据服务器内存调整 start 脚本中的 -Xms/-Xmx。\n")
-	b.WriteString("Client-only mods may need to be removed from mods/.\n")
-	b.WriteString("仅客户端模组可能需要从 mods/ 中移除。\n")
+	b.WriteString("Client-only mods are detected and excluded automatically.\n")
+	b.WriteString("仅客户端模组已被自动识别并从 mods/ 中剔除。\n")
 	if len(warnings) > 0 {
 		b.WriteString("\nWarnings / 警告\n")
 		for _, warning := range warnings {
@@ -388,6 +402,31 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// addModsDir adds mod jars except those that are unambiguously client-only.
+func addModsDir(zw *zip.Writer, root, prefix string, warnings *[]string) error {
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !entry.Type().IsRegular() {
+			return nil
+		}
+		if modfilter.IsModJar(path) {
+			if clientOnly, reason := modfilter.IsClientOnly(path); clientOnly {
+				if warnings != nil {
+					*warnings = append(*warnings, "已跳过仅客户端模组: "+entry.Name()+"（"+reason+"）")
+				}
+				return nil
+			}
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		return addFile(zw, path, filepath.ToSlash(filepath.Join(prefix, rel)))
+	})
 }
 
 func addDir(zw *zip.Writer, root, prefix string) error {

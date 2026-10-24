@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import {
   BadgeCheck,
   Check,
-  Copy,
   ExternalLink,
   Globe2,
   KeyRound,
@@ -76,7 +75,7 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
   const [msBusy, setMsBusy] = useState(false);
   const [msError, setMsError] = useState('');
   const [msDone, setMsDone] = useState(false);
-  const [copied, setCopied] = useState(false);
+
   const [offlineName, setOfflineName] = useState('');
   const [editingOfflineId, setEditingOfflineId] = useState<string | null>(null);
   const [servers, setServers] = useState<AuthlibServer[]>(fallbackServers);
@@ -91,7 +90,7 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
   const [yssBusy, setYssBusy] = useState(false);
   const [yssError, setYssError] = useState('');
   const [yssDone, setYssDone] = useState(false);
-  const [yssCopied, setYssCopied] = useState(false);
+
 
   useEffect(() => {
     if (!open) return;
@@ -183,17 +182,6 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
     }
   };
 
-  const copyCode = async () => {
-    if (!device) return;
-    try {
-      await navigator.clipboard.writeText(device.userCode);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch {
-      setCopied(false);
-    }
-  };
-
   const startYSS = async () => {
     setYssBusy(true);
     setYssError('');
@@ -220,17 +208,6 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
     } finally {
       setYssBusy(false);
       setYssDevice(null);
-    }
-  };
-
-  const copyYSS = async () => {
-    if (!yssDevice) return;
-    try {
-      await navigator.clipboard.writeText(yssDevice.userCode);
-      setYssCopied(true);
-      window.setTimeout(() => setYssCopied(false), 1500);
-    } catch {
-      setYssCopied(false);
     }
   };
 
@@ -395,10 +372,9 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
               {device && (
                 <div className="device-code-card">
                   <p>{t('account.microsoft.deviceHint')}</p>
-                  <button type="button" className="device-code" onClick={() => void copyCode()}>
+                  <div className="device-code">
                     <strong>{device.userCode}</strong>
-                    {copied ? <Check size={16} /> : <Copy size={16} />}
-                  </button>
+                  </div>
                   <a className="device-link" href={device.verificationUri} onClick={(event) => { event.preventDefault(); void api.openURL(device.verificationUri); }}>
                     {device.verificationUri} <ExternalLink size={13} />
                   </a>
@@ -469,10 +445,9 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
                   {yssDevice && (
                     <div className="device-code-card">
                       <p>{t('account.yss.codeHint')}</p>
-                      <button type="button" className="device-code" onClick={() => void copyYSS()}>
+                      <div className="device-code">
                         <strong>{yssDevice.userCode}</strong>
-                        {yssCopied ? <Check size={16} /> : <Copy size={16} />}
-                      </button>
+                      </div>
                       <a
                         className="device-link"
                         href={yssDevice.verificationUriComplete || yssDevice.verificationUri}

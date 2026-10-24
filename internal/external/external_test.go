@@ -133,6 +133,111 @@ func TestScanPrismInstances(t *testing.T) {
 	}
 }
 
+func TestScanModrinthProfileAndCopyExtraDirs(t *testing.T) {
+	root := t.TempDir()
+	instance := filepath.Join(root, "profiles", "abc123")
+	writeJSON(t, filepath.Join(instance, "profile.json"), map[string]any{
+		"name": "Modrinth Pack", "game_version": "1.20.1",
+		"loader": "fabric", "loader_version": "0.15.11",
+	})
+	writeFile(t, filepath.Join(instance, "mods", "sodium.jar"), "jar")
+	writeFile(t, filepath.Join(instance, "kubejs", "server_scripts", "a.js"), "script")
+	writeFile(t, filepath.Join(instance, "datapacks", "pack.zip"), "pack")
+
+	result, err := Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("candidates = %#v", result.Candidates)
+	}
+	candidate := result.Candidates[0]
+	if candidate.MCVersion != "1.20.1" || candidate.Loader != "fabric" || candidate.LoaderVersion != "0.15.11" {
+		t.Fatalf("candidate = %#v", candidate)
+	}
+	if candidate.ContentDir != instance {
+		t.Fatalf("content dir = %q, want %q", candidate.ContentDir, instance)
+	}
+	dest := t.TempDir()
+	if _, err := CopyContent(candidate, dest); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"mods/sodium.jar", "kubejs/server_scripts/a.js", "datapacks/pack.zip"} {
+		if _, err := os.Stat(filepath.Join(dest, filepath.FromSlash(name))); err != nil {
+			t.Fatalf("%s was not copied: %v", name, err)
+		}
+	}
+	found, err := FindCandidate(root, candidate.ID)
+	if err != nil || found.Name != candidate.Name {
+		t.Fatalf("FindCandidate from profiles container failed: %#v %v", found, err)
+	}
+}
+
+func TestScanCurseForgeInstance(t *testing.T) {
+	root := t.TempDir()
+	instance := filepath.Join(root, "Instances", "cf-pack")
+	writeJSON(t, filepath.Join(instance, "minecraftinstance.json"), map[string]any{
+		"name": "CF Pack", "gameVersion": "1.19.2",
+		"baseModLoader": map[string]any{"name": "forge-43.2.0"},
+	})
+	writeFile(t, filepath.Join(instance, "mods", "jei.jar"), "jar")
+	result, err := Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("candidates = %#v", result.Candidates)
+	}
+	candidate := result.Candidates[0]
+	if candidate.Name != "CF Pack" || candidate.MCVersion != "1.19.2" ||
+		candidate.Loader != "forge" || candidate.LoaderVersion != "43.2.0" {
+		t.Fatalf("candidate = %#v", candidate)
+	}
+}
+
+func TestScanJarOnlyVersion(t *testing.T) {
+	mcRoot := filepath.Join(t.TempDir(), ".minecraft")
+	name := "1.20.1-forge-47.2.0"
+	versionDir := filepath.Join(mcRoot, "versions", name)
+	writeFile(t, filepath.Join(versionDir, name+".jar"), "jar")
+	writeFile(t, filepath.Join(versionDir, "mods", "mod.jar"), "jar")
+	result, err := Scan(mcRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("candidates = %#v", result.Candidates)
+	}
+	candidate := result.Candidates[0]
+	if candidate.MCVersion != "1.20.1" || candidate.Loader != "forge" || candidate.LoaderVersion != "47.2.0" {
+		t.Fatalf("candidate = %#v", candidate)
+	}
+	if len(candidate.Warnings) == 0 {
+		t.Fatal("jar-only import should carry an inference warning")
+	}
+}
+
+func TestScanATLauncherStyleInstance(t *testing.T) {
+	root := t.TempDir()
+	instance := filepath.Join(root, "instances", "atl-pack")
+	writeJSON(t, filepath.Join(instance, "instance.json"), map[string]any{
+		"name": "ATL Pack", "minecraftVersion": "1.18.2",
+		"loader": map[string]any{"type": "fabric", "version": "0.14.21"},
+	})
+	writeFile(t, filepath.Join(instance, "mods", "a.jar"), "jar")
+	result, err := Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Candidates) != 1 {
+		t.Fatalf("candidates = %#v", result.Candidates)
+	}
+	candidate := result.Candidates[0]
+	if candidate.MCVersion != "1.18.2" || candidate.Loader != "fabric" || candidate.LoaderVersion != "0.14.21" {
+		t.Fatalf("candidate = %#v", candidate)
+	}
+}
+
 func TestScanDirectVersionFolder(t *testing.T) {
 	mcRoot := filepath.Join(t.TempDir(), ".minecraft")
 	versionDir := filepath.Join(mcRoot, "versions", "1.21.1")
@@ -231,6 +336,22 @@ func TestCopyContentFromGameRootAndPrismInstance(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(prismDest, "mods", "b.jar")); err != nil {
 		t.Fatalf("Prism .minecraft content was not copied: %v", err)
+	}
+}
+
+func TestExtractMCVersionIgnoresLoaderVersions(t *testing.T) {
+	cases := map[string]string{
+		"1.20.1-forge-47.2.0":          "1.20.1",
+		"fabric-loader-0.16.10-1.21.1": "1.21.1",
+		"forge-47.2.0":                 "",
+		"neoforge-21.1.0":              "",
+		"24w14a":                       "24w14a",
+		"OptiFine_1.7.10_HD_U_E7":      "1.7.10",
+	}
+	for input, want := range cases {
+		if got := extractMCVersion(input); got != want {
+			t.Fatalf("extractMCVersion(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   FileArchive,
   FolderOpen,
@@ -12,18 +12,33 @@ import { useApp } from '../lib/app-context';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { loaderLabel, loaderTone } from '../lib/format';
+import type { ResourceMirror } from '../lib/types';
 
 export function ModpacksPage() {
   const {
-    instances, refreshInstances, selectInstance, pushToast, openInstanceFolder, t,
+    instances, settings, refreshInstances, selectInstance, pushToast, openInstanceFolder, t,
   } = useApp();
   const [importing, setImporting] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
+  const [mirrors, setMirrors] = useState<ResourceMirror[]>([]);
+  const [mirrorId, setMirrorId] = useState(settings?.resourceMirror || 'official');
+
+  useEffect(() => {
+    let alive = true;
+    api.listResourceMirrors()
+      .then((rows) => { if (alive) setMirrors(rows); })
+      .catch(() => { if (alive) setMirrors([]); });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    if (settings?.resourceMirror) setMirrorId(settings.resourceMirror);
+  }, [settings?.resourceMirror]);
 
   const importPack = async () => {
     setImporting(true);
     try {
-      const response = await api.importModpackDialog();
+      const response = await api.importModpackDialog(mirrorId);
       if (!response.instance.id) return;
       await refreshInstances();
       selectInstance(response.instance.id);
@@ -81,12 +96,6 @@ export function ModpacksPage() {
         kicker="MODPACKS"
         title={<>{t('modpacks.title')} <span className="title-accent">/</span> {t('modpacks.tail')}</>}
         description={t('modpacks.description')}
-        actions={
-          <button type="button" className="btn btn-primary" onClick={() => void importPack()} disabled={importing}>
-            {importing ? <LoaderCircle size={16} className="spin" /> : <Upload size={16} />}
-            {importing ? t('modpacks.importing') : t('modpacks.importButton')}
-          </button>
-        }
       />
 
       <section className="panel">
@@ -94,7 +103,15 @@ export function ModpacksPage() {
           <h2>{t('modpacks.importTitle')}</h2>
           <p>{t('modpacks.importBody')}</p>
         </div>
-        <div className="panel-actions">
+        <div className="panel-actions modpack-import-actions">
+          <label className="field modpack-mirror-field">
+            <span className="field-label">{t('modpacks.mirrorLabel')}</span>
+            <select className="text-input" value={mirrorId} onChange={(event) => setMirrorId(event.target.value)}>
+              {(mirrors.length > 0 ? mirrors : [{ id: 'official', name: t('settings.mirrorOfficial') } as ResourceMirror]).map((source) => (
+                <option key={source.id} value={source.id}>{source.name}</option>
+              ))}
+            </select>
+          </label>
           <button type="button" className="btn btn-primary" onClick={() => void importPack()} disabled={importing}>
             {importing ? <LoaderCircle size={16} className="spin" /> : <Upload size={16} />}
             {importing ? t('modpacks.importing') : t('modpacks.importButton')}
@@ -108,6 +125,7 @@ export function ModpacksPage() {
           <h2>{t('modpacks.exportTitle')}</h2>
           <p>{t('modpacks.exportBody')}</p>
         </div>
+        <p className="panel-note">{t('modpacks.compatNote')}</p>
 
         {instances.length === 0 ? (
           <EmptyState

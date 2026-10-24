@@ -17,7 +17,7 @@ import { useApp } from '../lib/app-context';
 import { onEvent } from '../lib/events';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
-import { Modal } from '../components/Modal';
+import { LanSyncModal } from '../components/LanSyncModal';
 import { cn } from '../lib/format';
 import type { MessageKey } from '../lib/i18n';
 import type {
@@ -39,10 +39,6 @@ const SHARE_DIR_KEYS: Record<LanShareDir, MessageKey> = {
 
 function isShareDir(value: string): value is LanShareDir {
   return value === 'mods' || value === 'shaderpacks' || value === 'resourcepacks' || value === 'config';
-}
-
-function normalizeLoader(value?: string) {
-  return (value ?? '').trim().toLowerCase() || 'vanilla';
 }
 
 const emptySnapshot: LanSnapshot = {
@@ -464,114 +460,6 @@ export function LanPage() {
         />
       )}
     </div>
-  );
-}
-
-function LanSyncModal({
-  peer,
-  instances,
-  selectedId,
-  onClose,
-}: {
-  peer: LanPeer;
-  instances: InstanceView[];
-  selectedId: string | null;
-  onClose: () => void;
-}) {
-  const { pushToast, refreshInstances, t } = useApp();
-  const [syncing, setSyncing] = useState(false);
-
-  const compatible = useMemo(() => instances.filter((instance) => {
-    if (peer.mcVersion && instance.mcVersion !== peer.mcVersion) return false;
-    return normalizeLoader(instance.loader) === normalizeLoader(peer.loader);
-  }), [instances, peer]);
-
-  const [targetId, setTargetId] = useState(() => {
-    if (selectedId && compatible.some((instance) => instance.id === selectedId)) return selectedId;
-    return compatible[0]?.id ?? '';
-  });
-
-  useEffect(() => {
-    if (!compatible.some((instance) => instance.id === targetId)) {
-      setTargetId(compatible[0]?.id ?? '');
-    }
-  }, [compatible, targetId]);
-
-  const start = async () => {
-    if (!targetId) return;
-    setSyncing(true);
-    try {
-      const result = await api.syncFromLanPeer(peer.id, targetId);
-      pushToast('success', t('lan.syncDone'), t('lan.syncSummary', {
-        downloaded: result.downloaded,
-        skipped: result.skipped,
-      }));
-      await refreshInstances();
-      onClose();
-    } catch (error) {
-      pushToast('error', t('lan.syncFailed'), (error as Error).message);
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      closeable={!syncing}
-      title={t('lan.syncTitle', { name: peer.name })}
-      eyebrow="LAN SYNC"
-      description={t('lan.syncBody')}
-      footer={
-        <>
-          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={syncing}>
-            {t('common.cancel')}
-          </button>
-          <button type="button" className="btn btn-primary" onClick={() => void start()} disabled={syncing || !targetId}>
-            {syncing ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}
-            {syncing ? t('lan.syncing') : t('lan.syncStart')}
-          </button>
-        </>
-      }
-    >
-      <div className="settings-fields">
-        <div className="lan-sync-source">
-          <span className="field-label">{t('lan.syncSource')}</span>
-          <strong>{peer.instance || 'Minecraft'}</strong>
-          <div className="chip-row">
-            <span className="chip">{peer.mcVersion || '—'}</span>
-            <span className="chip">{peer.loader || 'Vanilla'}</span>
-            {(peer.syncDirs ?? []).map((dir) => (
-              <span key={dir} className="chip">{isShareDir(dir) ? t(SHARE_DIR_KEYS[dir]) : dir}</span>
-            ))}
-          </div>
-        </div>
-        {compatible.length > 0 ? (
-          <label className="field">
-            <span className="field-label">{t('lan.syncTarget')}</span>
-            <select className="text-input" value={targetId} onChange={(event) => setTargetId(event.target.value)}>
-              {compatible.map((instance) => (
-                <option key={instance.id} value={instance.id}>
-                  {instance.name} · {instance.mcVersion} · {instance.loader}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <div className="inline-banner banner-warning">
-            <div>
-              <strong>{t('lan.syncNoMatch')}</strong>
-              <span>{t('lan.syncNoMatchBody', {
-                version: peer.mcVersion || '—',
-                loader: peer.loader || 'Vanilla',
-              })}</span>
-            </div>
-          </div>
-        )}
-        <p className="field-hint">{t('lan.syncWarning')}</p>
-      </div>
-    </Modal>
   );
 }
 

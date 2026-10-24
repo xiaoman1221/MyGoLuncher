@@ -85,8 +85,11 @@ func SearchMinecraftFolders(ctx context.Context, root string, progress SearchPro
 
 			// Direct candidates. Scan already understands .minecraft,
 			// versions, Prism instances and single version folders.
-			direct := lower == ".minecraft" || lower == "versions" ||
+			direct := lower == ".minecraft" || lower == "versions" || lower == "instances" || lower == "profiles" ||
 				util.Exists(filepath.Join(child, "mmc-pack.json")) ||
+				util.Exists(filepath.Join(child, "profile.json")) ||
+				util.Exists(filepath.Join(child, "minecraftinstance.json")) ||
+				util.Exists(filepath.Join(child, "instance.json")) ||
 				util.Exists(filepath.Join(child, "versions"))
 			if direct {
 				if addScan(child) {
