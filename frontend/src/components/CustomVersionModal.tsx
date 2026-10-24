@@ -1,12 +1,32 @@
 import { useEffect, useState } from 'react';
-import { FolderOpen, LoaderCircle, Plus } from 'lucide-react';
+import { FolderOpen, LoaderCircle, Plus, Search } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import { Modal } from './Modal';
 import { loaderLabel } from '../lib/format';
-import type { ExternalImportResponse } from '../lib/types';
+import type {
+  ExternalCandidate,
+  ExternalImportResponse,
+  ExternalScanResult,
+} from '../lib/types';
 
 const loaders = ['vanilla', 'fabric', 'quilt', 'forge', 'neoforge'] as const;
+
+interface DetectedVersion {
+  key: string;
+  scan: ExternalScanResult;
+  candidate: ExternalCandidate;
+}
+
+function flattenScans(results: ExternalScanResult[]): DetectedVersion[] {
+  const out: DetectedVersion[] = [];
+  for (const scan of results) {
+    for (const candidate of scan.candidates) {
+      out.push({ key: `${scan.root}::${candidate.id}`, scan, candidate });
+    }
+  }
+  return out;
+}
 
 interface CustomVersionModalProps {
   open: boolean;
@@ -22,6 +42,9 @@ export function CustomVersionModal({ open, onClose, onImported }: CustomVersionM
   const [loaderVersion, setLoaderVersion] = useState('');
   const [sourceDir, setSourceDir] = useState('');
   const [importing, setImporting] = useState(false);
+  const [searching, setSearching] = useState(false);
+  const [discovered, setDiscovered] = useState<DetectedVersion[]>([]);
+  const [selectedVersionKey, setSelectedVersionKey] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -31,12 +54,52 @@ export function CustomVersionModal({ open, onClose, onImported }: CustomVersionM
     setLoaderVersion('');
     setSourceDir('');
     setImporting(false);
+    setSearching(false);
+    setDiscovered([]);
+    setSelectedVersionKey('');
   }, [open]);
+
+  const applyDetected = (entry: DetectedVersion) => {
+    setSelectedVersionKey(entry.key);
+    setSourceDir(entry.scan.root);
+    setMcVersion(entry.candidate.mcVersion);
+    setLoader(entry.candidate.loader || 'vanilla');
+    setLoaderVersion(entry.candidate.loaderVersion || '');
+    if (entry.candidate.name.trim()) setName(entry.candidate.name);
+  };
+
+  const recognize = async (root: string, recursive: boolean) => {
+    const target = root.trim();
+    if (!target) {
+      pushToast('error', t('local.searchFailed'), t('local.customSourceRequired'));
+      return;
+    }
+    setSearching(true);
+    try {
+      const results = recursive
+        ? await api.searchMinecraftFolders(target)
+        : [await api.scanVersionDirectory(target)];
+      const found = flattenScans(results.filter((scan) => scan.candidates.length > 0));
+      setDiscovered(found);
+      if (found.length > 0) {
+        applyDetected(found[0]);
+      } else {
+        setSelectedVersionKey('');
+        pushToast('info', t('local.searchEmpty'), target);
+      }
+    } catch (error) {
+      pushToast('error', t('local.searchFailed'), (error as Error).message);
+    } finally {
+      setSearching(false);
+    }
+  };
 
   const pickDir = async () => {
     try {
       const path = await api.pickCustomSourceDirectory();
-      if (path) setSourceDir(path);
+      if (!path) return;
+      setSourceDir(path);
+      await recognize(path, true);
     } catch (error) {
       pushToast('error', t('local.customPickFailed'), (error as Error).message);
     }
@@ -68,21 +131,21 @@ export function CustomVersionModal({ open, onClose, onImported }: CustomVersionM
     <Modal
       open={open}
       onClose={onClose}
-      closeable={!importing}
+      closeable={!importing && !searching}
       title={t('local.customTitle')}
       eyebrow="CUSTOM VERSION"
       description={t('local.customBody')}
       size="md"
       footer={
         <>
-          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={importing}>
+          <button type="button" className="btn btn-ghost" onClick={onClose} disabled={importing || searching}>
             {t('common.cancel')}
           </button>
           <button
             type="button"
             className="btn btn-primary"
             onClick={() => void submit()}
-            disabled={importing || !mcVersion.trim()}
+            disabled={importing || searching || !mcVersion.trim()}
           >
             {importing ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />}
             {importing ? t('local.customImporting') : t('local.customImport')}
@@ -141,12 +204,43 @@ export function CustomVersionModal({ open, onClose, onImported }: CustomVersionM
               onChange={(event) => setSourceDir(event.target.value)}
               placeholder={t('local.customSourcePlaceholder')}
             />
-            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void pickDir()} disabled={importing}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => void pickDir()} disabled={importing || searching}>
               <FolderOpen size={14} /> {t('local.customPickDir')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => void recognize(sourceDir, true)}
+              disabled={importing || searching || !sourceDir.trim()}
+            >
+              {searching ? <LoaderCircle size={14} className="spin" /> : <Search size={14} />}
+              {searching ? t('local.searching') : t('local.searchMinecraft')}
             </button>
           </div>
           <span className="field-hint">{t('local.customSourceHint')}</span>
+          <span className="field-hint">{t('local.searchRootHint')}</span>
         </div>
+        {discovered.length > 0 && (
+          <label className="field">
+            <span className="field-label">{t('local.detectedVersions')}</span>
+            <select
+              className="text-input"
+              value={selectedVersionKey}
+              onChange={(event) => {
+                const selected = discovered.find((entry) => entry.key === event.target.value);
+                if (selected) applyDetected(selected);
+              }}
+            >
+              {discovered.map((entry) => (
+                <option key={entry.key} value={entry.key}>
+                  {entry.candidate.name} · {entry.candidate.mcVersion || '—'} ·{' '}
+                  {loaderLabel(entry.candidate.loader, t('loader.vanilla'))} · {entry.scan.root}
+                </option>
+              ))}
+            </select>
+            <span className="field-hint">{t('local.detectedHint')}</span>
+          </label>
+        )}
         <p className="field-hint">{t('local.customHint')}</p>
       </div>
     </Modal>

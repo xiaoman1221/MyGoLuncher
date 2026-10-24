@@ -135,6 +135,8 @@ export const api = {
   pickExternalLauncher: () => call<ExternalScanResult>('PickExternalLauncher'),
   pickVersionDirectory: () => call<ExternalScanResult>('PickVersionDirectory'),
   scanVersionDirectory: (path: string) => call<ExternalScanResult>('ScanVersionDirectory', path),
+  searchMinecraftFolders: (root: string) =>
+    call<ExternalScanResult[]>('SearchMinecraftFolders', root),
   detectLocalLaunchers: () => call<ExternalScanResult[]>('DetectLocalLaunchers'),
   importExternalInstance: (root: string, candidateId: string, name: string) =>
     call<ExternalImportResponse>('ImportExternalInstance', root, candidateId, name),

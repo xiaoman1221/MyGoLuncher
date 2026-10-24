@@ -82,6 +82,12 @@ func TestOrcaProviderDefaults(t *testing.T) {
 	if DefaultModelForProvider(ProviderOrcaRouter) != "orcarouter/auto" {
 		t.Fatal("unexpected OrcaRouter default model")
 	}
+	if OrcaAuthURL != "https://www.orcarouter.ai/auth" {
+		t.Fatalf("unexpected OrcaRouter auth URL: %s", OrcaAuthURL)
+	}
+	if OrcaTokenURL != "https://www.orcarouter.ai/api/v1/auth/keys" {
+		t.Fatalf("unexpected OrcaRouter token URL: %s", OrcaTokenURL)
+	}
 	if config, ok := LookupProvider("orcarouter"); !ok || config.WireAPI != "responses" || config.EnvKey != "ORCA_KEY" {
 		t.Fatalf("provider config = %#v, %v", config, ok)
 	}
@@ -117,7 +123,7 @@ func TestOrcaLoginPKCE(t *testing.T) {
 	defer cancel()
 	go func() {
 		result, err := BeginOrcaLogin(ctx, OrcaLoginOptions{
-			AuthURL:  "https://www.arouter.ai/auth",
+			AuthURL:  "https://www.orcarouter.ai/auth",
 			TokenURL: tokenServer.URL + "/api/v1/auth/keys",
 			AppName:  "TestApp",
 			Ref:      "ref_test",
@@ -144,7 +150,8 @@ func TestOrcaLoginPKCE(t *testing.T) {
 	if state == "" || challenge == "" || callbackURL == "" {
 		t.Fatalf("missing auth parameters: %s", authURL)
 	}
-	if query.Get("code_challenge_method") != "S256" || query.Get("app_name") != "TestApp" || query.Get("ref") != "ref_test" {
+	if query.Get("code_challenge_method") != "S256" || query.Get("app_name") != "TestApp" ||
+		query.Get("ref") != "ref_test" || query.Get("scope") != "api" {
 		t.Fatalf("unexpected auth query: %s", authURL)
 	}
 

@@ -1,5 +1,7 @@
 # MyMinecraftGoLuncher（MyGoLuncher）
 
+[![Powered by OrcaRouter](https://img.shields.io/badge/Powered_by-OrcaRouter-2563eb)](https://www.orcarouter.ai/ref/ref_00ee071bfd29fc8bb954)
+
 一个使用 **Go + Wails + React + TypeScript** 构建的 Minecraft 桌面启动器。
 
 界面保持简洁，同时提供版本设置、资源中心、整合包与 Java 运行时管理。支持黑夜 / 白天两种主题，白天模式以粉色为主色。
@@ -12,7 +14,7 @@
 
 ## 功能
 
-- **添加本地版本**：扫描本机官方启动器、HMCL、PCL2、Prism Launcher / MultiMC，也可以手动选择 `.minecraft`、`versions` 目录或单个版本文件夹。支持一次勾选多个版本批量导入；「自定义导入」可手动填写版本名称、Minecraft 版本、加载器与可选的来源目录。导入时复制存档、模组、资源包与配置，并准备游戏运行环境。
+- **添加本地版本**：扫描本机官方启动器、HMCL、PCL2、Prism Launcher / MultiMC，也可以手动选择 `.minecraft`、`versions` 目录或单个版本文件夹。支持一次勾选多个版本批量导入；「自定义导入」可手动填写版本名称、Minecraft 版本、加载器与可选的来源目录，并支持递归搜索指定目录下的 `.minecraft` / `versions` 文件夹、自动识别版本并填入信息。导入时复制存档、模组、资源包与配置，并准备游戏运行环境。
 - **下载官方版本**：从 Mojang 元数据获取正式版、快照和远古版本，下载客户端、运行库、本地库与资源文件。
 - **多下载源**：官方源与 BMCLAPI，安装前测速并自动回退，所有文件仍做哈希校验。
 - **版本设置**：在左侧「版本设置」中统一管理已安装版本，可修改名称、内存与 Java，查看游戏目录。
@@ -117,7 +119,7 @@ cd frontend && npm run build
 
 > 程序目录必须可写。若放在 `Program Files` 等受保护目录，启动器将无法创建上述目录。
 >
-> 本地版本支持多选批量导入；未被扫描器识别的版本可使用「自定义导入」，手动填写 Minecraft 版本、加载器与来源目录。
+> 本地版本支持多选批量导入；未被扫描器识别的版本可使用「自定义导入」，手动填写 Minecraft 版本、加载器与来源目录，或选择包含 `.minecraft` / `versions` 的父目录后搜索并识别版本。
 >
 > 可用环境变量 `MGL_HOME` 覆盖基础目录，`MYGOLUNCHER_HOME` 作为兼容别名。
 >
@@ -152,6 +154,7 @@ env_key  = "ORCA_KEY"
 ```
 
 - 点击「一键授权」会打开系统浏览器，使用 PKCE（S256）完成授权；启动器在 `127.0.0.1` 随机端口接收回调，严格校验 `state`，再用 `code` 与 `code_verifier` 换取 API Key，并保存到加密安全存储。
+- 授权地址：`https://www.orcarouter.ai/auth`；换取 Key：`POST https://www.orcarouter.ai/api/v1/auth/keys`。推理接口仍使用 `https://api.orcarouter.ai/v1`。
 - 也可以手动填写 API Key，或者设置环境变量 `ORCA_KEY`；手动填写的 Key 优先。
 - 请求使用 Responses API（`/responses`），默认模型为 `orcarouter/auto`。
 

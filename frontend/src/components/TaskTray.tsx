@@ -1,4 +1,11 @@
-import { CheckCircle2, LoaderCircle, TriangleAlert } from 'lucide-react';
+import { useState } from 'react';
+import {
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  LoaderCircle,
+  TriangleAlert,
+} from 'lucide-react';
 import type { TaskProgress } from '../lib/types';
 import type { MessageKey } from '../lib/i18n';
 import { useApp } from '../lib/app-context';
@@ -29,6 +36,7 @@ const stageKeys: Record<string, MessageKey> = {
 
 export function TaskTray({ tasks }: { tasks: TaskProgress[] }) {
   const { t } = useApp();
+  const [minimized, setMinimized] = useState(false);
   if (tasks.length === 0) return null;
 
   const stageLabel = (stage: string) => {
@@ -36,11 +44,51 @@ export function TaskTray({ tasks }: { tasks: TaskProgress[] }) {
     return t(stageKeys[key] ?? 'stage.processing');
   };
 
+  const hasFailure = tasks.some((task) => task.done && task.failed);
+  const hasActive = tasks.some((task) => !task.done);
+  const stateIcon = hasFailure
+    ? <TriangleAlert size={16} />
+    : hasActive
+      ? <LoaderCircle size={16} className="spin" />
+      : <CheckCircle2 size={16} />;
+
+  if (minimized) {
+    return (
+      <button
+        type="button"
+        className="task-tray-minimized"
+        onClick={() => setMinimized(false)}
+        title={t('topbar.restore')}
+        aria-label={t('topbar.restore')}
+        aria-expanded="false"
+      >
+        <span className={`task-state-icon ${hasFailure ? 'is-failed' : ''}`}>
+          {stateIcon}
+        </span>
+        <span className="task-tray-minimized-copy">{t('task.background')}</span>
+        <span className="task-tray-count">{tasks.length}</span>
+        <ChevronUp size={15} />
+      </button>
+    );
+  }
+
   return (
     <aside className="task-tray" aria-live="polite" aria-label={t('task.background')}>
       <div className="task-tray-head">
         <span className="eyebrow"><span className="eyebrow-dash" />{t('task.background')}</span>
-        <span className="task-tray-count">{tasks.length}</span>
+        <div className="task-tray-actions">
+          <span className="task-tray-count">{tasks.length}</span>
+          <button
+            type="button"
+            className="icon-button icon-button-sm task-tray-toggle"
+            onClick={() => setMinimized(true)}
+            title={t('topbar.minimize')}
+            aria-label={t('topbar.minimize')}
+            aria-expanded="true"
+          >
+            <ChevronDown size={15} />
+          </button>
+        </div>
       </div>
       <div className="task-list">
         {tasks.map((task) => {

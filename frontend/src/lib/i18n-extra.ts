@@ -271,6 +271,14 @@ const zhCN = {
   'local.customFailed': '自定义版本导入失败',
   'local.customVersionRequired': '请填写 Minecraft 版本',
   'local.customHint': '游戏文件与加载器会自动下载；来源目录中的内容会复制到新版本。',
+  'local.searchMinecraft': '搜索 .minecraft',
+  'local.searching': '正在搜索…',
+  'local.searchEmpty': '没有找到可识别的版本',
+  'local.searchFailed': '搜索 .minecraft 失败',
+  'local.searchRootHint': '选择包含 .minecraft 或 versions 的文件夹（例如 D:/Games），再点击搜索。',
+  'local.customSourceRequired': '请先选择或填写要搜索的目录',
+  'local.detectedVersions': '识别到的版本',
+  'local.detectedHint': '选择一个识别到的版本，会自动填写 Minecraft 版本、加载器与来源目录。',
 } as const;
 
 export type ExtraMessageKey = keyof typeof zhCN;
@@ -546,6 +554,14 @@ const zhTW: Record<ExtraMessageKey, string> = {
   'local.customFailed': '自訂版本匯入失敗',
   'local.customVersionRequired': '請填寫 Minecraft 版本',
   'local.customHint': '遊戲檔案與載入器會自動下載；來源目錄中的內容會複製到新版本。',
+  'local.searchMinecraft': '搜尋 .minecraft',
+  'local.searching': '正在搜尋…',
+  'local.searchEmpty': '沒有找到可辨識的版本',
+  'local.searchFailed': '搜尋 .minecraft 失敗',
+  'local.searchRootHint': '選擇包含 .minecraft 或 versions 的資料夾（例如 D:/Games），再點擊搜尋。',
+  'local.customSourceRequired': '請先選擇或填寫要搜尋的目錄',
+  'local.detectedVersions': '辨識到的版本',
+  'local.detectedHint': '選擇一個辨識到的版本，會自動填入 Minecraft 版本、載入器與來源目錄。',
 };
 
 const en: Record<ExtraMessageKey, string> = {
@@ -819,6 +835,14 @@ const en: Record<ExtraMessageKey, string> = {
   'local.customFailed': 'Custom version import failed',
   'local.customVersionRequired': 'Enter a Minecraft version',
   'local.customHint': 'Game files and the loader are downloaded automatically; content from the source folder is copied to the new version.',
+  'local.searchMinecraft': 'Search .minecraft',
+  'local.searching': 'Searching…',
+  'local.searchEmpty': 'No importable versions found',
+  'local.searchFailed': 'Could not search for .minecraft folders',
+  'local.searchRootHint': 'Choose a folder containing .minecraft or versions (for example D:/Games), then search.',
+  'local.customSourceRequired': 'Choose or enter a folder to search first',
+  'local.detectedVersions': 'Detected versions',
+  'local.detectedHint': 'Choosing a detected version fills in the Minecraft version, loader and source folder.',
 };
 
 const ja: Record<ExtraMessageKey, string> = {
@@ -1092,6 +1116,14 @@ const ja: Record<ExtraMessageKey, string> = {
   'local.customFailed': 'カスタムバージョンのインポートに失敗しました',
   'local.customVersionRequired': 'Minecraft バージョンを入力してください',
   'local.customHint': 'ゲームファイルとローダーは自動でダウンロードされます。コピー元フォルダーの内容は新しいバージョンにコピーされます。',
+  'local.searchMinecraft': '.minecraft を検索',
+  'local.searching': '検索中…',
+  'local.searchEmpty': 'インポート可能なバージョンが見つかりません',
+  'local.searchFailed': '.minecraft の検索に失敗しました',
+  'local.searchRootHint': '.minecraft または versions を含むフォルダー（例: D:/Games）を選んで検索してください。',
+  'local.customSourceRequired': '検索するフォルダーを選択または入力してください',
+  'local.detectedVersions': '検出されたバージョン',
+  'local.detectedHint': '検出されたバージョンを選ぶと、Minecraft バージョン・ローダー・コピー元が自動入力されます。',
 };
 
 const ko: Record<ExtraMessageKey, string> = {
@@ -1365,6 +1397,14 @@ const ko: Record<ExtraMessageKey, string> = {
   'local.customFailed': '사용자 지정 버전 가져오기 실패',
   'local.customVersionRequired': 'Minecraft 버전을 입력하세요',
   'local.customHint': '게임 파일과 로더는 자동으로 다운로드되며, 원본 폴더의 내용은 새 버전으로 복사됩니다.',
+  'local.searchMinecraft': '.minecraft 검색',
+  'local.searching': '검색 중…',
+  'local.searchEmpty': '가져올 수 있는 버전을 찾지 못했습니다',
+  'local.searchFailed': '.minecraft 검색 실패',
+  'local.searchRootHint': '.minecraft 또는 versions가 포함된 폴더(예: D:/Games)를 선택한 뒤 검색하세요.',
+  'local.customSourceRequired': '먼저 검색할 폴더를 선택하거나 입력하세요',
+  'local.detectedVersions': '감지된 버전',
+  'local.detectedHint': '감지된 버전을 선택하면 Minecraft 버전, 로더, 원본 폴더가 자동으로 입력됩니다.',
 };
 
 export const extraMessages: Record<ExtraLanguage, Record<ExtraMessageKey, string>> = {

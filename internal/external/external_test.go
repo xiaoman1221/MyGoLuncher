@@ -1,6 +1,7 @@
 package external
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -178,6 +179,27 @@ func TestScanVersionsDirectory(t *testing.T) {
 	}
 	if result.Candidates[0].MCVersion != "1.21.1" {
 		t.Fatalf("candidates should be sorted newest first: %#v", result.Candidates)
+	}
+}
+
+func TestSearchMinecraftFolders(t *testing.T) {
+	root := t.TempDir()
+	mcRoot := filepath.Join(root, "Games", "MyClient", ".minecraft")
+	versionDir := filepath.Join(mcRoot, "versions", "1.21.1")
+	writeJSON(t, filepath.Join(versionDir, "1.21.1.json"), map[string]any{
+		"id": "1.21.1", "mainClass": "net.minecraft.client.main.Main",
+	})
+	writeFile(t, filepath.Join(mcRoot, "mods", "client.jar"), "jar")
+
+	results, err := SearchMinecraftFolders(context.Background(), root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || len(results[0].Candidates) != 1 {
+		t.Fatalf("results = %#v", results)
+	}
+	if results[0].Candidates[0].MCVersion != "1.21.1" {
+		t.Fatalf("candidate = %#v", results[0].Candidates[0])
 	}
 }
 

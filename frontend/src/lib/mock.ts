@@ -1351,6 +1351,16 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
           { id: 'versions/1.19.2', name: '1.19.2', mcVersion: '1.19.2', loader: 'vanilla', loaderVersion: '', source: '官方启动器', modCount: 0, hasSaves: true, warnings: [] },
         ],
       } satisfies ExternalScanResult as T;
+    case 'SearchMinecraftFolders':
+      await progressTask('搜索 .minecraft 文件夹', ['正在扫描目录…', '正在识别版本…', '搜索完成'], 1200);
+      return [{
+        root: 'D:/Games/MyClient/.minecraft',
+        source: '其他启动器',
+        candidates: [
+          { id: 'versions/fabric-1.21.1', name: 'fabric-1.21.1', mcVersion: '1.21.1', loader: 'fabric', loaderVersion: '0.16.10', source: '其他启动器', modCount: 18, hasSaves: true, warnings: [] },
+          { id: 'versions/1.20.1', name: '1.20.1', mcVersion: '1.20.1', loader: 'vanilla', loaderVersion: '', source: '其他启动器', modCount: 0, hasSaves: false, warnings: [] },
+        ],
+      }] satisfies ExternalScanResult[] as T;
     case 'ScanVersionDirectory': {
       const root = String(args[0] ?? '');
       return {

@@ -20,8 +20,8 @@ const (
 	DefaultOrcaRouterModel   = "orcarouter/auto"
 	OrcaRouterEnvKey         = "ORCA_KEY"
 	OrcaRouterWireAPI        = "responses"
-	OrcaAuthURL              = "https://www.arouter.ai/auth"
-	OrcaTokenURL             = "https://api.arouter.ai/api/v1/auth/keys"
+	OrcaAuthURL              = "https://www.orcarouter.ai/auth"
+	OrcaTokenURL             = "https://www.orcarouter.ai/api/v1/auth/keys"
 	OrcaAppName              = "MyGoLuncher"
 	OrcaRef                  = "ref_00ee071bfd29fc8bb954"
 )

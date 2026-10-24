@@ -1709,6 +1709,29 @@ func (a *App) ScanVersionDirectory(path string) (external.ScanResult, error) {
 	return external.Scan(path)
 }
 
+// SearchMinecraftFolders searches a folder tree for .minecraft/versions
+// directories and returns every importable version it recognises.
+func (a *App) SearchMinecraftFolders(root string) ([]external.ScanResult, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil, errors.New("请选择要搜索的目录")
+	}
+	ctx, cancel := context.WithTimeout(a.context(), 45*time.Second)
+	defer cancel()
+	task := a.newTask("搜索 .minecraft 文件夹")
+	results, err := external.SearchMinecraftFolders(ctx, root, func(directory string, found int) {
+		task.update("scan", fmt.Sprintf("正在搜索 %s · 已找到 %d 个目录", directory, found), 0, 0)
+	})
+	task.finish(err)
+	if err != nil && len(results) == 0 {
+		return nil, err
+	}
+	return results, nil
+}
+
 // DetectLocalLaunchers scans the well-known official launcher, HMCL, PCL2,
 // Prism/MultiMC and MultiMC data directories on this machine.
 func (a *App) DetectLocalLaunchers() ([]external.ScanResult, error) {
@@ -1757,7 +1780,7 @@ func (a *App) PickCustomSourceDirectory() (string, error) {
 		return "", err
 	}
 	path, err := runtime.OpenDirectoryDialog(a.context(), runtime.OpenDialogOptions{
-		Title: "选择要复制内容的游戏目录或实例目录（可取消）",
+		Title: "选择游戏目录、实例目录或要搜索的父目录（例如 D:/Games）",
 	})
 	if err != nil {
 		return "", err
@@ -2072,20 +2095,40 @@ func (a *App) InstallJava(feature int) (rt java.Runtime, err error) {
 	return rt, nil
 }
 
-func openPath(path string) error {
+func openPath(target string) error {
+	path := strings.TrimSpace(target)
+	if path == "" {
+		return errors.New("目录路径为空")
+	}
+	path = filepath.Clean(path)
+	if !filepath.IsAbs(path) {
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+	}
+	if stat, err := os.Stat(path); err != nil || !stat.IsDir() {
+		// The launcher owns these folders; recreate a missing one so the
+		// "open folder" action still works after manual cleanup.
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			return fmt.Errorf("目录不存在或无法创建: %w", err)
+		}
+	}
 	var cmd *exec.Cmd
 	switch goruntime.GOOS {
 	case "windows":
-		cmd = exec.Command("explorer", path)
+		cmd = exec.Command("explorer.exe", path)
 	case "darwin":
 		cmd = exec.Command("open", path)
 	default:
 		cmd = exec.Command("xdg-open", path)
 	}
-	sysutil.HideWindow(cmd)
+	// Do not hide the child window: explorer.exe / Finder / xdg-open are GUI
+	// programs and SW_HIDE makes the folder window invisible or prevents it
+	// from opening at all.
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("无法打开目录: %w", err)
 	}
+	_ = cmd.Process.Release()
 	return nil
 }
 

@@ -689,6 +689,10 @@ func customContentRoot(sourceDir string) string {
 	if stat, err := os.Stat(sourceDir); err != nil || !stat.IsDir() {
 		return ""
 	}
+	// A versions folder itself lives directly under the game root.
+	if strings.EqualFold(filepath.Base(sourceDir), "versions") {
+		return filepath.Dir(sourceDir)
+	}
 	// Prism / MultiMC instances usually keep content under .minecraft.
 	nested := filepath.Join(sourceDir, ".minecraft")
 	if stat, err := os.Stat(nested); err == nil && stat.IsDir() {

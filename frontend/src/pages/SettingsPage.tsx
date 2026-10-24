@@ -97,7 +97,7 @@ export function SettingsPage() {
   const aiKeyPlaceholder = isAnthropic ? 'sk-ant-...' : isOrcaRouter ? 'OrcaRouter API Key' : 'sk-...';
   const aiKeyURL = isAnthropic
     ? 'https://console.anthropic.com/settings/keys'
-    : isOrcaRouter ? 'https://www.arouter.ai' : 'https://platform.deepseek.com/api_keys';
+    : isOrcaRouter ? 'https://www.orcarouter.ai' : 'https://platform.deepseek.com/api_keys';
 
   const changeAIProvider = (provider: string) => {
     const next = provider === 'anthropic'

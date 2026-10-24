@@ -171,6 +171,7 @@ func buildOrcaAuthURL(opts OrcaLoginOptions, callbackURL, challenge, state strin
 	query.Set("code_challenge_method", "S256")
 	query.Set("state", state)
 	query.Set("app_name", opts.AppName)
+	query.Set("scope", "api")
 	if strings.TrimSpace(opts.Ref) != "" {
 		query.Set("ref", strings.TrimSpace(opts.Ref))
 	}
