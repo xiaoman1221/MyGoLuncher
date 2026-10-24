@@ -1,0 +1,1747 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	goruntime "runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"MyMinecraftGoLuncher/internal/auth"
+	"MyMinecraftGoLuncher/internal/external"
+	"MyMinecraftGoLuncher/internal/hitokoto"
+	"MyMinecraftGoLuncher/internal/httpx"
+	"MyMinecraftGoLuncher/internal/java"
+	"MyMinecraftGoLuncher/internal/launcher"
+	"MyMinecraftGoLuncher/internal/loader"
+	"MyMinecraftGoLuncher/internal/mirror"
+	"MyMinecraftGoLuncher/internal/modpack"
+	"MyMinecraftGoLuncher/internal/modrinth"
+	"MyMinecraftGoLuncher/internal/mojang"
+	"MyMinecraftGoLuncher/internal/store"
+	"MyMinecraftGoLuncher/internal/sysinfo"
+	"MyMinecraftGoLuncher/internal/sysutil"
+)
+
+const appVersion = "1.0.0"
+
+// App binds backend services to the Wails frontend.
+type App struct {
+	ctx context.Context
+
+	paths     store.Paths
+	store     *store.Store
+	accounts  *auth.Store
+	mojang    *mojang.Client
+	javaMgr   *java.Manager
+	loaders   *loader.Installer
+	launcher  *launcher.Launcher
+	initError string
+
+	installMu sync.Mutex
+	authMu    sync.Mutex
+	msCancel  context.CancelFunc
+
+	totalMemoryMB int
+	autoMemoryMB  int
+	autoHidden    bool
+
+	procMu sync.Mutex
+	procs  map[string]*launcher.Process
+	logs   map[string]*logRing
+}
+
+type logRing struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (r *logRing) add(line string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.lines) >= 600 {
+		copy(r.lines, r.lines[len(r.lines)-400:])
+		r.lines = r.lines[:400]
+	}
+	r.lines = append(r.lines, line)
+}
+
+func (r *logRing) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, len(r.lines))
+	copy(out, r.lines)
+	return out
+}
+
+// NewApp constructs the application and loads persisted state.
+func NewApp() *App {
+	a := &App{procs: map[string]*launcher.Process{}, logs: map[string]*logRing{}}
+	a.totalMemoryMB = sysinfo.TotalMemoryMB()
+	a.autoMemoryMB = sysinfo.RecommendedMemoryMB(a.totalMemoryMB)
+	paths, err := store.DefaultPaths()
+	if err != nil {
+		a.initError = err.Error()
+		return a
+	}
+	a.paths = paths
+	st, err := store.Open(paths)
+	if err != nil && st == nil {
+		a.initError = err.Error()
+		return a
+	}
+	a.store = st
+	if st == nil {
+		return a
+	}
+	accountStore, err := auth.Open(paths.Accounts, st.Settings().PlayerName)
+	if err != nil {
+		a.initError = err.Error()
+		return a
+	}
+	a.accounts = accountStore
+	a.mojang = mojang.New(paths)
+	a.applyMirrorSources()
+	a.javaMgr = java.NewManager(paths)
+	a.loaders = loader.New(a.mojang, paths)
+	a.launcher = launcher.New(a.mojang, paths)
+	return a
+}
+
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+}
+
+func (a *App) shutdown(ctx context.Context) {
+	a.authMu.Lock()
+	if a.msCancel != nil {
+		a.msCancel()
+		a.msCancel = nil
+	}
+	a.authMu.Unlock()
+	a.procMu.Lock()
+	procs := make([]*launcher.Process, 0, len(a.procs))
+	for _, p := range a.procs {
+		procs = append(procs, p)
+	}
+	a.procMu.Unlock()
+	for _, p := range procs {
+		_ = p.Stop()
+	}
+}
+
+func (a *App) context() context.Context {
+	if a.ctx != nil {
+		return a.ctx
+	}
+	return context.Background()
+}
+
+func (a *App) ready() error {
+	if a.initError != "" {
+		return errors.New(a.initError)
+	}
+	if a.store == nil || a.accounts == nil || a.mojang == nil || a.javaMgr == nil || a.loaders == nil || a.launcher == nil {
+		return errors.New("启动器尚未完成初始化")
+	}
+	return nil
+}
+
+func (a *App) emitInstancesChanged() {
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "instances:changed", nil)
+	}
+}
+
+// PathsView is a serializable view of the launcher directories.
+type PathsView struct {
+	Base      string `json:"base"`
+	Root      string `json:"root"`
+	Data      string `json:"data"`
+	Instances string `json:"instances"`
+	Versions  string `json:"versions"`
+	Libraries string `json:"libraries"`
+	Assets    string `json:"assets"`
+	Runtimes  string `json:"runtimes"`
+	Cache     string `json:"cache"`
+}
+
+// InstanceView adds live state to a stored instance. It deliberately uses
+// strings for timestamps so the generated Wails bindings stay fully typed.
+type InstanceView struct {
+	ID                string `json:"id"`
+	Name              string `json:"name"`
+	MCVersion         string `json:"mcVersion"`
+	Loader            string `json:"loader"`
+	LoaderVersion     string `json:"loaderVersion"`
+	LaunchVersionID   string `json:"launchVersionId"`
+	MemoryMB          int    `json:"memoryMB"`
+	JavaPath          string `json:"javaPath"`
+	CreatedAt         string `json:"createdAt"`
+	LastPlayed        string `json:"lastPlayed"`
+	PlayTimeMinutes   int    `json:"playTimeMinutes"`
+	Source            string `json:"source"`
+	Notes             string `json:"notes"`
+	GameDir           string `json:"gameDir"`
+	RequiredJava      int    `json:"requiredJava"`
+	VersionInstalled  bool   `json:"versionInstalled"`
+	Running           bool   `json:"running"`
+	ModCount          int    `json:"modCount"`
+	ShaderCount       int    `json:"shaderCount"`
+	ResourcePackCount int    `json:"resourcePackCount"`
+	HasJavaOverride   bool   `json:"hasJavaOverride"`
+	AutoMemory        bool   `json:"autoMemory"`
+	EffectiveMemoryMB int    `json:"effectiveMemoryMB"`
+}
+
+// Bootstrap is loaded once by the frontend.
+type Bootstrap struct {
+	Settings          store.Settings `json:"settings"`
+	Instances         []InstanceView `json:"instances"`
+	Paths             PathsView      `json:"paths"`
+	Version           string         `json:"version"`
+	InitError         string         `json:"initError"`
+	Running           []string       `json:"running"`
+	Accounts          []auth.View    `json:"accounts"`
+	SelectedAccountID string         `json:"selectedAccountId"`
+	TotalMemoryMB     int            `json:"totalMemoryMB"`
+	AutoMemoryMB      int            `json:"autoMemoryMB"`
+}
+
+// Bootstrap returns all initial state.
+func (a *App) Bootstrap() Bootstrap {
+	b := Bootstrap{
+		Version: appVersion, Running: []string{},
+		TotalMemoryMB: a.totalMemoryMB, AutoMemoryMB: a.autoMemoryMB,
+	}
+	if a.paths.Root != "" {
+		b.Paths = PathsView{
+			Base: a.paths.Base, Root: a.paths.Root, Data: a.paths.Data, Instances: a.paths.Instances,
+			Versions: a.paths.Versions, Libraries: a.paths.Libraries,
+			Assets: a.paths.Assets, Runtimes: a.paths.Runtimes, Cache: a.paths.Cache,
+		}
+	}
+	if err := a.ready(); err != nil {
+		b.InitError = err.Error()
+		return b
+	}
+	b.Settings = a.store.Settings()
+	b.Accounts = a.accounts.List()
+	b.SelectedAccountID = a.accounts.SelectedID()
+	for _, inst := range a.store.Instances() {
+		v := a.instanceView(inst)
+		b.Instances = append(b.Instances, v)
+		if v.Running {
+			b.Running = append(b.Running, inst.ID)
+		}
+	}
+	if b.Instances == nil {
+		b.Instances = []InstanceView{}
+	}
+	return b
+}
+
+func (a *App) instanceView(inst store.Instance) InstanceView {
+	gameDir := a.store.InstanceDir(inst.ID)
+	required := a.requiredJava(inst)
+	launchID := inst.LaunchVersionID
+	if launchID == "" {
+		launchID = inst.MCVersion
+	}
+	installed := a.mojang.IsInstalled(launchID) || a.mojang.IsInstalled(inst.MCVersion)
+	a.procMu.Lock()
+	_, running := a.procs[inst.ID]
+	a.procMu.Unlock()
+	lastPlayed := ""
+	if !inst.LastPlayed.IsZero() {
+		lastPlayed = inst.LastPlayed.Format(time.RFC3339)
+	}
+	createdAt := ""
+	if !inst.CreatedAt.IsZero() {
+		createdAt = inst.CreatedAt.Format(time.RFC3339)
+	}
+	return InstanceView{
+		ID:                inst.ID,
+		Name:              inst.Name,
+		MCVersion:         inst.MCVersion,
+		Loader:            inst.Loader,
+		LoaderVersion:     inst.LoaderVersion,
+		LaunchVersionID:   inst.LaunchVersionID,
+		MemoryMB:          inst.MemoryMB,
+		JavaPath:          inst.JavaPath,
+		CreatedAt:         createdAt,
+		LastPlayed:        lastPlayed,
+		PlayTimeMinutes:   inst.PlayTimeMinutes,
+		Source:            inst.Source,
+		Notes:             inst.Notes,
+		GameDir:           gameDir,
+		RequiredJava:      required,
+		VersionInstalled:  installed,
+		Running:           running,
+		ModCount:          countFiles(filepath.Join(gameDir, "mods"), ".jar"),
+		ShaderCount:       countEntries(filepath.Join(gameDir, "shaderpacks")),
+		ResourcePackCount: countEntries(filepath.Join(gameDir, "resourcepacks")),
+		HasJavaOverride:   strings.TrimSpace(inst.JavaPath) != "",
+		AutoMemory:        inst.MemoryMB == 0,
+		EffectiveMemoryMB: a.effectiveMemoryMB(inst),
+	}
+}
+
+func (a *App) effectiveMemoryMB(inst store.Instance) int {
+	if inst.MemoryMB > 0 {
+		return inst.MemoryMB
+	}
+	if a.autoMemoryMB > 0 {
+		return a.autoMemoryMB
+	}
+	return sysinfo.RecommendedMemoryMB(a.totalMemoryMB)
+}
+
+func (a *App) requiredJava(inst store.Instance) int {
+	versionID := inst.LaunchVersionID
+	if versionID == "" {
+		versionID = inst.MCVersion
+	}
+	if v, err := a.mojang.Merged(versionID); err == nil {
+		return v.JavaMajor()
+	}
+	if v, err := a.mojang.Merged(inst.MCVersion); err == nil {
+		return v.JavaMajor()
+	}
+	return mojang.FallbackJavaMajor(inst.MCVersion)
+}
+
+func countFiles(dir, suffix string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(strings.ToLower(e.Name()), suffix) {
+			n++
+		}
+	}
+	return n
+}
+
+func countEntries(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, e := range entries {
+		if e.Name() != "" && !strings.HasPrefix(e.Name(), ".") {
+			n++
+		}
+	}
+	return n
+}
+
+// GetInstances returns fresh instance views.
+func (a *App) GetInstances() ([]InstanceView, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	out := []InstanceView{}
+	for _, inst := range a.store.Instances() {
+		out = append(out, a.instanceView(inst))
+	}
+	return out, nil
+}
+
+func (a *App) applyMirrorSources() {
+	customs := make([]mirror.CustomConfig, 0, len(a.store.Settings().CustomMirrors))
+	for _, item := range a.store.Settings().CustomMirrors {
+		customs = append(customs, mirror.CustomConfig{ID: item.ID, Name: item.Name, URL: item.URL, Kind: item.Kind})
+	}
+	a.mojang.SetSources(mirror.Build(customs))
+}
+
+func normalizeCustomMirrors(items []store.MirrorConfig) ([]store.MirrorConfig, error) {
+	out := make([]store.MirrorConfig, 0, len(items))
+	seen := map[string]bool{}
+	for _, item := range items {
+		if strings.TrimSpace(item.URL) == "" && strings.TrimSpace(item.Name) == "" {
+			continue
+		}
+		source, err := mirror.NormalizeCustom(mirror.CustomConfig{ID: item.ID, Name: item.Name, URL: item.URL, Kind: item.Kind})
+		if err != nil {
+			return nil, fmt.Errorf("下载镜像「%s」无效: %w", firstNonEmpty(item.Name, item.URL), err)
+		}
+		if seen[source.BaseURL] {
+			continue
+		}
+		seen[source.BaseURL] = true
+		kind := "bmclapi"
+		if source.Kind == mirror.KindCustomProxy {
+			kind = "proxy"
+		}
+		out = append(out, store.MirrorConfig{ID: source.ID, Name: source.Name, URL: source.BaseURL, Kind: kind})
+	}
+	return out, nil
+}
+
+// TestDownloadMirrors measures configured sources using their version manifest.
+func (a *App) TestDownloadMirrors(customs []store.MirrorConfig) ([]mirror.SpeedResult, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	normalized, err := normalizeCustomMirrors(customs)
+	if err != nil {
+		return nil, err
+	}
+	configs := make([]mirror.CustomConfig, 0, len(normalized))
+	for _, item := range normalized {
+		configs = append(configs, mirror.CustomConfig{ID: item.ID, Name: item.Name, URL: item.URL, Kind: item.Kind})
+	}
+	sources := mirror.Build(configs)
+	return mirror.Test(a.context(), sources, func(source mirror.Source) (string, bool) {
+		return source.URL(mirror.ResourceManifest, mirror.OfficialManifest, "")
+	}, 10*time.Second), nil
+}
+
+// SaveSettings persists launcher preferences.
+func (a *App) SaveSettings(next store.Settings) (store.Settings, error) {
+	if err := a.ready(); err != nil {
+		return store.Settings{}, err
+	}
+	next.PlayerName = strings.TrimSpace(next.PlayerName)
+	normalizedMirrors, err := normalizeCustomMirrors(next.CustomMirrors)
+	if err != nil {
+		return store.Settings{}, err
+	}
+	next.CustomMirrors = normalizedMirrors
+	saved, err := a.store.SaveSettings(next)
+	if err != nil {
+		return store.Settings{}, err
+	}
+	a.applyMirrorSources()
+	return saved, nil
+}
+
+// AccountState is the serializable account list.
+type AccountState struct {
+	Accounts   []auth.View `json:"accounts"`
+	SelectedID string      `json:"selectedId"`
+}
+
+func (a *App) accountState() AccountState {
+	return AccountState{Accounts: a.accounts.List(), SelectedID: a.accounts.SelectedID()}
+}
+
+func (a *App) emitAccountsChanged() {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "accounts:changed", a.accountState())
+}
+
+// GetAccounts returns all configured accounts.
+func (a *App) GetAccounts() (AccountState, error) {
+	if err := a.ready(); err != nil {
+		return AccountState{}, err
+	}
+	return a.accountState(), nil
+}
+
+// SelectAccount switches the active launch identity.
+func (a *App) SelectAccount(id string) (AccountState, error) {
+	if err := a.ready(); err != nil {
+		return AccountState{}, err
+	}
+	if err := a.accounts.Select(id); err != nil {
+		return AccountState{}, err
+	}
+	a.syncOfflineSetting()
+	a.emitAccountsChanged()
+	return a.accountState(), nil
+}
+
+// AddOfflineAccount creates a new offline identity or selects an existing
+// offline account with the same name.
+func (a *App) AddOfflineAccount(name string) (AccountState, error) {
+	if err := a.ready(); err != nil {
+		return AccountState{}, err
+	}
+	account, err := a.accounts.AddOfflineAccount(name)
+	if err != nil {
+		return AccountState{}, err
+	}
+	settings := a.store.Settings()
+	settings.PlayerName = account.Name
+	_, _ = a.store.SaveSettings(settings)
+	a.emitAccountsChanged()
+	return a.accountState(), nil
+}
+
+// RenameOfflineAccount changes an offline identity and keeps it selected.
+func (a *App) RenameOfflineAccount(id, name string) (AccountState, error) {
+	if err := a.ready(); err != nil {
+		return AccountState{}, err
+	}
+	account, err := a.accounts.RenameOfflineAccount(id, name)
+	if err != nil {
+		return AccountState{}, err
+	}
+	settings := a.store.Settings()
+	settings.PlayerName = account.Name
+	_, _ = a.store.SaveSettings(settings)
+	a.emitAccountsChanged()
+	return a.accountState(), nil
+}
+
+// RemoveAccount deletes a premium or third-party account.
+func (a *App) RemoveAccount(id string) (AccountState, error) {
+	if err := a.ready(); err != nil {
+		return AccountState{}, err
+	}
+	if err := a.accounts.Remove(id); err != nil {
+		return AccountState{}, err
+	}
+	a.syncOfflineSetting()
+	a.emitAccountsChanged()
+	return a.accountState(), nil
+}
+
+// GetHitokoto returns one random sentence for the home page.
+func (a *App) GetHitokoto() (hitokoto.View, error) {
+	if err := a.ready(); err != nil {
+		return hitokoto.View{}, err
+	}
+	return hitokoto.Fetch(a.context(), a.store.Settings().HitokotoAPIURL)
+}
+
+// AuthlibServerView is a built-in third-party authentication provider.
+type AuthlibServerView struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// AuthlibServers returns the built-in third-party login providers.
+func (a *App) AuthlibServers() []AuthlibServerView {
+	return []AuthlibServerView{
+		{ID: "littleskin", Name: "LittleSkin", URL: "https://littleskin.cn/api/yggdrasil"},
+		{ID: "yss", Name: "YggdrasilSkinServer", URL: "https://yss.1v.fit"},
+	}
+}
+
+// LoginAuthlib signs in to an Authlib-Injector compatible server.
+func (a *App) LoginAuthlib(serverURL, username, password string) (auth.View, error) {
+	if err := a.ready(); err != nil {
+		return auth.View{}, err
+	}
+	account, err := auth.LoginAuthlib(a.context(), serverURL, username, password)
+	if err != nil {
+		return auth.View{}, err
+	}
+	saved, err := a.accounts.Add(account)
+	if err != nil {
+		return auth.View{}, err
+	}
+	a.emitAccountsChanged()
+	return saved.View(), nil
+}
+
+// DeviceCodeView is safe to expose to the frontend.
+type DeviceCodeView struct {
+	UserCode        string `json:"userCode"`
+	VerificationURI string `json:"verificationUri"`
+	ExpiresIn       int    `json:"expiresIn"`
+	Interval        int    `json:"interval"`
+	Message         string `json:"message"`
+}
+
+// AccountLoginEvent is emitted after a background Microsoft login finishes.
+type AccountLoginEvent struct {
+	Success bool       `json:"success"`
+	Message string     `json:"message"`
+	Account *auth.View `json:"account,omitempty"`
+}
+
+// BeginMicrosoftLogin starts device-code authentication and returns at once.
+func (a *App) BeginMicrosoftLogin() (DeviceCodeView, error) {
+	if err := a.ready(); err != nil {
+		return DeviceCodeView{}, err
+	}
+	a.authMu.Lock()
+	if a.msCancel != nil {
+		a.authMu.Unlock()
+		return DeviceCodeView{}, errors.New("已有 Microsoft 登录正在进行")
+	}
+	a.authMu.Unlock()
+
+	clientID := a.microsoftClientID()
+	ctx, cancel := context.WithTimeout(a.context(), 30*time.Second)
+	info, err := auth.StartDeviceCode(ctx, clientID)
+	cancel()
+	if err != nil {
+		return DeviceCodeView{}, err
+	}
+	pollCtx, pollCancel := context.WithCancel(a.context())
+	a.authMu.Lock()
+	a.msCancel = pollCancel
+	a.authMu.Unlock()
+
+	go func() {
+		defer func() {
+			pollCancel()
+			a.authMu.Lock()
+			a.msCancel = nil
+			a.authMu.Unlock()
+		}()
+		token, err := auth.PollDeviceCode(pollCtx, clientID, info.DeviceCode, info.Interval, info.ExpiresIn)
+		if err != nil {
+			if errors.Is(err, auth.ErrLoginCancelled) {
+				return
+			}
+			a.emitAccountLogin(AccountLoginEvent{Success: false, Message: err.Error()})
+			return
+		}
+		account, err := auth.AuthenticateMinecraft(pollCtx, clientID, token.AccessToken, token.RefreshToken)
+		if err != nil {
+			a.emitAccountLogin(AccountLoginEvent{Success: false, Message: err.Error()})
+			return
+		}
+		saved, err := a.accounts.Add(account)
+		if err != nil {
+			a.emitAccountLogin(AccountLoginEvent{Success: false, Message: err.Error()})
+			return
+		}
+		view := saved.View()
+		a.emitAccountsChanged()
+		a.emitAccountLogin(AccountLoginEvent{Success: true, Message: "Microsoft 登录成功", Account: &view})
+	}()
+
+	return DeviceCodeView{
+		UserCode: info.UserCode, VerificationURI: info.VerificationURI,
+		ExpiresIn: info.ExpiresIn, Interval: info.Interval, Message: info.Message,
+	}, nil
+}
+
+// CancelMicrosoftLogin aborts a pending device-code poll.
+func (a *App) CancelMicrosoftLogin() {
+	a.authMu.Lock()
+	defer a.authMu.Unlock()
+	if a.msCancel != nil {
+		a.msCancel()
+		a.msCancel = nil
+	}
+}
+
+func (a *App) emitAccountLogin(event AccountLoginEvent) {
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "auth:login", event)
+	}
+}
+
+func (a *App) microsoftClientID() string {
+	if value := strings.TrimSpace(a.store.Settings().MicrosoftClientID); value != "" {
+		return value
+	}
+	return auth.DefaultMicrosoftClientID
+}
+
+type launchAuth struct {
+	Name          string
+	UUID          string
+	AccessToken   string
+	UserType      string
+	XUID          string
+	AuthlibJar    string
+	AuthlibServer string
+}
+
+// resolveLaunchAuth prepares the selected account right before launch. Token
+// refreshes for Microsoft and external accounts happen transparently.
+func (a *App) resolveLaunchAuth(ctx context.Context) (launchAuth, error) {
+	account, ok := a.accounts.Selected()
+	if !ok {
+		name := strings.TrimSpace(a.store.Settings().PlayerName)
+		if name == "" {
+			name = "Steve"
+		}
+		return launchAuth{Name: name, UUID: auth.OfflineUUID(name), AccessToken: "0", UserType: "legacy"}, nil
+	}
+	switch account.Kind {
+	case auth.KindOffline:
+		return launchAuth{
+			Name: account.Name, UUID: firstNonEmpty(account.UUID, auth.OfflineUUID(account.Name)),
+			AccessToken: "0", UserType: "legacy",
+		}, nil
+	case auth.KindMicrosoft:
+		if account.AccessToken == "" || time.Until(account.ExpiresAt) < 2*time.Minute {
+			t := a.newTask("刷新 Microsoft 登录")
+			var refreshErr error
+			token, err := auth.RefreshMSA(ctx, a.microsoftClientID(), account.RefreshToken)
+			if err == nil {
+				renewed, authErr := auth.AuthenticateMinecraft(ctx, a.microsoftClientID(), token.AccessToken, token.RefreshToken)
+				if authErr != nil {
+					refreshErr = authErr
+				} else {
+					renewed.ID = account.ID
+					renewed.AddedAt = account.AddedAt
+					if updateErr := a.accounts.Update(renewed); updateErr != nil {
+						refreshErr = updateErr
+					} else {
+						account = renewed
+						a.emitAccountsChanged()
+					}
+				}
+			} else {
+				refreshErr = err
+			}
+			t.finish(refreshErr)
+			if refreshErr != nil {
+				return launchAuth{}, fmt.Errorf("Microsoft 登录已失效，请重新登录: %w", refreshErr)
+			}
+		}
+		return launchAuth{
+			Name: account.Name, UUID: strings.ReplaceAll(account.UUID, "-", ""),
+			AccessToken: account.AccessToken, UserType: "msa", XUID: account.XUID,
+		}, nil
+	case auth.KindAuthlib:
+		t := a.newTask("准备外置登录")
+		var authErr error
+		valid, err := auth.ValidateAuthlib(ctx, account)
+		if err != nil {
+			authErr = err
+		} else if !valid {
+			renewed, refreshErr := auth.RefreshAuthlib(ctx, account)
+			if refreshErr != nil {
+				authErr = refreshErr
+			} else {
+				renewed.ID = account.ID
+				renewed.AddedAt = account.AddedAt
+				if updateErr := a.accounts.Update(renewed); updateErr != nil {
+					authErr = updateErr
+				} else {
+					account = renewed
+					a.emitAccountsChanged()
+				}
+			}
+		}
+		jar := auth.FindInjector(a.paths)
+		if authErr == nil && jar == "" {
+			jar, authErr = auth.EnsureInjector(ctx, a.paths)
+		}
+		t.finish(authErr)
+		if authErr != nil {
+			return launchAuth{}, fmt.Errorf("外置登录不可用，请重新登录: %w", authErr)
+		}
+		return launchAuth{
+			Name: account.Name, UUID: strings.ReplaceAll(account.UUID, "-", ""),
+			AccessToken: account.AccessToken, UserType: "mojang",
+			AuthlibJar: jar, AuthlibServer: account.ServerURL,
+		}, nil
+	default:
+		return launchAuth{}, errors.New("未知的账户类型")
+	}
+}
+
+func (a *App) syncOfflineSetting() {
+	account, ok := a.accounts.Selected()
+	if !ok || account.Kind != auth.KindOffline {
+		return
+	}
+	settings := a.store.Settings()
+	if settings.PlayerName != account.Name {
+		settings.PlayerName = account.Name
+		_, _ = a.store.SaveSettings(settings)
+	}
+}
+
+// VersionView is one downloadable game version.
+type VersionView struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	ReleaseTime string `json:"releaseTime"`
+	JavaMajor   int    `json:"javaMajor"`
+	Installed   bool   `json:"installed"`
+}
+
+// VersionList is the version catalog plus latest aliases.
+type VersionList struct {
+	Versions       []VersionView `json:"versions"`
+	LatestRelease  string        `json:"latestRelease"`
+	LatestSnapshot string        `json:"latestSnapshot"`
+}
+
+// ListVersions returns Minecraft versions from Mojang's manifest.
+func (a *App) ListVersions(includeSnapshots, includeOld bool) (VersionList, error) {
+	if err := a.ready(); err != nil {
+		return VersionList{}, err
+	}
+	m, err := a.mojang.Manifest(a.context())
+	if err != nil {
+		return VersionList{}, err
+	}
+	out := VersionList{LatestRelease: m.Latest.Release, LatestSnapshot: m.Latest.Snapshot, Versions: []VersionView{}}
+	for _, entry := range m.Versions {
+		switch entry.Type {
+		case "release":
+		case "snapshot":
+			if !includeSnapshots {
+				continue
+			}
+		case "old_beta", "old_alpha":
+			if !includeOld {
+				continue
+			}
+		default:
+			continue
+		}
+		out.Versions = append(out.Versions, VersionView{
+			ID: entry.ID, Type: entry.Type, ReleaseTime: entry.ReleaseTime.Format(time.RFC3339),
+			JavaMajor: mojang.FallbackJavaMajor(entry.ID),
+			Installed: a.mojang.IsInstalled(entry.ID),
+		})
+	}
+	return out, nil
+}
+
+// InstallVersion downloads a full vanilla game version.
+func (a *App) InstallVersion(id string) (err error) {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return errors.New("版本 ID 不能为空")
+	}
+	t := a.newTask("安装 Minecraft " + id)
+	defer func() { t.finish(err) }()
+	if _, err := a.mojang.ManifestEntry(a.context(), id); err != nil {
+		return err
+	}
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
+	return a.mojang.Install(a.context(), id, a.store.Settings().DownloadWorkers, t.mojangProgress(""))
+}
+
+// CreateInstanceRequest creates a new isolated instance.
+type CreateInstanceRequest struct {
+	Name          string `json:"name"`
+	MCVersion     string `json:"mcVersion"`
+	Loader        string `json:"loader"`
+	LoaderVersion string `json:"loaderVersion"`
+	MemoryMB      int    `json:"memoryMB"`
+}
+
+// CreateInstance creates an instance and installs its runtime.
+func (a *App) CreateInstance(req CreateInstanceRequest) (view InstanceView, err error) {
+	if err := a.ready(); err != nil {
+		return InstanceView{}, err
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.MCVersion = strings.TrimSpace(req.MCVersion)
+	if req.MCVersion == "" {
+		return InstanceView{}, errors.New("请选择 Minecraft 版本")
+	}
+	if _, err := a.mojang.ManifestEntry(a.context(), req.MCVersion); err != nil {
+		return InstanceView{}, fmt.Errorf("无效的 Minecraft 版本: %w", err)
+	}
+	loaderType := loader.Normalize(req.Loader)
+	if loaderType == "" {
+		loaderType = "vanilla"
+	}
+	loaderVersion := strings.TrimSpace(req.LoaderVersion)
+	t := a.newTask("创建版本 " + firstNonEmpty(req.Name, req.MCVersion))
+	defer func() { t.finish(err) }()
+
+	if loaderType != "vanilla" && loaderVersion == "" {
+		t.update("metadata", "正在选择 "+loaderType+" 版本…", 0, 0)
+		loaderVersion, err = loader.LatestVersion(a.context(), loaderType, req.MCVersion)
+		if err != nil {
+			return InstanceView{}, err
+		}
+	}
+	inst, err := a.store.CreateInstance(store.Instance{
+		Name:            req.Name,
+		MCVersion:       req.MCVersion,
+		Loader:          loaderType,
+		LoaderVersion:   loaderVersion,
+		LaunchVersionID: req.MCVersion,
+		MemoryMB:        req.MemoryMB,
+		Source:          "manual",
+	})
+	if err != nil {
+		return InstanceView{}, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = a.store.DeleteInstance(inst.ID, true)
+		}
+	}()
+	if err = a.installInstanceRuntime(a.context(), &inst, t); err != nil {
+		return InstanceView{}, err
+	}
+	success = true
+	a.emitInstancesChanged()
+	return a.instanceView(inst), nil
+}
+
+// installInstanceRuntime ensures the vanilla version and loader are installed.
+func (a *App) installInstanceRuntime(ctx context.Context, inst *store.Instance, t *progressTask) error {
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
+	workers := a.store.Settings().DownloadWorkers
+	t.update("game", "正在准备游戏文件…", 0, 0)
+	if err := a.mojang.Install(ctx, inst.MCVersion, workers, t.mojangProgress("game")); err != nil {
+		return fmt.Errorf("安装游戏版本失败: %w", err)
+	}
+	loaderType := loader.Normalize(inst.Loader)
+	if loaderType == "vanilla" || loaderType == "" {
+		updated, err := a.store.UpdateInstance(inst.ID, func(i *store.Instance) error {
+			i.LaunchVersionID = inst.MCVersion
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		*inst = updated
+		return nil
+	}
+	loaderVersion := inst.LoaderVersion
+	if loaderVersion == "" {
+		t.update("metadata", "正在选择加载器版本…", 0, 0)
+		var err error
+		loaderVersion, err = loader.LatestVersion(ctx, loaderType, inst.MCVersion)
+		if err != nil {
+			return err
+		}
+	}
+	javaPath := inst.JavaPath
+	if loaderType == "forge" || loaderType == "neoforge" {
+		rt, err := a.ensureJavaForLoader(ctx, inst, t)
+		if err != nil {
+			return err
+		}
+		javaPath = rt.Path
+	}
+	profileID, err := a.loaders.Ensure(ctx, inst.MCVersion, loaderType, loaderVersion, javaPath, workers, t.mojangProgress("loader"))
+	if err != nil {
+		return err
+	}
+	updated, err := a.store.UpdateInstance(inst.ID, func(i *store.Instance) error {
+		i.LoaderVersion = loaderVersion
+		i.LaunchVersionID = profileID
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	*inst = updated
+	return nil
+}
+
+func (a *App) ensureJavaForLoader(ctx context.Context, inst *store.Instance, t *progressTask) (java.Runtime, error) {
+	required := a.requiredJava(*inst)
+	extra := []string{a.store.Settings().DefaultJavaPath}
+	if inst.JavaPath != "" {
+		extra = append(extra, inst.JavaPath)
+	}
+	t.update("java", fmt.Sprintf("正在查找 Java %d…", required), 0, 0)
+	rt, err := a.javaMgr.FindSuitable(ctx, required, inst.JavaPath, extra)
+	if err == nil {
+		return rt, nil
+	}
+	t.update("java", fmt.Sprintf("未找到 Java %d，正在自动下载 Temurin…", required), 0, 0)
+	rt, err = a.javaMgr.Install(ctx, required, t.javaBytesProgress("java"))
+	if err != nil {
+		return java.Runtime{}, fmt.Errorf("需要 Java %d，但自动安装失败: %w", required, err)
+	}
+	settings := a.store.Settings()
+	if strings.TrimSpace(settings.DefaultJavaPath) == "" {
+		settings.DefaultJavaPath = rt.Path
+		if _, saveErr := a.store.SaveSettings(settings); saveErr != nil {
+			return java.Runtime{}, saveErr
+		}
+	}
+	return rt, nil
+}
+
+// UpdateInstanceRequest changes user-editable instance settings.
+type UpdateInstanceRequest struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	MemoryMB int    `json:"memoryMB"`
+	JavaPath string `json:"javaPath"`
+}
+
+// UpdateInstance edits name, memory or the per-instance Java override.
+func (a *App) UpdateInstance(req UpdateInstanceRequest) (InstanceView, error) {
+	if err := a.ready(); err != nil {
+		return InstanceView{}, err
+	}
+	javaPath := strings.TrimSpace(req.JavaPath)
+	if javaPath != "" {
+		rt, err := java.Probe(a.context(), javaPath)
+		if err != nil {
+			return InstanceView{}, fmt.Errorf("Java 路径不可用: %w", err)
+		}
+		javaPath = rt.Path
+	}
+	updated, err := a.store.UpdateInstance(req.ID, func(i *store.Instance) error {
+		i.Name = req.Name
+		i.MemoryMB = req.MemoryMB
+		i.JavaPath = javaPath
+		return nil
+	})
+	if err != nil {
+		return InstanceView{}, err
+	}
+	a.emitInstancesChanged()
+	return a.instanceView(updated), nil
+}
+
+// DeleteInstance removes an instance, stopping it first if necessary.
+func (a *App) DeleteInstance(id string, deleteFiles bool) error {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	a.procMu.Lock()
+	proc := a.procs[id]
+	a.procMu.Unlock()
+	if proc != nil {
+		_ = proc.Stop()
+		select {
+		case <-proc.Done():
+		case <-time.After(6 * time.Second):
+		}
+	}
+	if err := a.store.DeleteInstance(id, deleteFiles); err != nil {
+		return err
+	}
+	a.procMu.Lock()
+	delete(a.procs, id)
+	delete(a.logs, id)
+	a.procMu.Unlock()
+	a.emitInstancesChanged()
+	return nil
+}
+
+// LaunchState is emitted when a game starts or exits.
+type LaunchState struct {
+	InstanceID      string `json:"instanceId"`
+	Running         bool   `json:"running"`
+	ExitCode        int    `json:"exitCode"`
+	DurationSeconds int64  `json:"durationSeconds"`
+	StoppedByUser   bool   `json:"stoppedByUser"`
+}
+
+// LaunchInstance starts Minecraft for an instance.
+func (a *App) LaunchInstance(id string) (err error) {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	inst, ok := a.store.Instance(id)
+	if !ok {
+		return errors.New("版本不存在")
+	}
+	a.procMu.Lock()
+	if _, exists := a.procs[id]; exists {
+		a.procMu.Unlock()
+		return errors.New("该版本正在运行")
+	}
+	a.procMu.Unlock()
+
+	launchAccount, err := a.resolveLaunchAuth(a.context())
+	if err != nil {
+		return err
+	}
+	launchInst := inst
+	launchInst.MemoryMB = a.effectiveMemoryMB(inst)
+	required := a.requiredJava(inst)
+	preferred := strings.TrimSpace(inst.JavaPath)
+	rt, findErr := a.javaMgr.FindSuitable(a.context(), required, preferred, []string{a.store.Settings().DefaultJavaPath, inst.JavaPath})
+	if findErr != nil {
+		if preferred != "" {
+			return fmt.Errorf("需要 Java %d：%w", required, findErr)
+		}
+		// No compatible Java is available: install the matching Temurin
+		// runtime on demand so the first launch can proceed directly.
+		t := a.newTask(fmt.Sprintf("准备 Java %d", required))
+		var installErr error
+		rt, installErr = a.javaMgr.Install(a.context(), required, t.javaBytesProgress("java"))
+		t.finish(installErr)
+		if installErr != nil {
+			return fmt.Errorf("需要 Java %d，自动安装失败: %w", required, installErr)
+		}
+		settings := a.store.Settings()
+		if strings.TrimSpace(settings.DefaultJavaPath) == "" {
+			settings.DefaultJavaPath = rt.Path
+			if _, saveErr := a.store.SaveSettings(settings); saveErr != nil {
+				return fmt.Errorf("保存 Java 设置失败: %w", saveErr)
+			}
+		}
+	}
+	ring := &logRing{}
+	ring.add("[启动器] 正在启动 " + inst.Name + " · Java " + fmt.Sprint(rt.Major))
+	proc, err := a.launcher.Start(a.context(), launcher.Options{
+		Instance:      launchInst,
+		Settings:      a.store.Settings(),
+		JavaPath:      rt.Path,
+		PlayerName:    launchAccount.Name,
+		PlayerUUID:    launchAccount.UUID,
+		AccessToken:   launchAccount.AccessToken,
+		UserType:      launchAccount.UserType,
+		XUID:          launchAccount.XUID,
+		AuthlibJar:    launchAccount.AuthlibJar,
+		AuthlibServer: launchAccount.AuthlibServer,
+		OnLine: func(line string) {
+			ring.add(line)
+			if a.ctx != nil {
+				runtime.EventsEmit(a.ctx, "launch:log", map[string]string{
+					"instanceId": id,
+					"line":       line,
+				})
+			}
+		},
+	})
+	if err != nil {
+		return err
+	}
+	a.procMu.Lock()
+	// Re-check under the lock in case two clicks raced during Java detection.
+	if _, exists := a.procs[id]; exists {
+		a.procMu.Unlock()
+		_ = proc.Stop()
+		return errors.New("该版本正在运行")
+	}
+	a.procs[id] = proc
+	a.logs[id] = ring
+	a.procMu.Unlock()
+
+	_, _ = a.store.UpdateInstance(id, func(i *store.Instance) error {
+		i.LastPlayed = time.Now()
+		return nil
+	})
+	a.emitLaunchState(LaunchState{InstanceID: id, Running: true})
+	a.emitInstancesChanged()
+	if a.ctx != nil && !a.store.Settings().ShowLauncherOnLaunch {
+		a.procMu.Lock()
+		a.autoHidden = true
+		a.procMu.Unlock()
+		runtime.WindowHide(a.ctx)
+	}
+
+	go func() {
+		<-proc.Done()
+		duration := proc.Duration()
+		minutes := int(duration.Minutes())
+		a.store.MarkPlayed(id, minutes)
+		a.procMu.Lock()
+		delete(a.procs, id)
+		shouldShow := a.autoHidden && len(a.procs) == 0
+		if shouldShow {
+			a.autoHidden = false
+		}
+		a.procMu.Unlock()
+		if shouldShow && a.ctx != nil {
+			runtime.WindowShow(a.ctx)
+		}
+		a.emitLaunchState(LaunchState{
+			InstanceID: id, Running: false, ExitCode: proc.ExitCode(),
+			DurationSeconds: int64(duration.Seconds()), StoppedByUser: proc.StoppedByUser(),
+		})
+		a.emitInstancesChanged()
+	}()
+	return nil
+}
+
+func (a *App) emitLaunchState(state LaunchState) {
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "launch:state", state)
+	}
+}
+
+// StopInstance terminates a running game.
+func (a *App) StopInstance(id string) error {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	a.procMu.Lock()
+	proc := a.procs[id]
+	a.procMu.Unlock()
+	if proc == nil {
+		return errors.New("版本没有在运行")
+	}
+	return proc.Stop()
+}
+
+// GetInstanceLog returns the buffered launcher/game output.
+func (a *App) GetInstanceLog(id string) []string {
+	a.procMu.Lock()
+	ring := a.logs[id]
+	a.procMu.Unlock()
+	if ring == nil {
+		return []string{}
+	}
+	return ring.snapshot()
+}
+
+// OpenInstanceFolder opens an instance's game directory.
+func (a *App) OpenInstanceFolder(id string) error {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	if _, ok := a.store.Instance(id); !ok {
+		return errors.New("版本不存在")
+	}
+	return openPath(a.store.InstanceDir(id))
+}
+
+// OpenDataFolder opens the portable game directory.
+func (a *App) OpenDataFolder() error {
+	if a.paths.Data == "" {
+		return errors.New("游戏目录不可用")
+	}
+	return openPath(a.paths.Data)
+}
+
+// OpenConfigFolder opens the portable MyGoLuncher configuration directory.
+func (a *App) OpenConfigFolder() error {
+	if a.paths.Root == "" {
+		return errors.New("配置目录不可用")
+	}
+	return openPath(a.paths.Root)
+}
+
+// OpenURL opens a trusted external link in the browser.
+func (a *App) OpenURL(raw string) error {
+	if !strings.HasPrefix(raw, "https://") && !strings.HasPrefix(raw, "http://") {
+		return errors.New("只允许打开 HTTP 链接")
+	}
+	runtime.BrowserOpenURL(a.context(), raw)
+	return nil
+}
+
+// SearchProjects queries the Modrinth catalog.
+func (a *App) SearchProjects(req modrinth.SearchRequest) (modrinth.SearchResult, error) {
+	if err := a.ready(); err != nil {
+		return modrinth.SearchResult{}, err
+	}
+	req.ProjectType = modrinth.NormalizeProjectType(req.ProjectType)
+	return modrinth.Search(a.context(), req)
+}
+
+func projectLoader(inst store.Instance, projectType string) string {
+	if projectType == modrinth.TypeMod && inst.Loader != "" && inst.Loader != "vanilla" {
+		return inst.Loader
+	}
+	return ""
+}
+
+// ListProjectVersions returns only files compatible with an instance's game
+// version and loader.
+func (a *App) ListProjectVersions(instanceID, projectID string) ([]modrinth.Version, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	inst, ok := a.store.Instance(instanceID)
+	if !ok {
+		return nil, errors.New("请先选择一个版本")
+	}
+	project, err := modrinth.ProjectByID(a.context(), projectID)
+	if err != nil {
+		return nil, err
+	}
+	loaderName := projectLoader(inst, project.ProjectType)
+	if project.ProjectType == modrinth.TypeMod && loaderName == "" {
+		return nil, errors.New("原版游戏无法安装模组，请创建 Fabric / Quilt / Forge / NeoForge 版本")
+	}
+	versions, err := modrinth.ListVersions(a.context(), projectID, inst.MCVersion, loaderName)
+	if err != nil {
+		return nil, err
+	}
+	versions = modrinth.FilterCompatible(versions, inst.MCVersion, loaderName)
+	if versions == nil {
+		versions = []modrinth.Version{}
+	}
+	return versions, nil
+}
+
+// InstallProjectResult describes a completed content install.
+type InstallProjectResult struct {
+	FileName     string   `json:"fileName"`
+	Path         string   `json:"path"`
+	VersionID    string   `json:"versionId"`
+	VersionName  string   `json:"versionName"`
+	GameVersion  string   `json:"gameVersion"`
+	Loader       string   `json:"loader"`
+	Dependencies []string `json:"dependencies"`
+}
+
+// InstallProject installs a mod, shader or resource pack into an instance.
+func (a *App) InstallProject(instanceID, projectID, versionID string) (result InstallProjectResult, err error) {
+	if err := a.ready(); err != nil {
+		return InstallProjectResult{}, err
+	}
+	inst, ok := a.store.Instance(instanceID)
+	if !ok {
+		return InstallProjectResult{}, errors.New("请先选择一个版本")
+	}
+	project, err := modrinth.ProjectByID(a.context(), projectID)
+	if err != nil {
+		return InstallProjectResult{}, err
+	}
+	if project.ProjectType == modrinth.TypeModpack {
+		return InstallProjectResult{}, errors.New("整合包请使用整合包安装功能")
+	}
+	loaderName := projectLoader(inst, project.ProjectType)
+	if project.ProjectType == modrinth.TypeMod && loaderName == "" {
+		return InstallProjectResult{}, errors.New("原版游戏无法安装模组，请创建 Fabric / Quilt / Forge / NeoForge 版本")
+	}
+	var version modrinth.Version
+	if versionID != "" {
+		version, err = modrinth.VersionByID(a.context(), versionID)
+		if err != nil {
+			return InstallProjectResult{}, err
+		}
+		if !version.Compatible(inst.MCVersion, loaderName) {
+			return InstallProjectResult{}, fmt.Errorf("所选文件不兼容 %s / %s，请使用自动匹配的版本", inst.MCVersion, firstNonEmpty(loaderName, "原版"))
+		}
+	} else {
+		version, err = modrinth.BestVersion(a.context(), projectID, inst.MCVersion, loaderName)
+		if err != nil {
+			return InstallProjectResult{}, err
+		}
+	}
+	subdir, err := modrinth.InstallPath(project.ProjectType)
+	if err != nil {
+		return InstallProjectResult{}, err
+	}
+	t := a.newTask("安装 " + project.Title)
+	defer func() { t.finish(err) }()
+	t.update("download", "正在下载 "+project.Title+"…", 0, 0)
+	dir := filepath.Join(a.store.InstanceDir(inst.ID), subdir)
+	path, err := modrinth.DownloadFile(a.context(), version, dir)
+	if err != nil {
+		return InstallProjectResult{}, err
+	}
+	result = InstallProjectResult{
+		FileName: filepath.Base(path), Path: path, VersionID: version.ID,
+		VersionName: version.Name, GameVersion: inst.MCVersion, Loader: loaderName,
+	}
+	if project.ProjectType == modrinth.TypeMod {
+		t.update("dependencies", "正在检查前置模组…", 0, 0)
+		deps, depErr := modrinth.InstallDependencies(
+			a.context(), version, inst.MCVersion, loaderName, dir, 6,
+			func(message string) { t.update("dependencies", message, 0, 0) },
+		)
+		result.Dependencies = deps
+		if depErr != nil {
+			return result, depErr
+		}
+	}
+	t.update("done", "安装完成", 1, 1)
+	a.emitInstancesChanged()
+	return result, nil
+}
+
+// ModpackImportResponse is returned by all modpack import entry points.
+type ModpackImportResponse struct {
+	Instance     InstanceView `json:"instance"`
+	Format       string       `json:"format"`
+	FormatLabel  string       `json:"formatLabel"`
+	MissingFiles int          `json:"missingFiles"`
+	Warnings     []string     `json:"warnings"`
+}
+
+// ImportModpackDialog lets the user pick and import a modpack.
+func (a *App) ImportModpackDialog() (resp ModpackImportResponse, err error) {
+	if err := a.ready(); err != nil {
+		return ModpackImportResponse{}, err
+	}
+	path, err := runtime.OpenFileDialog(a.context(), runtime.OpenDialogOptions{
+		Title: "导入整合包",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "Minecraft 整合包 (*.mrpack;*.zip)", Pattern: "*.mrpack;*.zip"},
+		},
+	})
+	if err != nil {
+		return ModpackImportResponse{}, err
+	}
+	if strings.TrimSpace(path) == "" {
+		return ModpackImportResponse{}, nil
+	}
+	t := a.newTask("导入整合包")
+	defer func() { t.finish(err) }()
+	return a.importModpack(a.context(), path, t)
+}
+
+func (a *App) importModpack(ctx context.Context, path string, t *progressTask) (ModpackImportResponse, error) {
+	ins, err := modpack.Inspect(path)
+	if err != nil {
+		return ModpackImportResponse{}, err
+	}
+	opts := modpack.ImportOptions{CurseForgeAPIKey: a.store.Settings().CurseForgeAPIKey}
+	if ins.MCVersion == "" {
+		latest, merr := a.mojang.LatestRelease(ctx)
+		if merr != nil {
+			return ModpackImportResponse{}, errors.New("该整合包没有声明游戏版本，且无法获取最新版本")
+		}
+		opts.FallbackMCVersion = latest
+	}
+	t.update("import", "正在导入 "+modpack.FormatLabel(ins.Format)+"…", 0, 0)
+	imported, err := modpack.Import(ctx, a.store, path, opts, func(stage, message string, current, total int) {
+		t.update(stage, message, int64(current), int64(total))
+	})
+	if err != nil {
+		return ModpackImportResponse{}, err
+	}
+	inst := imported.Instance
+	var warnings = imported.Warnings
+	t.update("game", "正在准备游戏与加载器…", 0, 0)
+	if err := a.installInstanceRuntime(ctx, &inst, t); err != nil {
+		warnings = append(warnings, "文件已导入，但游戏环境安装失败："+err.Error())
+	}
+	updated, updateErr := a.store.UpdateInstance(inst.ID, func(i *store.Instance) error {
+		i.Name = inst.Name
+		i.LoaderVersion = inst.LoaderVersion
+		i.LaunchVersionID = inst.LaunchVersionID
+		i.Notes = inst.Notes
+		return nil
+	})
+	if updateErr == nil {
+		inst = updated
+	}
+	a.emitInstancesChanged()
+	return ModpackImportResponse{
+		Instance: a.instanceView(inst), Format: string(imported.Format),
+		FormatLabel: imported.FormatLabel, MissingFiles: imported.MissingFiles, Warnings: warnings,
+	}, nil
+}
+
+// InstallModpackProject downloads and imports a Modrinth modpack version.
+func (a *App) InstallModpackProject(projectID, versionID string) (resp ModpackImportResponse, err error) {
+	if err := a.ready(); err != nil {
+		return ModpackImportResponse{}, err
+	}
+	t := a.newTask("安装整合包")
+	defer func() { t.finish(err) }()
+	version, err := modrinth.VersionByID(a.context(), versionID)
+	if err != nil {
+		return ModpackImportResponse{}, err
+	}
+	file, err := version.Primary()
+	if err != nil {
+		return ModpackImportResponse{}, err
+	}
+	if !strings.HasSuffix(strings.ToLower(file.Filename), ".mrpack") {
+		return ModpackImportResponse{}, errors.New("该文件不是 Modrinth 整合包")
+	}
+	dir := filepath.Join(a.paths.Cache, "modpacks")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ModpackImportResponse{}, err
+	}
+	t.update("download", "正在下载整合包…", 0, 0)
+	dest := filepath.Join(dir, filepath.Base(file.Filename))
+	if err := httpx.Download(a.context(), httpx.File{
+		URL: file.URL, Dest: dest, SHA512: file.Hashes["sha512"], SHA1: file.Hashes["sha1"],
+		Size: file.Size, Verify: true,
+		Progress: func(done, total int64) {
+			t.update("download", "正在下载整合包…", done, total)
+		},
+	}); err != nil {
+		return ModpackImportResponse{}, err
+	}
+	return a.importModpack(a.context(), dest, t)
+}
+
+// PickExternalLauncher lets the user select another launcher's data or
+// instance folder and previews the discovered versions.
+func (a *App) PickExternalLauncher() (external.ScanResult, error) {
+	return a.PickVersionDirectory()
+}
+
+// PickVersionDirectory lets the user choose any game directory, versions
+// directory or single version folder and previews the versions inside.
+func (a *App) PickVersionDirectory() (external.ScanResult, error) {
+	if err := a.ready(); err != nil {
+		return external.ScanResult{}, err
+	}
+	path, err := runtime.OpenDirectoryDialog(a.context(), runtime.OpenDialogOptions{
+		Title: "选择游戏目录、versions 目录或版本文件夹",
+	})
+	if err != nil {
+		return external.ScanResult{}, err
+	}
+	if strings.TrimSpace(path) == "" {
+		return external.ScanResult{}, nil
+	}
+	return external.Scan(path)
+}
+
+// ScanVersionDirectory inspects a known path without opening a dialog.
+func (a *App) ScanVersionDirectory(path string) (external.ScanResult, error) {
+	if err := a.ready(); err != nil {
+		return external.ScanResult{}, err
+	}
+	return external.Scan(path)
+}
+
+// DetectLocalLaunchers scans the well-known official launcher, HMCL, PCL2,
+// Prism/MultiMC and MultiMC data directories on this machine.
+func (a *App) DetectLocalLaunchers() ([]external.ScanResult, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	results := []external.ScanResult{}
+	seen := map[string]bool{}
+	for _, root := range external.KnownRoots() {
+		if !root.Exists {
+			continue
+		}
+		key := strings.ToLower(root.Path)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		scan, err := external.Scan(root.Path)
+		if err != nil || len(scan.Candidates) == 0 {
+			continue
+		}
+		if scan.Source == "其他启动器" {
+			scan.Source = root.Label
+		}
+		results = append(results, scan)
+	}
+	if len(results) == 0 {
+		return results, errors.New("没有在本机找到官方启动器或其他启动器的版本，请手动选择目录")
+	}
+	return results, nil
+}
+
+// ExternalImportResponse describes an imported third-party launcher instance.
+type ExternalImportResponse struct {
+	Instance            InstanceView `json:"instance"`
+	Source              string       `json:"source"`
+	FilesCopied         int          `json:"filesCopied"`
+	ModsCopied          int          `json:"modsCopied"`
+	ResourcePacksCopied int          `json:"resourcePacksCopied"`
+	ShaderPacksCopied   int          `json:"shaderPacksCopied"`
+	SavesCopied         int          `json:"savesCopied"`
+	Warnings            []string     `json:"warnings"`
+}
+
+// ImportExternalInstance copies user content and rebuilds the game runtime for
+// a version found in another launcher.
+func (a *App) ImportExternalInstance(root, candidateID, nameOverride string) (response ExternalImportResponse, err error) {
+	if err := a.ready(); err != nil {
+		return ExternalImportResponse{}, err
+	}
+	candidate, err := external.FindCandidate(root, candidateID)
+	if err != nil {
+		return ExternalImportResponse{}, err
+	}
+	if strings.TrimSpace(candidate.MCVersion) == "" {
+		return ExternalImportResponse{}, errors.New("无法识别该版本的 Minecraft 版本")
+	}
+	if _, err := a.mojang.ManifestEntry(a.context(), candidate.MCVersion); err != nil {
+		return ExternalImportResponse{}, fmt.Errorf("Minecraft %s 不在官方版本清单中，无法准备游戏文件: %w", candidate.MCVersion, err)
+	}
+	name := strings.TrimSpace(nameOverride)
+	if name == "" {
+		name = candidate.Name
+	}
+	if _, nameErr := store.SafeName(name); nameErr != nil {
+		name = candidate.MCVersion + " 版本"
+	}
+	t := a.newTask("导入 " + name)
+	defer func() { t.finish(err) }()
+	inst, err := a.store.CreateInstance(store.Instance{
+		Name:            name,
+		MCVersion:       candidate.MCVersion,
+		Loader:          candidate.Loader,
+		LoaderVersion:   candidate.LoaderVersion,
+		LaunchVersionID: candidate.MCVersion,
+		MemoryMB:        a.store.Settings().DefaultMemoryMB,
+		Source:          "external:" + candidate.Source,
+		Notes:           "从 " + candidate.Source + " 版本 " + candidate.Name + " 导入",
+	})
+	if err != nil {
+		return ExternalImportResponse{}, err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = a.store.DeleteInstance(inst.ID, true)
+		}
+	}()
+	t.update("copy", "正在复制版本内容…", 0, 1)
+	stats, err := external.CopyContent(candidate, a.store.InstanceDir(inst.ID))
+	if err != nil {
+		return ExternalImportResponse{}, err
+	}
+	t.update("copy", "版本内容复制完成", 1, 1)
+	warnings := append([]string{}, candidate.Warnings...)
+	if err := a.installInstanceRuntime(a.context(), &inst, t); err != nil {
+		warnings = append(warnings, "版本内容已导入，但游戏/加载器安装失败："+err.Error())
+	}
+	cleanup = false
+	a.emitInstancesChanged()
+	return ExternalImportResponse{
+		Instance: a.instanceView(inst), Source: candidate.Source,
+		FilesCopied: stats.Files, ModsCopied: stats.Mods,
+		ResourcePacksCopied: stats.ResourcePacks, ShaderPacksCopied: stats.ShaderPacks,
+		SavesCopied: stats.Saves, Warnings: warnings,
+	}, nil
+}
+
+// ExportModpackDialog exports the instance as a portable .mrpack.
+func (a *App) ExportModpackDialog(instanceID string) (string, error) {
+	if err := a.ready(); err != nil {
+		return "", err
+	}
+	inst, ok := a.store.Instance(instanceID)
+	if !ok {
+		return "", errors.New("版本不存在")
+	}
+	dest, err := runtime.SaveFileDialog(a.context(), runtime.SaveDialogOptions{
+		Title:           "导出 Modrinth 整合包",
+		DefaultFilename: safeFilename(inst.Name) + ".mrpack",
+		Filters:         []runtime.FileFilter{{DisplayName: "Modrinth 整合包 (*.mrpack)", Pattern: "*.mrpack"}},
+	})
+	if err != nil || strings.TrimSpace(dest) == "" {
+		return "", err
+	}
+	if !strings.HasSuffix(strings.ToLower(dest), ".mrpack") {
+		dest += ".mrpack"
+	}
+	if err := modpack.ExportMRPack(a.context(), inst, a.store.InstanceDir(inst.ID), dest); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// ExportInstanceBackupDialog exports a Prism/MultiMC-compatible zip.
+func (a *App) ExportInstanceBackupDialog(instanceID string) (string, error) {
+	if err := a.ready(); err != nil {
+		return "", err
+	}
+	inst, ok := a.store.Instance(instanceID)
+	if !ok {
+		return "", errors.New("版本不存在")
+	}
+	dest, err := runtime.SaveFileDialog(a.context(), runtime.SaveDialogOptions{
+		Title:           "导出版本备份",
+		DefaultFilename: safeFilename(inst.Name) + "-backup.zip",
+		Filters:         []runtime.FileFilter{{DisplayName: "版本备份 (*.zip)", Pattern: "*.zip"}},
+	})
+	if err != nil || strings.TrimSpace(dest) == "" {
+		return "", err
+	}
+	if !strings.HasSuffix(strings.ToLower(dest), ".zip") {
+		dest += ".zip"
+	}
+	if err := modpack.ExportZip(a.context(), inst, a.store.InstanceDir(inst.ID), dest); err != nil {
+		return "", err
+	}
+	return dest, nil
+}
+
+// GetJavaRuntimes scans installed Java runtimes.
+func (a *App) GetJavaRuntimes() ([]java.Runtime, error) {
+	if err := a.ready(); err != nil {
+		return nil, err
+	}
+	extras := []string{a.store.Settings().DefaultJavaPath}
+	for _, inst := range a.store.Instances() {
+		if inst.JavaPath != "" {
+			extras = append(extras, inst.JavaPath)
+		}
+	}
+	runtimes := a.javaMgr.Scan(a.context(), extras)
+	if runtimes == nil {
+		runtimes = []java.Runtime{}
+	}
+	return runtimes, nil
+}
+
+// GetJavaReleases returns Adoptium's available Java feature versions.
+func (a *App) GetJavaReleases() (java.ReleaseInfo, error) {
+	if err := a.ready(); err != nil {
+		return java.ReleaseInfo{}, err
+	}
+	return a.javaMgr.Releases(a.context())
+}
+
+// GetJavaPackage resolves a downloadable Temurin JRE.
+func (a *App) GetJavaPackage(feature int) (java.Archive, error) {
+	if err := a.ready(); err != nil {
+		return java.Archive{}, err
+	}
+	return a.javaMgr.PackageInfo(a.context(), feature)
+}
+
+// InstallJava downloads and installs a managed Temurin JRE.
+func (a *App) InstallJava(feature int) (rt java.Runtime, err error) {
+	if err := a.ready(); err != nil {
+		return java.Runtime{}, err
+	}
+	t := a.newTask(fmt.Sprintf("安装 Java %d", feature))
+	defer func() { t.finish(err) }()
+	rt, err = a.javaMgr.Install(a.context(), feature, t.javaBytesProgress("java"))
+	if err != nil {
+		return java.Runtime{}, err
+	}
+	settings := a.store.Settings()
+	if strings.TrimSpace(settings.DefaultJavaPath) == "" {
+		settings.DefaultJavaPath = rt.Path
+		if _, saveErr := a.store.SaveSettings(settings); saveErr != nil {
+			return java.Runtime{}, saveErr
+		}
+	}
+	return rt, nil
+}
+
+func openPath(path string) error {
+	var cmd *exec.Cmd
+	switch goruntime.GOOS {
+	case "windows":
+		cmd = exec.Command("explorer", path)
+	case "darwin":
+		cmd = exec.Command("open", path)
+	default:
+		cmd = exec.Command("xdg-open", path)
+	}
+	sysutil.HideWindow(cmd)
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("无法打开目录: %w", err)
+	}
+	return nil
+}
+
+func safeFilename(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "instance"
+	}
+	replacer := strings.NewReplacer("/", "-", "\\", "-", ":", "-", "*", "-", "?", "-", "\"", "-", "<", "-", ">", "-", "|", "-")
+	name = replacer.Replace(name)
+	if len(name) > 80 {
+		name = name[:80]
+	}
+	return name
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}

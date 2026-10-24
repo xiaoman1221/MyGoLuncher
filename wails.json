@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "MyMinecraftGoLuncher",
+  "outputfilename": "MyMinecraftGoLuncher",
+  "frontend:install": "npm install",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "xiaoman1221",
+    "email": "im@manjiuqi.com"
+  },
+  "info": {
+    "companyName": "MyGoLuncher",
+    "productName": "MyGoLuncher",
+    "productVersion": "1.0.0",
+    "copyright": "Not affiliated with Mojang Studios or Microsoft.",
+    "comments": "A cross-platform Minecraft launcher built with Go and Wails."
+  }
+}
