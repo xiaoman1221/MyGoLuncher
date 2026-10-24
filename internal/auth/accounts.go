@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"MyMinecraftGoLuncher/internal/secretstore"
 	"MyMinecraftGoLuncher/internal/util"
 )
 
@@ -26,7 +28,7 @@ const (
 )
 
 // Account is persisted. Passwords are never stored; Microsoft refresh tokens
-// and third-party access tokens are kept in a user-only config file.
+// and third-party access tokens are kept in the encrypted secret store.
 type Account struct {
 	ID           string    `json:"id"`
 	Kind         Kind      `json:"kind"`
@@ -85,23 +87,57 @@ type database struct {
 // Store manages persisted accounts.
 type Store struct {
 	mu       sync.RWMutex
-	path     string
+	secrets  secretstore.Store
 	accounts []Account
 	selected string
 }
 
-// Open loads accounts, creating a default offline profile if necessary.
+const accountsSecretName = "accounts"
+
+// Open is a file-backed helper used by tests. The desktop application uses
+// OpenWithSecrets with the registry/OS secret store.
 func Open(path, defaultPlayerName string) (*Store, error) {
-	s := &Store{path: path}
+	secrets, err := secretstore.NewFileStore(filepath.Join(filepath.Dir(path), "secrets"))
+	if err != nil {
+		return nil, err
+	}
+	return OpenWithSecrets(secrets, path, defaultPlayerName)
+}
+
+// OpenWithSecrets loads accounts from encrypted storage, migrating a legacy
+// plaintext accounts.json if it exists.
+func OpenWithSecrets(secrets secretstore.Store, legacyPath, defaultPlayerName string) (*Store, error) {
+	if secrets == nil {
+		secrets = secretstore.NewMemory()
+	}
+	s := &Store{secrets: secrets}
 	if data := strings.TrimSpace(defaultPlayerName); data == "" {
 		defaultPlayerName = "Steve"
 	}
-	var db database
-	if err := util.ReadJSON(path, &db); err != nil && !errors.Is(err, os.ErrNotExist) {
+	raw, err := secrets.Get(accountsSecretName)
+	if err != nil {
 		return nil, fmt.Errorf("读取账户数据失败: %w", err)
 	}
-	s.accounts = db.Accounts
-	s.selected = db.SelectedID
+	var db database
+	if strings.TrimSpace(raw) == "" {
+		if strings.TrimSpace(legacyPath) != "" {
+			if err := util.ReadJSON(legacyPath, &db); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, fmt.Errorf("读取账户数据失败: %w", err)
+			}
+			if len(db.Accounts) > 0 {
+				s.accounts = db.Accounts
+				s.selected = db.SelectedID
+				if err := s.saveLocked(); err != nil {
+					return nil, err
+				}
+			}
+		}
+	} else if err := json.Unmarshal([]byte(raw), &db); err != nil {
+		return nil, fmt.Errorf("解析账户数据失败: %w", err)
+	} else {
+		s.accounts = db.Accounts
+		s.selected = db.SelectedID
+	}
 	if len(s.accounts) == 0 {
 		offline := newOfflineAccount(defaultPlayerName)
 		s.accounts = []Account{offline}
@@ -113,7 +149,19 @@ func Open(path, defaultPlayerName string) (*Store, error) {
 	if s.findLocked(s.selected) == nil {
 		s.selected = s.accounts[0].ID
 	}
+	// Remove any plaintext account file once the encrypted copy is in place.
+	removeLegacyAccounts(legacyPath)
 	return s, nil
+}
+
+func removeLegacyAccounts(path string) {
+	if strings.TrimSpace(path) == "" {
+		return
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		// Overwrite any remaining plaintext secrets if the file cannot be removed.
+		_ = os.WriteFile(path, []byte("{}\n"), 0o600)
+	}
 }
 
 // List returns all accounts without secrets.
@@ -310,12 +358,11 @@ func (s *Store) findOfflineLocked() *Account {
 }
 
 func (s *Store) saveLocked() error {
-	if err := util.WriteJSON(s.path, database{Accounts: s.accounts, SelectedID: s.selected}); err != nil {
+	raw, err := json.Marshal(database{Accounts: s.accounts, SelectedID: s.selected})
+	if err != nil {
 		return err
 	}
-	// Token files should only be readable by the current user where possible.
-	_ = os.Chmod(filepath.Clean(s.path), 0o600)
-	return nil
+	return s.secrets.Set(accountsSecretName, string(raw))
 }
 
 // sameAuthlibServer treats the site root and its API location as the same

@@ -107,3 +107,20 @@ func TestBuildArgumentsUsesAccountAndInjector(t *testing.T) {
 		t.Fatal("access token was not redacted from the command log")
 	}
 }
+
+func TestRedactCommandHandlesEveryTokenForm(t *testing.T) {
+	args := []string{
+		"java", "--accessToken", "separate-token",
+		"--authSession=joined-token", "--session", "session-token",
+		"--token=equals-token", "--username", "Alex",
+	}
+	redacted := strings.Join(redactCommand(args), " ")
+	for _, secret := range []string{"separate-token", "joined-token", "session-token", "equals-token"} {
+		if strings.Contains(redacted, secret) {
+			t.Fatalf("%q leaked into the command log: %s", secret, redacted)
+		}
+	}
+	if !strings.Contains(redacted, "--username Alex") {
+		t.Fatalf("non-secret arguments were changed: %s", redacted)
+	}
+}

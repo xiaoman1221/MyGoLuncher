@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"MyMinecraftGoLuncher/internal/hitokoto"
+	"MyMinecraftGoLuncher/internal/secretstore"
 )
 
 // Paths contains every directory owned by the launcher.
 type Paths struct {
 	Base       string `json:"base"`
-	Root       string `json:"root"` // configuration directory (MyGoLuncher)
+	Root       string `json:"root"` // configuration directory (MGL)
 	Data       string `json:"data"`
 	Instances  string `json:"instances"`
 	Versions   string `json:"versions"`
@@ -35,21 +36,22 @@ type Paths struct {
 
 // DefaultPaths uses a portable layout next to the running executable:
 //
-//	<base>/.minecraft     game files
-//	<base>/MyGoLuncher    settings, instance index, accounts and cache
+//	<base>/.minecraft  game files
+//	<base>/MGL         non-sensitive settings, instance index and cache
 //
-// MYGOLUNCHER_HOME can override the base directory for development or unusual
+// MGL_HOME can override the base directory for development or unusual
 // installations. On macOS the base is the folder containing the .app bundle.
 func DefaultPaths() (Paths, error) {
-	override := strings.TrimSpace(os.Getenv("MYGOLUNCHER_HOME"))
+	override := strings.TrimSpace(os.Getenv("MGL_HOME"))
 	if override == "" {
-		override = strings.TrimSpace(os.Getenv("MGL_HOME"))
+		override = strings.TrimSpace(os.Getenv("MYGOLUNCHER_HOME"))
 	}
 	if override != "" {
 		abs, err := filepath.Abs(override)
 		if err != nil {
 			return Paths{}, err
 		}
+		migrateLegacyConfig(abs)
 		return PathsFor(abs), nil
 	}
 	exe, err := os.Executable()
@@ -82,11 +84,11 @@ func DefaultPaths() (Paths, error) {
 	return PathsFor(base), nil
 }
 
-// migrateLegacyConfig quietly moves the pre-rename MGL directory to the new
-// MyGoLuncher name so existing accounts and versions keep working.
+// migrateLegacyConfig quietly moves the temporary MyGoLuncher config folder
+// back to MGL so existing versions and non-sensitive settings keep working.
 func migrateLegacyConfig(base string) {
-	current := filepath.Join(base, "MyGoLuncher")
-	legacy := filepath.Join(base, "MGL")
+	current := filepath.Join(base, "MGL")
+	legacy := filepath.Join(base, "MyGoLuncher")
 	if _, err := os.Stat(current); err == nil {
 		return
 	}
@@ -97,7 +99,7 @@ func migrateLegacyConfig(base string) {
 
 // PathsFor builds the portable directory set next to base.
 func PathsFor(base string) Paths {
-	config := filepath.Join(base, "MyGoLuncher")
+	config := filepath.Join(base, "MGL")
 	data := filepath.Join(base, ".minecraft")
 	return Paths{
 		Base:       base,
@@ -139,7 +141,7 @@ type Settings struct {
 	PlayerName           string         `json:"playerName"`
 	DefaultMemoryMB      int            `json:"defaultMemoryMB"`
 	DefaultJavaPath      string         `json:"defaultJavaPath"`
-	CurseForgeAPIKey     string         `json:"curseForgeAPIKey"`
+	CurseForgeAPIKey     string         `json:"curseForgeAPIKey,omitempty"`
 	MicrosoftClientID    string         `json:"microsoftClientID"`
 	ExtraJVMArgs         string         `json:"extraJvmArgs"`
 	CustomMirrors        []MirrorConfig `json:"customMirrors"`
@@ -153,7 +155,7 @@ type Settings struct {
 	AISearchEnabled      bool           `json:"aiSearchEnabled"`
 	AISearchProvider     string         `json:"aiSearchProvider"`
 	AISearchBaseURL      string         `json:"aiSearchBaseUrl"`
-	AISearchAPIKey       string         `json:"aiSearchApiKey"`
+	AISearchAPIKey       string         `json:"aiSearchApiKey,omitempty"`
 	AISearchModel        string         `json:"aiSearchModel"`
 	SchemaVersion        int            `json:"schemaVersion"`
 	ConcurrencyWarned    bool           `json:"-"`
@@ -225,23 +227,50 @@ type instanceDB struct {
 type Store struct {
 	mu        sync.RWMutex
 	paths     Paths
+	secrets   secretstore.Store
 	settings  Settings
 	instances []Instance
 	loadErr   error
 }
 
-// Open loads settings and instances from disk.
+const (
+	secretCurseForgeKey = "curseforgeApiKey"
+	secretAIKey         = "aiSearchApiKey"
+)
+
+// Open creates a store backed by an in-memory secret store. It is used by
+// tests; the desktop application uses OpenWithSecrets.
 func Open(paths Paths) (*Store, error) {
+	return OpenWithSecrets(paths, secretstore.NewMemory())
+}
+
+// OpenWithSecrets loads settings and instances, moving legacy API keys out of
+// settings.json into the encrypted secret store.
+func OpenWithSecrets(paths Paths, secrets secretstore.Store) (*Store, error) {
 	if err := paths.Ensure(); err != nil {
 		return nil, err
 	}
-	s := &Store{paths: paths, settings: DefaultSettings()}
+	if secrets == nil {
+		secrets = secretstore.NewMemory()
+	}
+	s := &Store{paths: paths, secrets: secrets, settings: DefaultSettings()}
 	// Reset only the schema marker so a legacy settings file can be detected.
 	s.settings.SchemaVersion = 0
 	if err := loadJSON(paths.Settings, &s.settings); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.loadErr = fmt.Errorf("读取设置失败: %w", err)
 	}
 	settingsDirty := false
+	secretsReady := true
+	if err := s.migrateSecrets(&settingsDirty); err != nil {
+		// Do not rewrite settings below: that would erase legacy keys from
+		// settings.json even though they never reached the secret store.
+		secretsReady = false
+		if s.loadErr == nil {
+			s.loadErr = err
+		} else {
+			s.loadErr = fmt.Errorf("%v; %v", s.loadErr, err)
+		}
+	}
 	if s.settings.DownloadWorkers <= 0 || s.settings.DownloadWorkers > 24 {
 		s.settings.DownloadWorkers = 8
 		settingsDirty = true
@@ -322,8 +351,8 @@ func Open(paths Paths) (*Store, error) {
 		}
 	}
 	s.sortInstancesLocked()
-	if settingsDirty {
-		_ = saveJSON(paths.Settings, s.settings)
+	if settingsDirty && secretsReady {
+		_ = savePublicSettings(paths.Settings, s.settings)
 	}
 	if instancesDirty {
 		_ = saveJSON(paths.InstanceDB, instanceDB{Instances: s.instances})
@@ -411,11 +440,73 @@ func (s *Store) SaveSettings(next Settings) (Settings, error) {
 		next.CustomMirrors = []MirrorConfig{}
 	}
 	next.SchemaVersion = 3
+	if err := s.saveSecrets(next); err != nil {
+		return Settings{}, err
+	}
 	s.mu.Lock()
 	s.settings = next
-	err := saveJSON(s.paths.Settings, next)
+	err := savePublicSettings(s.paths.Settings, next)
 	s.mu.Unlock()
 	return next, err
+}
+
+func (s *Store) saveSecrets(settings Settings) error {
+	if err := s.setSecret(secretCurseForgeKey, strings.TrimSpace(settings.CurseForgeAPIKey)); err != nil {
+		return fmt.Errorf("保存 CurseForge 密钥失败: %w", err)
+	}
+	if err := s.setSecret(secretAIKey, strings.TrimSpace(settings.AISearchAPIKey)); err != nil {
+		return fmt.Errorf("保存 AI 密钥失败: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) setSecret(name, value string) error {
+	if value == "" {
+		return s.secrets.Delete(name)
+	}
+	return s.secrets.Set(name, value)
+}
+
+// migrateSecrets moves API keys from the old settings.json into the encrypted
+// secret store and clears them from the portable file.
+func (s *Store) migrateSecrets(dirty *bool) error {
+	legacyCF := strings.TrimSpace(s.settings.CurseForgeAPIKey)
+	legacyAI := strings.TrimSpace(s.settings.AISearchAPIKey)
+	legacyFound := legacyCF != "" || legacyAI != ""
+
+	storedCF, err := s.secrets.Get(secretCurseForgeKey)
+	if err != nil {
+		return fmt.Errorf("读取 CurseForge 密钥失败: %w", err)
+	}
+	if storedCF == "" && legacyCF != "" {
+		if err := s.secrets.Set(secretCurseForgeKey, legacyCF); err != nil {
+			return fmt.Errorf("迁移 CurseForge 密钥失败: %w", err)
+		}
+		storedCF = legacyCF
+	}
+	storedAI, err := s.secrets.Get(secretAIKey)
+	if err != nil {
+		return fmt.Errorf("读取 AI 密钥失败: %w", err)
+	}
+	if storedAI == "" && legacyAI != "" {
+		if err := s.secrets.Set(secretAIKey, legacyAI); err != nil {
+			return fmt.Errorf("迁移 AI 密钥失败: %w", err)
+		}
+		storedAI = legacyAI
+	}
+	s.settings.CurseForgeAPIKey = storedCF
+	s.settings.AISearchAPIKey = storedAI
+	if legacyFound {
+		*dirty = true
+	}
+	return nil
+}
+
+func savePublicSettings(path string, settings Settings) error {
+	public := settings
+	public.CurseForgeAPIKey = ""
+	public.AISearchAPIKey = ""
+	return saveJSON(path, public)
 }
 
 // Instances returns instances sorted by most recently played.

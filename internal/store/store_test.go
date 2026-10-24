@@ -3,7 +3,10 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"MyMinecraftGoLuncher/internal/secretstore"
 )
 
 func TestPortableLayout(t *testing.T) {
@@ -15,10 +18,10 @@ func TestPortableLayout(t *testing.T) {
 	if paths.Data != filepath.Join(base, ".minecraft") {
 		t.Fatalf("game directory = %q", paths.Data)
 	}
-	if paths.Root != filepath.Join(base, "MyGoLuncher") {
+	if paths.Root != filepath.Join(base, "MGL") {
 		t.Fatalf("config directory = %q", paths.Root)
 	}
-	if paths.Settings != filepath.Join(base, "MyGoLuncher", "settings.json") {
+	if paths.Settings != filepath.Join(base, "MGL", "settings.json") {
 		t.Fatalf("settings path = %q", paths.Settings)
 	}
 	if paths.Instances != filepath.Join(base, ".minecraft", "instances") {
@@ -28,7 +31,7 @@ func TestPortableLayout(t *testing.T) {
 
 func TestLegacyConfigMigration(t *testing.T) {
 	base := t.TempDir()
-	legacy := filepath.Join(base, "MGL")
+	legacy := filepath.Join(base, "MyGoLuncher")
 	if err := os.MkdirAll(legacy, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -36,11 +39,60 @@ func TestLegacyConfigMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	migrateLegacyConfig(base)
-	if _, err := os.Stat(filepath.Join(base, "MyGoLuncher", "settings.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(base, "MGL", "settings.json")); err != nil {
 		t.Fatalf("legacy config was not migrated: %v", err)
 	}
 	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 		t.Fatalf("legacy directory still exists: %v", err)
+	}
+}
+
+func TestSettingsSecretsMigrateToSecretStore(t *testing.T) {
+	paths := PathsFor(t.TempDir())
+	if err := paths.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"playerName":"Steve","curseForgeAPIKey":"cf-secret","aiSearchApiKey":"ai-secret"}`
+	if err := os.WriteFile(paths.Settings, []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	secrets := secretstore.NewMemory()
+	st, err := OpenWithSecrets(paths, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := st.Settings()
+	if settings.CurseForgeAPIKey != "cf-secret" || settings.AISearchAPIKey != "ai-secret" {
+		t.Fatalf("secrets not loaded: %#v", settings)
+	}
+	raw, err := os.ReadFile(paths.Settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "cf-secret") || strings.Contains(string(raw), "ai-secret") {
+		t.Fatalf("settings.json still contains plaintext secrets: %s", raw)
+	}
+	if value, _ := secrets.Get("curseforgeApiKey"); value != "cf-secret" {
+		t.Fatalf("CurseForge secret = %q", value)
+	}
+	if value, _ := secrets.Get("aiSearchApiKey"); value != "ai-secret" {
+		t.Fatalf("AI secret = %q", value)
+	}
+
+	settings.CurseForgeAPIKey = "new-cf"
+	settings.AISearchAPIKey = ""
+	if _, err := st.SaveSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := secrets.Get("curseforgeApiKey"); value != "new-cf" {
+		t.Fatalf("updated CurseForge secret = %q", value)
+	}
+	if value, _ := secrets.Get("aiSearchApiKey"); value != "" {
+		t.Fatalf("AI secret was not deleted: %q", value)
+	}
+	raw, _ = os.ReadFile(paths.Settings)
+	if strings.Contains(string(raw), "new-cf") {
+		t.Fatalf("settings.json contains the new key: %s", raw)
 	}
 }
 

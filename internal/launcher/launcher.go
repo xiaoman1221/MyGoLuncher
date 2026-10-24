@@ -182,7 +182,7 @@ func (l *Launcher) Start(ctx context.Context, opts Options) (*Process, error) {
 	}
 	fmt.Fprintf(logFile, "[MyGoLuncher] Java: %s\n", opts.JavaPath)
 	fmt.Fprintf(logFile, "[MyGoLuncher] Version: %s\n", launchVersion)
-	fmt.Fprintf(logFile, "[MyGoLuncher] Command: %s %s\n\n", opts.JavaPath, strings.Join(allArgs, " "))
+	fmt.Fprintf(logFile, "[MyGoLuncher] Command: %s %s\n\n", opts.JavaPath, strings.Join(redactCommand(allArgs), " "))
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -547,6 +547,9 @@ func (l *Launcher) buildArguments(merged mojang.Version, opts Options, gameDir, 
 
 var unknownPlaceholder = regexp.MustCompile(`\$\{[^}]+\}`)
 
+// redactCommand hides credentials before the launch command is written to the
+// log file. Minecraft accepts the access token both as a separate argument and
+// in --flag=value form depending on the version.
 func redactCommand(args []string) []string {
 	out := append([]string(nil), args...)
 	for idx := range out {
@@ -555,6 +558,13 @@ func redactCommand(args []string) []string {
 		case "--accesstoken", "--authsession", "--session", "--token":
 			if idx+1 < len(out) {
 				out[idx+1] = "<redacted>"
+			}
+			continue
+		}
+		for _, flag := range []string{"--accesstoken=", "--authsession=", "--session=", "--token="} {
+			if strings.HasPrefix(lower, flag) {
+				out[idx] = out[idx][:len(flag)] + "<redacted>"
+				break
 			}
 		}
 	}

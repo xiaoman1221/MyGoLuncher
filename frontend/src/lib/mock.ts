@@ -203,14 +203,14 @@ let installedJava: JavaRuntime[] = [
 
 const paths = {
   base: mockBase,
-  root: `${mockBase}/MyGoLuncher`,
+  root: `${mockBase}/MGL`,
   data: `${mockBase}/.minecraft`,
   instances: `${mockBase}/.minecraft/instances`,
   versions: `${mockBase}/.minecraft/versions`,
   libraries: `${mockBase}/.minecraft/libraries`,
   assets: `${mockBase}/.minecraft/assets`,
   runtimes: `${mockBase}/.minecraft/runtimes`,
-  cache: `${mockBase}/MyGoLuncher/cache`,
+  cache: `${mockBase}/MGL/cache`,
 };
 
 const versionSeeds: Array<[string, VersionView['type'], string]> = [

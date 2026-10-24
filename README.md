@@ -104,8 +104,7 @@ cd frontend && npm run build
 <程序所在目录>/
 ├── MyMinecraftGoLuncher.exe
 ├── .minecraft/          # 游戏下载、版本与实例数据
-└── MyGoLuncher/         # 启动器配置
-    ├── accounts.json
+└── MGL/                 # 仅存放非敏感配置
     ├── instances.json
     ├── settings.json
     └── cache/
@@ -113,7 +112,21 @@ cd frontend && npm run build
 
 > 程序目录必须可写。若放在 `Program Files` 等受保护目录，启动器将无法创建上述目录。
 >
-> 可用环境变量 `MYGOLUNCHER_HOME` 覆盖基础目录。旧版本使用的 `MGL` 配置目录会在首次启动时自动迁移为 `MyGoLuncher`。
+> 可用环境变量 `MGL_HOME` 覆盖基础目录，`MYGOLUNCHER_HOME` 作为兼容别名。
+>
+> 旧版本使用过的 `MyGoLuncher` 临时配置目录会在首次启动时自动迁移回 `MGL`。
+
+## 安全存储
+
+账户、Microsoft/Yggdrasil 令牌、外置登录令牌、CurseForge API Key 与 AI API Key 不再写入 `MGL`。
+
+- **Windows**：加密后保存在当前用户的注册表
+  `HKEY_CURRENT_USER\Software\MyGoLuncher\Secrets`，使用 Windows DPAPI（当前用户范围）保护。
+- **macOS / Linux**：保存在用户配置目录下的 AES-GCM 加密文件（密钥文件权限 0600），不会写入程序的 `MGL` 目录。
+- 旧版 `accounts.json` 会自动迁移到加密存储并删除；`settings.json` 中的旧 API Key 也会迁移并清除。
+- `MGL` 仅保留语言、主题、内存、Java 路径、下载源、实例列表、缓存等非敏感信息。
+
+> 加密数据与当前操作系统用户绑定。更换 Windows 用户或迁移到其他电脑后，需要重新登录账户并重新填写 API Key。
 
 ## 账户说明
 
@@ -137,12 +150,12 @@ cd frontend && npm run build
 ## 已知限制
 
 - 界面已完成基础多语言适配；下载、安装与登录流程中的详细错误信息和后台任务标题仍由后端以中文返回。
-- 账户令牌保存在本机 `accounts.json` 中，请勿在共享电脑上保存私人账户。
+- 账户令牌与 API Key 保存在 Windows 注册表的加密数据中；它们与当前 Windows 用户绑定，请勿在共享系统账户下保存私人账户。
 - 外置服务器若要求两步验证或特殊登录流程，需要按其文档处理。
 - YSS 一键授权依赖站点启用「启动器 OAuth2」；若站点未启用，启动器会给出提示，仍可使用用户名 / 密码外置登录。
 - 关闭版本隔离后，所有版本共用 `.minecraft` 中的模组、存档与配置，删除版本时也不会删除共享游戏目录。
 - 资源中心使用 CurseForge 内容时需要填写自己的 CurseForge API Key；未填写时仅显示 Modrinth 结果。
-- AI 搜索需要自备 DeepSeek 或 Anthropic API Key，搜索关键词会发送到所选提供商的 API。未配置或调用失败时会回退到本地别名匹配。API Key 与其他设置一样以明文保存在本机 `settings.json` 中。
+- AI 搜索需要自备 DeepSeek 或 Anthropic API Key，搜索关键词会发送到所选提供商的 API。未配置或调用失败时会回退到本地别名匹配。API Key 加密保存在系统安全存储中，不写入 `MGL`。
 - 服务器包会包含实例中的全部模组；仅客户端模组可能需要手动从 `mods/` 中移除。Forge / NeoForge / Quilt 服务器包首次使用需运行 `install-server` 脚本。
 - 服务器包不会自动接受 Minecraft EULA，请阅读后自行将 `eula.txt` 中的 `eula=false` 改为 `true`。
 - 每次启动游戏都会把当前启动器语言写入 `options.txt`；如果之后在游戏内修改语言，下次通过启动器启动时会被重新同步。

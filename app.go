@@ -26,6 +26,7 @@ import (
 	"MyMinecraftGoLuncher/internal/modpack"
 	"MyMinecraftGoLuncher/internal/modrinth"
 	"MyMinecraftGoLuncher/internal/mojang"
+	"MyMinecraftGoLuncher/internal/secretstore"
 	"MyMinecraftGoLuncher/internal/serverpack"
 	"MyMinecraftGoLuncher/internal/store"
 	"MyMinecraftGoLuncher/internal/sysinfo"
@@ -95,7 +96,12 @@ func NewApp() *App {
 		return a
 	}
 	a.paths = paths
-	st, err := store.Open(paths)
+	secrets, err := secretstore.New()
+	if err != nil {
+		a.initError = "初始化安全存储失败: " + err.Error()
+		return a
+	}
+	st, err := store.OpenWithSecrets(paths, secrets)
 	if err != nil && st == nil {
 		a.initError = err.Error()
 		return a
@@ -104,7 +110,7 @@ func NewApp() *App {
 	if st == nil {
 		return a
 	}
-	accountStore, err := auth.Open(paths.Accounts, st.Settings().PlayerName)
+	accountStore, err := auth.OpenWithSecrets(secrets, paths.Accounts, st.Settings().PlayerName)
 	if err != nil {
 		a.initError = err.Error()
 		return a
@@ -1360,7 +1366,7 @@ func (a *App) OpenDataFolder() error {
 	return openPath(a.paths.Data)
 }
 
-// OpenConfigFolder opens the portable MyGoLuncher configuration directory.
+// OpenConfigFolder opens the portable MGL configuration directory.
 func (a *App) OpenConfigFolder() error {
 	if a.paths.Root == "" {
 		return errors.New("配置目录不可用")

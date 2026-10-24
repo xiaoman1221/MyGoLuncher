@@ -3,11 +3,15 @@ package auth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"MyMinecraftGoLuncher/internal/secretstore"
 )
 
 func TestAccountStoreLifecycle(t *testing.T) {
@@ -254,6 +258,41 @@ func TestSameAuthlibIdentityUpdatesExistingAccount(t *testing.T) {
 	}
 	if count := len(store.List()); count != 2 {
 		t.Fatalf("expected offline + authlib account, got %d", count)
+	}
+}
+
+func TestAccountsMigrateToSecretStore(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "accounts.json")
+	raw := `{"accounts":[{"id":"x","kind":"microsoft","name":"Steve","uuid":"abc","accessToken":"secret-token"}],"selectedId":"x"}`
+	if err := os.WriteFile(legacy, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secrets := secretstore.NewMemory()
+	store, err := OpenWithSecrets(secrets, legacy, "Steve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accounts := store.List(); len(accounts) != 1 || accounts[0].Name != "Steve" {
+		t.Fatalf("unexpected accounts: %#v", accounts)
+	}
+	stored, err := secrets.Get(accountsSecretName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stored, "secret-token") {
+		t.Fatalf("account tokens were not moved to the secret store: %s", stored)
+	}
+	if _, err := os.Stat(legacy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("legacy accounts.json still exists: %v", err)
+	}
+
+	reopened, err := OpenWithSecrets(secrets, legacy, "Ignored")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accounts := reopened.List(); len(accounts) != 1 || accounts[0].Name != "Steve" {
+		t.Fatalf("encrypted accounts were not persisted: %#v", accounts)
 	}
 }
 
