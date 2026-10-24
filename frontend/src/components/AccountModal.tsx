@@ -534,7 +534,10 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
                     value={authPassword}
                     onChange={(event) => setAuthPassword(event.target.value)}
                     autoComplete="current-password"
-                    onKeyDown={(event) => { if (event.key === 'Enter') void loginAuthlib(); }}
+                    onKeyDown={(event) => {
+                      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                      if (event.key === 'Enter') void loginAuthlib();
+                    }}
                   />
                 </label>
               </div>
@@ -568,7 +571,10 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
                   value={offlineName}
                   onChange={(event) => setOfflineName(event.target.value)}
                   maxLength={16}
-                  onKeyDown={(event) => { if (event.key === 'Enter') void submitOffline(); }}
+                  onKeyDown={(event) => {
+                    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+                    if (event.key === 'Enter') void submitOffline();
+                  }}
                   autoFocus
                 />
               </label>

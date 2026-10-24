@@ -274,6 +274,7 @@ export function LanPage() {
               onChange={(event) => setManual(event.target.value)}
               placeholder="192.168.1.20:25565"
               onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing || event.keyCode === 229) return;
                 if (event.key === 'Enter') void join(manual, 'manual');
               }}
             />
@@ -588,6 +589,7 @@ function WorldCard({
   formatClock: (value: string) => string;
 }) {
   const { t } = useApp();
+  const players = world.players ?? [];
   return (
     <article className="panel lan-world-card">
       <div className="lan-world-head">
@@ -607,9 +609,9 @@ function WorldCard({
       </div>
       <div className="lan-players">
         <span className="field-label">{t('lan.players')}</span>
-        {world.players.length > 0 ? (
+        {players.length > 0 ? (
           <div className="chip-row">
-            {world.players.map((player) => (
+            {players.map((player) => (
               <span className="chip" key={player.name}>{player.name}</span>
             ))}
           </div>

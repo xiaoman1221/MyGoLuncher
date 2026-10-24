@@ -29,16 +29,30 @@ export function Modal({
   const { t } = useApp();
   const titleId = useId();
   const cardRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+  const closeableRef = useRef(closeable);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+    closeableRef.current = closeable;
+  }, [onClose, closeable]);
 
   useEffect(() => {
     if (!open) return;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && closeable) onClose();
+      // Do not close the dialog while an IME candidate window is active:
+      // Escape is also used to cancel Chinese/Japanese/Korean composition.
+      if (event.isComposing || event.keyCode === 229) return;
+      if (event.key === 'Escape' && closeableRef.current) onCloseRef.current();
     };
     document.addEventListener('keydown', onKeyDown);
     const timer = window.setTimeout(() => {
+      // Only focus the first field when focus is not already inside the modal.
+      // Re-focusing on every parent render breaks typing and IME composition.
+      const active = document.activeElement;
+      if (active && cardRef.current?.contains(active)) return;
       const focusable = cardRef.current?.querySelector<HTMLElement>(
         'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])',
       );
@@ -49,7 +63,9 @@ export function Modal({
       document.removeEventListener('keydown', onKeyDown);
       window.clearTimeout(timer);
     };
-  }, [open, onClose, closeable]);
+    // Intentionally only on open: onClose/closeable are read through refs so
+    // parent re-renders do not steal focus from the field being typed in.
+  }, [open]);
 
   if (!open) return null;
 

@@ -122,7 +122,7 @@ func (s *Service) observeScannedResult(host string, result pingResult) {
 	entry.Version = result.Version
 	entry.Online = result.Online
 	entry.Max = result.Max
-	entry.Players = append([]PlayerInfo(nil), result.Players...)
+	entry.Players = append([]PlayerInfo{}, result.Players...)
 	s.mu.Unlock()
 	s.notify()
 }

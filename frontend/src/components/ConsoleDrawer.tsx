@@ -32,6 +32,7 @@ export function ConsoleDrawer({ instance, logs, onClose, onStop, onOpenFolder }:
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', onKeyDown);

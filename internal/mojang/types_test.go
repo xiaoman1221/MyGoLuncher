@@ -155,12 +155,14 @@ func TestMaterializeAssets(t *testing.T) {
 func TestNativeArtifactSelection(t *testing.T) {
 	lib := Library{
 		Name:    "org.lwjgl:lwjgl:3.3.3",
-		Natives: map[string]string{"windows": "natives-windows-${arch}"},
-		Downloads: LibraryDownloads{
-			Classifiers: map[string]Download{
-				"natives-windows-64": {Path: "org/lwjgl/lwjgl/3.3.3/lwjgl-3.3.3-natives-windows-64.jar"},
-			},
-		},
+		Natives: map[string]string{OSName(): "natives-" + OSName() + "-${arch}"},
+	}
+	classifier := NativeClassifier(lib)
+	if classifier == "" {
+		t.Fatal("native classifier was not resolved for the host platform")
+	}
+	lib.Downloads.Classifiers = map[string]Download{
+		classifier: {Path: "org/lwjgl/lwjgl/3.3.3/lwjgl-3.3.3-" + classifier + ".jar"},
 	}
 	dl := NativeArtifact(lib)
 	if dl == nil || dl.Path == "" {

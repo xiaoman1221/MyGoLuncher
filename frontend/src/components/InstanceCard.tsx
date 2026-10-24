@@ -47,6 +47,7 @@ export function InstanceCard({
       if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key === 'Escape') setMenuOpen(false);
     };
     document.addEventListener('mousedown', onPointerDown);

@@ -35,6 +35,7 @@ export function VersionPicker({ options, value, onChange, loading, placeholder }
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key === 'Escape') setOpen(false);
     };
     document.addEventListener('mousedown', onPointerDown);

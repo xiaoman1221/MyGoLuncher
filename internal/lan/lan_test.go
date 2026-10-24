@@ -152,6 +152,27 @@ func TestSnapshotCorrelatesPeersAndSorts(t *testing.T) {
 	}
 }
 
+func TestSnapshotPlayersIsAlwaysArray(t *testing.T) {
+	service := New()
+	service.running = true
+	service.worlds["w"] = &worldEntry{
+		// A ping without a player sample must still serialize as [].
+		World:    World{ID: "w", Host: "10.0.0.2", Port: 25565, Address: "10.0.0.2:25565", Source: "scan"},
+		lastSeen: time.Now(),
+	}
+	snapshot := service.Snapshot()
+	if snapshot.Worlds[0].Players == nil {
+		t.Fatal("snapshot players must not be nil")
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"players":null`) {
+		t.Fatalf("snapshot contains a null player list: %s", raw)
+	}
+}
+
 func TestExpire(t *testing.T) {
 	service := New()
 	service.running = true

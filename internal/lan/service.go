@@ -194,7 +194,8 @@ func (s *Service) Snapshot() Snapshot {
 	for _, entry := range s.worlds {
 		world := entry.World
 		world.LastSeen = entry.lastSeen.Format(time.RFC3339)
-		world.Players = append([]PlayerInfo(nil), entry.Players...)
+		// Always emit an array (never null) so the UI can safely iterate it.
+		world.Players = append([]PlayerInfo{}, entry.Players...)
 		if peerByIP[world.Host] != "" {
 			world.HostName = peerByIP[world.Host]
 		}
@@ -307,7 +308,7 @@ func (s *Service) schedulePing(key, host string, port int) {
 		entry.Version = result.Version
 		entry.Online = result.Online
 		entry.Max = result.Max
-		entry.Players = append([]PlayerInfo(nil), result.Players...)
+		entry.Players = append([]PlayerInfo{}, result.Players...)
 		if entry.MOTD == "" {
 			entry.MOTD = result.MOTD
 		}

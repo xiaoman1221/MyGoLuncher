@@ -10,9 +10,10 @@ import (
 
 func TestLibraryDownloadsLegacyNativeAndClasses(t *testing.T) {
 	client := New(store.PathsFor(t.TempDir()))
+	classifier := "natives-" + OSName()
 	lib := Library{
 		Name:    "org.lwjgl.lwjgl:lwjgl:2.9.4",
-		Natives: map[string]string{"windows": "natives-windows"},
+		Natives: map[string]string{OSName(): classifier},
 		Downloads: LibraryDownloads{
 			Artifact: &Download{
 				Path: "org/lwjgl/lwjgl/lwjgl/2.9.4/lwjgl-2.9.4.jar",
@@ -20,8 +21,8 @@ func TestLibraryDownloadsLegacyNativeAndClasses(t *testing.T) {
 				SHA1: "aaaa",
 			},
 			Classifiers: map[string]Download{
-				"natives-windows": {
-					Path: "org/lwjgl/lwjgl/lwjgl/2.9.4/lwjgl-2.9.4-natives-windows.jar",
+				classifier: {
+					Path: "org/lwjgl/lwjgl/lwjgl/2.9.4/lwjgl-2.9.4-" + classifier + ".jar",
 					URL:  "https://example.invalid/lwjgl-natives.jar",
 					SHA1: "bbbb",
 				},
@@ -39,7 +40,7 @@ func TestLibraryDownloadsLegacyNativeAndClasses(t *testing.T) {
 		t.Fatalf("expected one native extraction, got %d", len(natives))
 	}
 	wantNative := filepath.Join(client.paths.Libraries, filepath.FromSlash(
-		"org/lwjgl/lwjgl/lwjgl/2.9.4/lwjgl-2.9.4-natives-windows.jar"))
+		"org/lwjgl/lwjgl/lwjgl/2.9.4/lwjgl-2.9.4-"+classifier+".jar"))
 	if natives[0].jarPath != wantNative {
 		t.Fatalf("native jar = %s, want %s", natives[0].jarPath, wantNative)
 	}
