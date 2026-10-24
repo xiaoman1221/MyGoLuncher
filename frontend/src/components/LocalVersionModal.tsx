@@ -1,4 +1,4 @@
-import { FolderInput, LoaderCircle, TriangleAlert } from 'lucide-react';
+import { Check, FolderInput, LoaderCircle, TriangleAlert } from 'lucide-react';
 import type { ExternalCandidate, ExternalScanResult } from '../lib/types';
 import { useApp } from '../lib/app-context';
 import { cn, loaderLabel, loaderTone } from '../lib/format';
@@ -30,9 +30,11 @@ interface LocalVersionModalProps {
   open: boolean;
   scans: ExternalScanResult[];
   entries: LocalVersionEntry[];
-  selectedKey: string;
+  selectedKeys: Set<string>;
   importing: boolean;
-  onSelect: (key: string) => void;
+  onToggle: (key: string) => void;
+  onSelectAll: () => void;
+  onClearSelection: () => void;
   onClose: () => void;
   onImport: () => void;
 }
@@ -41,9 +43,11 @@ export function LocalVersionModal({
   open,
   scans,
   entries,
-  selectedKey,
+  selectedKeys,
   importing,
-  onSelect,
+  onToggle,
+  onSelectAll,
+  onClearSelection,
   onClose,
   onImport,
 }: LocalVersionModalProps) {
@@ -52,6 +56,7 @@ export function LocalVersionModal({
     <Modal
       open={open}
       onClose={onClose}
+      closeable={!importing}
       title={t('local.title')}
       eyebrow="LOCAL VERSIONS"
       description={t('local.description', { count: entries.length })}
@@ -62,15 +67,43 @@ export function LocalVersionModal({
             <TriangleAlert size={14} /> {t('local.footerNote')}
           </span>
           <div className="modal-actions">
-            <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
-            <button type="button" className="btn btn-primary" onClick={onImport} disabled={!selectedKey || importing}>
+            <button type="button" className="btn btn-ghost" onClick={onClose} disabled={importing}>{t('common.cancel')}</button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onImport}
+              disabled={selectedKeys.size === 0 || importing}
+            >
               {importing ? <LoaderCircle size={15} className="spin" /> : <FolderInput size={15} />}
-              {importing ? t('local.importing') : t('local.import')}
+              {importing
+                ? t('local.importing')
+                : t('local.importCount', { count: selectedKeys.size })}
             </button>
           </div>
         </>
       }
     >
+      <div className="local-select-bar">
+        <span>{t('local.selectedCount', { count: selectedKeys.size })}</span>
+        <div className="local-select-actions">
+          <button
+            type="button"
+            className="text-button"
+            onClick={onSelectAll}
+            disabled={importing || selectedKeys.size === entries.length}
+          >
+            {t('local.selectAll')}
+          </button>
+          <button
+            type="button"
+            className="text-button"
+            onClick={onClearSelection}
+            disabled={importing || selectedKeys.size === 0}
+          >
+            {t('local.clearSelection')}
+          </button>
+        </div>
+      </div>
       <div className="local-scan-list">
         {scans.map((scan) => {
           const group = entries.filter((entry) => entry.root === scan.root);
@@ -82,16 +115,20 @@ export function LocalVersionModal({
                 <code title={scan.root}>{scan.root}</code>
               </div>
               {group.map((entry) => {
-                const selected = entry.key === selectedKey;
+                const selected = selectedKeys.has(entry.key);
                 const candidate = entry.candidate;
                 return (
                   <button
                     type="button"
                     key={entry.key}
                     className={cn('local-candidate', selected && 'is-selected')}
-                    onClick={() => onSelect(entry.key)}
+                    onClick={() => onToggle(entry.key)}
+                    aria-pressed={selected}
+                    disabled={importing}
                   >
-                    <span className="local-radio">{selected && <span />}</span>
+                    <span className={cn('local-check', selected && 'is-checked')}>
+                      {selected && <Check size={12} strokeWidth={3} />}
+                    </span>
                     <span className="local-candidate-copy">
                       <span className="local-candidate-title">
                         <strong>{candidate.name}</strong>

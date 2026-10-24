@@ -1741,6 +1741,111 @@ func (a *App) DetectLocalLaunchers() ([]external.ScanResult, error) {
 	return results, nil
 }
 
+// CustomImportRequest describes a manually configured version import.
+type CustomImportRequest struct {
+	Name          string `json:"name"`
+	MCVersion     string `json:"mcVersion"`
+	Loader        string `json:"loader"`
+	LoaderVersion string `json:"loaderVersion"`
+	SourceDir     string `json:"sourceDir"`
+}
+
+// PickCustomSourceDirectory lets the user choose an optional game/instance
+// directory whose mods, shaders, resource packs, saves and configs are copied.
+func (a *App) PickCustomSourceDirectory() (string, error) {
+	if err := a.ready(); err != nil {
+		return "", err
+	}
+	path, err := runtime.OpenDirectoryDialog(a.context(), runtime.OpenDialogOptions{
+		Title: "选择要复制内容的游戏目录或实例目录（可取消）",
+	})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(path), nil
+}
+
+// ImportCustomInstance creates an instance with manually supplied metadata and
+// optional content copied from a game or instance folder.
+func (a *App) ImportCustomInstance(req CustomImportRequest) (response ExternalImportResponse, err error) {
+	if err := a.ready(); err != nil {
+		return ExternalImportResponse{}, err
+	}
+	mcVersion := strings.TrimSpace(req.MCVersion)
+	if mcVersion == "" {
+		return ExternalImportResponse{}, errors.New("请填写 Minecraft 版本")
+	}
+	loaderType := loader.Normalize(req.Loader)
+	switch loaderType {
+	case "vanilla", "fabric", "quilt", "forge", "neoforge":
+	default:
+		return ExternalImportResponse{}, errors.New("不支持的模组加载器")
+	}
+	if _, err := a.mojang.ManifestEntry(a.context(), mcVersion); err != nil {
+		return ExternalImportResponse{}, fmt.Errorf("Minecraft %s 不在官方版本清单中: %w", mcVersion, err)
+	}
+	sourceDir := strings.TrimSpace(req.SourceDir)
+	if sourceDir != "" {
+		if stat, statErr := os.Stat(sourceDir); statErr != nil || !stat.IsDir() {
+			return ExternalImportResponse{}, errors.New("来源目录不存在或不是文件夹")
+		}
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		name = mcVersion + " 自定义版本"
+	}
+	if _, nameErr := store.SafeName(name); nameErr != nil {
+		name = mcVersion + " 自定义版本"
+	}
+	loaderVersion := strings.TrimSpace(req.LoaderVersion)
+	if loaderType == "vanilla" {
+		loaderVersion = ""
+	}
+
+	t := a.newTask("导入自定义版本 " + name)
+	defer func() { t.finish(err) }()
+	inst, err := a.store.CreateInstance(store.Instance{
+		Name:            name,
+		MCVersion:       mcVersion,
+		Loader:          loaderType,
+		LoaderVersion:   loaderVersion,
+		LaunchVersionID: mcVersion,
+		MemoryMB:        a.store.Settings().DefaultMemoryMB,
+		Source:          "custom",
+		Notes:           "自定义版本导入",
+	})
+	if err != nil {
+		return ExternalImportResponse{}, err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = a.store.DeleteInstance(inst.ID, true)
+		}
+	}()
+	stats := external.CopyStats{}
+	if sourceDir != "" {
+		t.update("copy", "正在复制版本内容…", 0, 1)
+		stats, err = external.CopyContentFrom(sourceDir, a.instanceDir(inst))
+		if err != nil {
+			return ExternalImportResponse{}, err
+		}
+		t.update("copy", "版本内容复制完成", 1, 1)
+	}
+	warnings := []string{}
+	if err := a.installInstanceRuntime(a.context(), &inst, t); err != nil {
+		warnings = append(warnings, "版本内容已导入，但游戏/加载器安装失败："+err.Error())
+	}
+	cleanup = false
+	a.emitInstancesChanged()
+	return ExternalImportResponse{
+		Instance: a.instanceView(inst), Source: "自定义导入",
+		FilesCopied: stats.Files, ModsCopied: stats.Mods,
+		ResourcePacksCopied: stats.ResourcePacks, ShaderPacksCopied: stats.ShaderPacks,
+		SavesCopied: stats.Saves, Warnings: warnings,
+	}, nil
+}
+
 // ExternalImportResponse describes an imported third-party launcher instance.
 type ExternalImportResponse struct {
 	Instance            InstanceView `json:"instance"`

@@ -181,6 +181,37 @@ func TestScanVersionsDirectory(t *testing.T) {
 	}
 }
 
+func TestCopyContentFromGameRootAndPrismInstance(t *testing.T) {
+	source := t.TempDir()
+	writeFile(t, filepath.Join(source, "mods", "a.jar"), "mod")
+	writeFile(t, filepath.Join(source, "config", "x.txt"), "config")
+	writeFile(t, filepath.Join(source, "saves", "world", "level.dat"), "save")
+	writeFile(t, filepath.Join(source, "options.txt"), "lang:zh_cn")
+	dest := t.TempDir()
+	stats, err := CopyContentFrom(source, dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Mods != 1 || stats.Saves != 1 || stats.Files < 4 {
+		t.Fatalf("stats = %#v", stats)
+	}
+	for _, name := range []string{"mods/a.jar", "config/x.txt", "saves/world/level.dat", "options.txt"} {
+		if _, err := os.Stat(filepath.Join(dest, filepath.FromSlash(name))); err != nil {
+			t.Fatalf("%s was not copied: %v", name, err)
+		}
+	}
+
+	prism := t.TempDir()
+	writeFile(t, filepath.Join(prism, ".minecraft", "mods", "b.jar"), "mod")
+	prismDest := t.TempDir()
+	if _, err := CopyContentFrom(prism, prismDest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(prismDest, "mods", "b.jar")); err != nil {
+		t.Fatalf("Prism .minecraft content was not copied: %v", err)
+	}
+}
+
 func TestInferMCVersionKeepsVanillaIDs(t *testing.T) {
 	for _, id := range []string{"1.21.1", "24w14a", "1.21-pre1", "1.21-rc1", "b1.7.3", "a1.2.6"} {
 		if got := inferMCVersion(id, "vanilla", ""); got != id {

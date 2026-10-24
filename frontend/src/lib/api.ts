@@ -8,6 +8,7 @@ import type {
   MirrorConfig,
   MirrorSpeedResult,
   CreateInstanceRequest,
+  CustomImportRequest,
   DeviceCodeView,
   ExternalImportResponse,
   ExternalScanResult,
@@ -137,6 +138,9 @@ export const api = {
   detectLocalLaunchers: () => call<ExternalScanResult[]>('DetectLocalLaunchers'),
   importExternalInstance: (root: string, candidateId: string, name: string) =>
     call<ExternalImportResponse>('ImportExternalInstance', root, candidateId, name),
+  pickCustomSourceDirectory: () => call<string>('PickCustomSourceDirectory'),
+  importCustomInstance: (request: CustomImportRequest) =>
+    call<ExternalImportResponse>('ImportCustomInstance', request),
 
   getJavaRuntimes: () => call<JavaRuntime[]>('GetJavaRuntimes'),
   getJavaReleases: () => call<JavaReleaseInfo>('GetJavaReleases'),

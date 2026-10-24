@@ -317,6 +317,14 @@ export interface ExternalImportResponse {
   warnings: string[];
 }
 
+export interface CustomImportRequest {
+  name: string;
+  mcVersion: string;
+  loader: string;
+  loaderVersion: string;
+  sourceDir: string;
+}
+
 export interface ResourceProject {
   id: string;
   projectId: string;

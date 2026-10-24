@@ -5,6 +5,7 @@ import {
   FolderInput,
   Laptop,
   LoaderCircle,
+  Plus,
   RefreshCw,
   Search,
   TriangleAlert,
@@ -17,7 +18,13 @@ import {
   LocalVersionModal,
   buildLocalEntries,
 } from '../components/LocalVersionModal';
-import type { ExternalScanResult, VersionList, VersionView } from '../lib/types';
+import { CustomVersionModal } from '../components/CustomVersionModal';
+import type {
+  ExternalImportResponse,
+  ExternalScanResult,
+  VersionList,
+  VersionView,
+} from '../lib/types';
 import { cn, formatDate } from '../lib/format';
 
 type VersionFilter = 'release' | 'snapshot' | 'all';
@@ -52,8 +59,9 @@ export function VersionsPage() {
   const [picking, setPicking] = useState(false);
   const [scans, setScans] = useState<ExternalScanResult[]>([]);
   const [scanOpen, setScanOpen] = useState(false);
-  const [selectedKey, setSelectedKey] = useState('');
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -100,9 +108,21 @@ export function VersionsPage() {
       return;
     }
     setScans(results);
-    setSelectedKey(found[0].key);
+    setSelectedKeys(new Set([found[0].key]));
     setScanOpen(true);
   };
+
+  const toggleKey = (key: string) => {
+    setSelectedKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+
+  const selectAllEntries = () => setSelectedKeys(new Set(entries.map((entry) => entry.key)));
+  const clearSelection = () => setSelectedKeys(new Set());
 
   const detectLaunchers = async () => {
     setScanning(true);
@@ -129,27 +149,46 @@ export function VersionsPage() {
     }
   };
 
-  const importEntry = async () => {
-    const entry = entries.find((item) => item.key === selectedKey);
-    if (!entry) return;
+  const importEntries = async () => {
+    const selected = entries.filter((entry) => selectedKeys.has(entry.key));
+    if (selected.length === 0) return;
     setImporting(true);
-    try {
-      const imported = await api.importExternalInstance(entry.root, entry.candidate.id, entry.candidate.name);
-      await refreshInstances();
-      selectInstance(imported.instance.id);
-      setScanOpen(false);
-      const warning = imported.warnings.length > 0 ? `；${imported.warnings[0]}` : '';
-      pushToast(
-        'success',
-        t('versions.added'),
-        t('versions.addedDetail', { name: imported.instance.name, warning }),
-      );
-      navigate('home');
-    } catch (reason) {
-      pushToast('error', t('versions.importFailed'), (reason as Error).message);
-    } finally {
-      setImporting(false);
+    let success = 0;
+    let lastInstanceID = '';
+    const errors: string[] = [];
+    for (const entry of selected) {
+      try {
+        const imported = await api.importExternalInstance(entry.root, entry.candidate.id, entry.candidate.name);
+        success += 1;
+        lastInstanceID = imported.instance.id;
+      } catch (reason) {
+        errors.push(`${entry.candidate.name}: ${(reason as Error).message}`);
+      }
     }
+    await refreshInstances();
+    if (lastInstanceID) selectInstance(lastInstanceID);
+    setScanOpen(false);
+    if (success > 0) {
+      pushToast('success', t('versions.added'), t('local.importSummary', { success, failed: errors.length }));
+      navigate('home');
+    }
+    if (errors.length > 0) {
+      pushToast('error', t('local.importPartial'), errors[0]);
+    }
+    setImporting(false);
+  };
+
+  const handleCustomImported = async (response: ExternalImportResponse) => {
+    await refreshInstances();
+    selectInstance(response.instance.id);
+    setCustomOpen(false);
+    const warning = response.warnings.length > 0 ? `；${response.warnings[0]}` : '';
+    pushToast(
+      'success',
+      t('versions.added'),
+      t('versions.addedDetail', { name: response.instance.name, warning }),
+    );
+    navigate('home');
   };
 
   const install = async (version: VersionView) => {
@@ -195,6 +234,10 @@ export function VersionsPage() {
           <button type="button" className="btn btn-ghost" onClick={() => void pickDirectory()} disabled={scanning || picking}>
             {picking ? <LoaderCircle size={16} className="spin" /> : <FolderInput size={16} />}
             {picking ? t('versions.readingDirectory') : t('versions.pickDirectory')}
+          </button>
+          <button type="button" className="btn btn-ghost" onClick={() => setCustomOpen(true)} disabled={scanning || picking || importing}>
+            <Plus size={16} />
+            {t('local.customOpen')}
           </button>
         </div>
         <p className="panel-note">{t('versions.localHint')}</p>
@@ -314,11 +357,19 @@ export function VersionsPage() {
         open={scanOpen}
         scans={scans}
         entries={entries}
-        selectedKey={selectedKey}
+        selectedKeys={selectedKeys}
         importing={importing}
-        onSelect={setSelectedKey}
+        onToggle={toggleKey}
+        onSelectAll={selectAllEntries}
+        onClearSelection={clearSelection}
         onClose={() => setScanOpen(false)}
-        onImport={() => void importEntry()}
+        onImport={() => void importEntries()}
+      />
+
+      <CustomVersionModal
+        open={customOpen}
+        onClose={() => setCustomOpen(false)}
+        onImported={handleCustomImported}
       />
     </div>
   );

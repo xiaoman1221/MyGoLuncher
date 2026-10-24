@@ -4,6 +4,7 @@ import type {
   AuthlibServer,
   Bootstrap,
   CreateInstanceRequest,
+  CustomImportRequest,
   DeviceCodeView,
   ExternalImportResponse,
   ExternalScanResult,
@@ -1370,22 +1371,52 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
         ],
       }] satisfies ExternalScanResult[] as T;
     case 'ImportExternalInstance': {
-      await progressTask('导入 HMCL 版本', ['正在复制存档与配置…', '正在复制模组…', '正在准备游戏文件…'], 2600);
+      const importedName = String(args[2] ?? '').trim() || '迁移的版本';
+      await progressTask(`导入 ${importedName}`, ['正在复制存档与配置…', '正在复制模组…', '正在准备游戏文件…'], 2000);
       const id = `external-${Date.now()}`;
+      const forge = importedName.toLowerCase().includes('forge');
+      const mcVersion = importedName.includes('1.20.1') ? '1.20.1' : '1.21.1';
       const view: InstanceView = {
-        id, name: '迁移的 Fabric 生存', mcVersion: '1.21.1', loader: 'fabric',
-        loaderVersion: '0.16.10', launchVersionId: 'fabric-loader-0.16.10-1.21.1',
+        id, name: importedName, mcVersion, loader: forge ? 'forge' : 'fabric',
+        loaderVersion: forge ? '47.2.0' : '0.16.10',
+        launchVersionId: forge ? `forge-${mcVersion}` : `fabric-loader-0.16.10-${mcVersion}`,
         memoryMB: 6144, javaPath: '', createdAt: new Date().toISOString(), lastPlayed: '',
-        playTimeMinutes: 0, source: 'external:HMCL', notes: '从 HMCL 版本导入',
-        gameDir: `${paths.instances}/${id}`, requiredJava: 21, versionInstalled: true,
-        running: false, modCount: 37, shaderCount: 2, resourcePackCount: 3, hasJavaOverride: false,
-        autoMemory: false, effectiveMemoryMB: 6144,
+        playTimeMinutes: 0, source: 'external:HMCL', notes: `从 HMCL 版本 ${importedName} 导入`,
+        gameDir: `${paths.instances}/${id}`, requiredJava: mcVersion === '1.20.1' ? 17 : 21,
+        versionInstalled: true, running: false, modCount: 37, shaderCount: 2,
+        resourcePackCount: 3, hasJavaOverride: false, autoMemory: false, effectiveMemoryMB: 6144,
       };
       instances = [view, ...instances];
       emit('instances:changed', null);
       return {
         instance: clone(view), source: 'HMCL', filesCopied: 412, modsCopied: 37,
         resourcePacksCopied: 3, shaderPacksCopied: 2, savesCopied: 1, warnings: [],
+      } satisfies ExternalImportResponse as T;
+    }
+    case 'PickCustomSourceDirectory':
+      await sleep(250);
+      return 'C:/Users/im/AppData/Roaming/.minecraft' as T;
+    case 'ImportCustomInstance': {
+      const request = args[0] as CustomImportRequest;
+      const customName = request.name.trim() || `${request.mcVersion} 自定义版本`;
+      await progressTask(`导入自定义版本 ${customName}`, ['正在复制版本内容…', '正在准备游戏文件…', '正在安装模组加载器…'], 2200);
+      const id = `custom-${Date.now()}`;
+      const view: InstanceView = {
+        id, name: customName, mcVersion: request.mcVersion || '1.21.1',
+        loader: request.loader || 'vanilla', loaderVersion: request.loaderVersion,
+        launchVersionId: request.mcVersion || '1.21.1',
+        memoryMB: 4096, javaPath: '', createdAt: new Date().toISOString(), lastPlayed: '',
+        playTimeMinutes: 0, source: 'custom', notes: '自定义版本导入',
+        gameDir: `${paths.instances}/${id}`, requiredJava: 21, versionInstalled: true,
+        running: false, modCount: request.sourceDir ? 12 : 0, shaderCount: 0,
+        resourcePackCount: 0, hasJavaOverride: false, autoMemory: false, effectiveMemoryMB: 4096,
+      };
+      instances = [view, ...instances];
+      emit('instances:changed', null);
+      return {
+        instance: clone(view), source: '自定义导入', filesCopied: request.sourceDir ? 128 : 0,
+        modsCopied: request.sourceDir ? 12 : 0, resourcePacksCopied: 0,
+        shaderPacksCopied: 0, savesCopied: 0, warnings: [],
       } satisfies ExternalImportResponse as T;
     }
     case 'GetJavaRuntimes':

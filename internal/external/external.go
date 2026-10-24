@@ -591,6 +591,9 @@ func CopyContent(candidate Candidate, dest string) (CopyStats, error) {
 			continue
 		}
 		target := filepath.Join(dest, name)
+		if samePath(source, target) {
+			continue
+		}
 		if err := util.CopyDirTree(source, target); err != nil {
 			return stats, fmt.Errorf("复制 %s 失败: %w", name, err)
 		}
@@ -615,12 +618,94 @@ func CopyContent(candidate Candidate, dest string) (CopyStats, error) {
 		if source == "" {
 			continue
 		}
-		if err := util.CopyFile(source, filepath.Join(dest, name)); err != nil {
+		target := filepath.Join(dest, name)
+		if samePath(source, target) {
+			continue
+		}
+		if err := util.CopyFile(source, target); err != nil {
 			return stats, err
 		}
 		stats.Files++
 	}
 	return stats, nil
+}
+
+// CopyContentFrom copies user-facing content from an arbitrary game or
+// instance directory. It accepts a .minecraft root, a Prism-style instance
+// folder containing .minecraft, or a version folder under versions/.
+func CopyContentFrom(sourceDir, dest string) (CopyStats, error) {
+	stats := CopyStats{}
+	root := customContentRoot(sourceDir)
+	if root == "" {
+		return stats, errors.New("来源目录不存在")
+	}
+	for _, name := range copyDirs {
+		source := filepath.Join(root, name)
+		if stat, err := os.Stat(source); err != nil || !stat.IsDir() {
+			continue
+		}
+		target := filepath.Join(dest, name)
+		if samePath(source, target) {
+			continue
+		}
+		if err := util.CopyDirTree(source, target); err != nil {
+			return stats, fmt.Errorf("复制 %s 失败: %w", name, err)
+		}
+		files, err := countFiles(target)
+		if err != nil {
+			return stats, err
+		}
+		stats.Files += files
+		switch name {
+		case "mods":
+			stats.Mods = countMods(dest)
+		case "resourcepacks":
+			stats.ResourcePacks = countEntries(target)
+		case "shaderpacks":
+			stats.ShaderPacks = countEntries(target)
+		case "saves":
+			stats.Saves = countEntries(target)
+		}
+	}
+	for _, name := range copyFiles {
+		source := filepath.Join(root, name)
+		if stat, err := os.Stat(source); err != nil || stat.IsDir() {
+			continue
+		}
+		target := filepath.Join(dest, name)
+		if samePath(source, target) {
+			continue
+		}
+		if err := util.CopyFile(source, target); err != nil {
+			return stats, err
+		}
+		stats.Files++
+	}
+	return stats, nil
+}
+
+func customContentRoot(sourceDir string) string {
+	sourceDir = filepath.Clean(strings.TrimSpace(sourceDir))
+	if stat, err := os.Stat(sourceDir); err != nil || !stat.IsDir() {
+		return ""
+	}
+	// Prism / MultiMC instances usually keep content under .minecraft.
+	nested := filepath.Join(sourceDir, ".minecraft")
+	if stat, err := os.Stat(nested); err == nil && stat.IsDir() {
+		return nested
+	}
+	// A version folder normally shares content with its parent game root, but
+	// some custom packs keep mods/configs inside the version folder itself.
+	parent := filepath.Dir(sourceDir)
+	if strings.EqualFold(filepath.Base(parent), "versions") {
+		for _, name := range copyDirs {
+			if stat, err := os.Stat(filepath.Join(sourceDir, name)); err == nil && stat.IsDir() {
+				return sourceDir
+			}
+		}
+		return filepath.Dir(parent)
+	}
+	return sourceDir
 }
 
 func sourceFor(candidate Candidate, name string) string {
