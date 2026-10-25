@@ -34,6 +34,10 @@ func NewFileStore(dir string) (Store, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
+	// MkdirAll does not tighten permissions on an existing directory.
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return nil, err
+	}
 	store := &fileStore{
 		dir:      dir,
 		keyPath:  filepath.Join(dir, keyFileName),
@@ -54,6 +58,9 @@ func (f *fileStore) loadOrCreateKey() error {
 			// existing encrypted data permanently undecryptable.
 			return errors.New("密钥文件格式无效")
 		}
+		if err := os.Chmod(f.keyPath, 0o600); err != nil {
+			return err
+		}
 		f.key = key
 		return nil
 	}
@@ -65,6 +72,9 @@ func (f *fileStore) loadOrCreateKey() error {
 		return err
 	}
 	if err := os.WriteFile(f.keyPath, key, 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(f.keyPath, 0o600); err != nil {
 		return err
 	}
 	f.key = key
@@ -81,6 +91,9 @@ func (f *fileStore) loadLocked() error {
 		return nil
 	}
 	if err != nil {
+		return err
+	}
+	if err := os.Chmod(f.dataPath, 0o600); err != nil {
 		return err
 	}
 	block, err := aes.NewCipher(f.key)
@@ -144,7 +157,10 @@ func (f *fileStore) saveLocked() error {
 		return err
 	}
 	_ = os.Remove(f.dataPath)
-	return os.Rename(tempName, f.dataPath)
+	if err := os.Rename(tempName, f.dataPath); err != nil {
+		return err
+	}
+	return os.Chmod(f.dataPath, 0o600)
 }
 
 func (f *fileStore) Get(name string) (string, error) {

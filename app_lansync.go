@@ -12,6 +12,7 @@ import (
 
 	"MyMinecraftGoLuncher/internal/lan"
 	"MyMinecraftGoLuncher/internal/lansync"
+	licensepkg "MyMinecraftGoLuncher/internal/license"
 	"MyMinecraftGoLuncher/internal/store"
 )
 
@@ -64,6 +65,9 @@ func (a *App) updateLanIdentity(identity lan.Identity) error {
 
 // StartLanShare shares the selected local instance directories with LAN peers.
 func (a *App) StartLanShare(instanceID string, dirs []string) (lan.Snapshot, error) {
+	if err := a.requireFeature(licensepkg.FeatureLAN); err != nil {
+		return a.GetLanSnapshot(), err
+	}
 	if err := a.ready(); err != nil {
 		return lan.Snapshot{}, err
 	}
@@ -167,6 +171,9 @@ type LanSyncPreview struct {
 // writing files. The frontend uses this to show the version and file diff before
 // the user confirms the update.
 func (a *App) PreviewLanSync(peerID, targetInstanceID string) (LanSyncPreview, error) {
+	if err := a.requireFeature(licensepkg.FeatureLAN); err != nil {
+		return LanSyncPreview{}, err
+	}
 	if err := a.ready(); err != nil {
 		return LanSyncPreview{}, err
 	}
@@ -275,6 +282,9 @@ func (a *App) prepareLanSync(ctx context.Context, peerID, targetInstanceID strin
 // instance. expectedDigest comes from PreviewLanSync; it prevents applying a
 // changed manifest without a fresh confirmation.
 func (a *App) SyncFromLanPeer(peerID, targetInstanceID, expectedDigest string) (lansync.SyncResult, error) {
+	if err := a.requireFeature(licensepkg.FeatureLAN); err != nil {
+		return lansync.SyncResult{}, err
+	}
 	var result lansync.SyncResult
 	if err := a.ready(); err != nil {
 		return result, err

@@ -141,13 +141,111 @@ cd frontend && npm run build
 >
 > 旧版本使用过的 `MyGoLuncher` 临时配置目录会在首次启动时自动迁移回 `MGL`。
 
+## 开源与商业授权
+
+本项目采用 **AGPL-3.0**，并提供商业授权。客户端源码公开，商业服务端和官方发布密钥保持闭源。详见 [docs/OPEN_CORE.md](docs/OPEN_CORE.md)。
+
+- **免费功能**：启动已安装的游戏、已安装版本管理、Java 管理、基础模组/资源安装、本地备份。
+- **付费功能**：游戏版本下载（`versions`）、服务器管理（`server`）、局域网联机（`lan`）、AI 搜索（`ai`）、云同步/备份（`cloud`）、整合包 CDN（`cdn`）、服务器托管（`hosting`）、优先支持（`priority`）。
+- 已安装版本的启动、设置修改、模组/资源安装、存档编辑不受 `versions` 限制；只有下载新的 Minecraft 游戏版本需要授权。
+- 免费功能不再需要激活；只有付费 API 调用 `requireFeature`。客户端检查只是 UI 辅助，真正的权益校验在服务端。
+- LicensingGo 激活码的 `features` 数组必须包含 `versions`、`server`、`lan`、`ai` 等对应值，付费功能才会解锁；`*` / `pro` 可作为全量权益。
+- 社区构建不包含产品 API Key 和授权服务地址，付费入口显示 PRO 提示；官方构建通过私有 CI secret 注入产品配置。
+- 官方构建的签名证书、OTA 私钥、发布密钥不进入公开仓库。
+
+### 授权数据
+
+- 用户输入激活码后按 LicensingGo 机器码规范计算 `lgmc1` 机器码并提交激活。
+- 激活码、机器码、解绑密钥、到期时间、features 与最近校验时间通过 `secretstore` 保存。
+- Windows 只写入当前用户注册表 `HKCU\Software\MyGoLuncher\Secrets` 并用 DPAPI 加密；其他平台使用 AES-256-GCM 文件 + 0600 密钥文件。不会写入 `MGL`。
+- 启动时在线校验；网络失败时，若上次成功校验在 7 天内，进入离线宽限期，否则要求重新联网。
+
+### 试用
+
+- 每个激活码/机器可使用 **3 次**试用，每次 **7 天**，总计最多 21 天。
+- 试用状态与正式授权分开加密保存，不需要激活码；官方构建可直接在授权弹层开始试用。
+- 试用期间解锁全部付费功能；正式授权激活后会结束当前试用，剩余次数保留。
+- 社区构建没有商业授权服务，不能开始试用。
+- 当前试用次数保存在本机安全存储中；清空注册表/安全存储可以重置，因此它适合作为体验入口，不是强防盗措施。需要强约束时应把试用记录放到 LicensingGo 服务端。
+
+### 官方构建
+
+```powershell
+$env:MGL_PRODUCT_API_KEY = "官方构建专用产品 Key"
+$env:MGL_PRODUCT_SERVER_URL = "https://license.example.com"
+$env:MGL_SIGN_PFX_PASSWORD = "PFX 密码"
+
+.\scripts\build-release.ps1 `
+  -PfxPath ".\certs\codesign.pfx" `
+  -Pack
+```
+
+- 不设置 `MGL_PRODUCT_API_KEY` / `MGL_PRODUCT_SERVER_URL` 时生成社区构建，免费功能完整，付费功能不可用。
+- `-LicenseServerUrl` 仍可作为 `MGL_PRODUCT_SERVER_URL` 的别名。
+- 发布构建启用 `-trimpath`、去除符号表，并通过 `-X .../security.Enforce=true` 开启调试器检测。
+- `-Pack` 使用 UPX 加壳；加壳后如需代码签名必须重新签名。
+- 代码签名使用 `signtool` 和受信任的 Authenticode 证书；证书密码只从环境变量读取。
+- 当前内置更新地址为空（OTA 暂定），设置页会显示未配置；确定地址后通过 `-UpdateManifestUrl` 注入。
+- 如果检测到进程以 Windows 管理员或 Unix root 身份运行，界面会先显示风险提示；用户可以选择继续本次运行或直接退出。程序清单仍为 `asInvoker`，不会主动请求提权。
+
+贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)、[TRADEMARK.md](TRADEMARK.md) 与 [CLA.md](CLA.md)。
+
+## 热更新与 OTA
+
+更新清单和安装包使用 Ed25519 签名，客户端只内置公钥；发布私钥必须离线保管。默认构建没有配置更新地址，设置页会提示未配置。
+
+- `CheckForUpdates` 请求清单 JSON，并读取响应头 `X-MGL-Signature`，或同目录的 `<manifest>.json.sig`（Base64 Ed25519 签名）。
+- 清单示例：
+
+```json
+{
+  "version": "1.1.0",
+  "minVersion": "1.0.0",
+  "notes": "修复若干问题",
+  "mandatory": false,
+  "web": {
+    "version": "1.1.0",
+    "url": "https://updates.example.com/web-1.1.0.zip",
+    "sha256": "…",
+    "size": 123456
+  },
+  "app": {
+    "version": "1.1.0",
+    "url": "https://updates.example.com/MyMinecraftGoLuncher-1.1.0.exe",
+    "sha256": "…",
+    "size": 12345678
+  }
+}
+```
+
+- 前端热更新：下载 `frontend/dist` 的 zip，校验后解压到 `MGL/web`，Wails 重新加载 WebView；旧版本保留为 `MGL/web.old`，可在设置页回滚。
+- 完整 OTA：下载并校验新 exe，生成本地 PowerShell 替换脚本，退出后替换并重启；旧 exe 保留 `.bak`。
+- 发布构建时注入清单地址：
+
+```powershell
+$env:MGL_PRODUCT_API_KEY = "官方构建专用产品 Key"
+$env:MGL_PRODUCT_SERVER_URL = "https://license.example.com"
+
+.\scripts\build-release.ps1 `
+  -UpdateManifestUrl "https://updates.example.com/manifest.json" `
+  -PfxPath ".\certs\codesign.pfx"
+```
+
+- 签名清单：
+
+```powershell
+node .\scripts\sign-update-manifest.mjs .\dist\manifest.json
+```
+
+- 更新服务器必须提供 HTTPS 和正确的 `Content-Type`；清单、签名和安装包均应做缓存控制。客户端会校验签名和 SHA256，但不会信任未签名清单。
+
 ## 安全存储
 
 账户、Microsoft/Yggdrasil 令牌、外置登录令牌、CurseForge API Key、AI API Key 与 MCSM API Key 不再写入 `MGL`。
 
 - **Windows**：加密后保存在当前用户的注册表
   `HKEY_CURRENT_USER\Software\MyGoLuncher\Secrets`，使用 Windows DPAPI（当前用户范围）保护。
-- **macOS / Linux**：保存在用户配置目录下的 AES-GCM 加密文件（密钥文件权限 0600），不会写入程序的 `MGL` 目录。
+- **macOS / Linux / BSD**：保存在用户配置目录下的 AES-256-GCM 加密文件，配套的 256 位随机密钥文件权限为 0600，目录权限为 0700；不需要用户设置或输入任何密码，也不会写入程序的 `MGL` 目录。当前方案不依赖桌面密钥环，避免在无桌面、SSH 或密钥环锁定环境中弹出密码框。
 - 旧版 `accounts.json` 会自动迁移到加密存储并删除；`settings.json` 中的旧 API Key 也会迁移并清除。
 - 每个 MCSM 服务器配置的 API Key 单独加密保存；`servers.json` 只包含面板地址、节点 ID、实例 UUID 等非敏感信息。
 - `MGL` 仅保留语言、主题、内存、Java 路径、下载源、实例列表、服务器绑定、缓存等非敏感信息。
@@ -225,6 +323,15 @@ env_key  = "ORCA_KEY"
 
 - 可创建多个离线身份；每个名称生成标准离线 UUID。
 - 离线账户无法加入开启正版验证的服务器。
+
+## License
+
+本项目以 **GNU Affero General Public License v3.0（AGPL-3.0）** 发布，见 [LICENSE](LICENSE)。
+
+- 你可以自由使用、修改和分发，但修改版通过网络提供服务时需按 AGPL-3.0 提供对应源代码。
+- 商业/闭源集成需要单独的商业授权，见 [docs/OPEN_CORE.md](docs/OPEN_CORE.md)。
+- 名称、Logo、官方构建、签名证书和官方更新源不随 AGPL 授权，见 [TRADEMARK.md](TRADEMARK.md)。
+- 贡献需遵守 [CLA.md](CLA.md) 与 DCO，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 已知限制
 

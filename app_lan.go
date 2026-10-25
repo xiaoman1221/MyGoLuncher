@@ -7,6 +7,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"MyMinecraftGoLuncher/internal/lan"
+	licensepkg "MyMinecraftGoLuncher/internal/license"
 )
 
 func (a *App) lanIdentity(instanceID string) lan.Identity {
@@ -33,6 +34,21 @@ func (a *App) handleLANChange(snapshot lan.Snapshot) {
 	}
 }
 
+// syncLanEntitlement starts or stops background LAN discovery as the paid
+// entitlement changes. Free builds never advertise LAN presence.
+func (a *App) syncLanEntitlement() {
+	if a.lanSvc == nil {
+		return
+	}
+	if a.hasFeature(licensepkg.FeatureLAN) {
+		if !a.lanSvc.Snapshot().Running {
+			a.startLanBackground()
+		}
+		return
+	}
+	a.lanSvc.Stop()
+}
+
 // startLanBackground starts continuous LAN discovery at application startup.
 // Discovery stays active until shutdown; the LAN page only refreshes the
 // advertised identity and broadcast preference.
@@ -54,6 +70,9 @@ func (a *App) startLanBackground() {
 // StartLanDiscovery ensures LAN discovery is running and updates the
 // advertised identity. It is safe to call while discovery is already running.
 func (a *App) StartLanDiscovery(instanceID string, broadcast bool) (lan.Snapshot, error) {
+	if err := a.requireFeature(licensepkg.FeatureLAN); err != nil {
+		return a.GetLanSnapshot(), err
+	}
 	if err := a.ready(); err != nil {
 		return lan.Snapshot{}, err
 	}
@@ -81,6 +100,9 @@ func (a *App) StopLanDiscovery() error {
 
 // SetLanBroadcast enables or disables advertising this launcher on the LAN.
 func (a *App) SetLanBroadcast(enabled bool) lan.Snapshot {
+	if err := a.requireFeature(licensepkg.FeatureLAN); err != nil {
+		return a.GetLanSnapshot()
+	}
 	if a.lanSvc == nil {
 		return lan.Snapshot{}
 	}
@@ -90,14 +112,17 @@ func (a *App) SetLanBroadcast(enabled bool) lan.Snapshot {
 
 // GetLanSnapshot returns the current discovery state.
 func (a *App) GetLanSnapshot() lan.Snapshot {
-	if a.lanSvc == nil {
-		return lan.Snapshot{Worlds: []lan.World{}, Peers: []lan.Peer{}}
+	if a.lanSvc == nil || !a.hasFeature(licensepkg.FeatureLAN) {
+		return lan.Snapshot{Running: false, Worlds: []lan.World{}, Peers: []lan.Peer{}}
 	}
 	return a.lanSvc.Snapshot()
 }
 
 // ScanLanSubnets probes the local /24 networks for Minecraft servers.
 func (a *App) ScanLanSubnets() (lan.Snapshot, error) {
+	if err := a.requireFeature(licensepkg.FeatureLAN); err != nil {
+		return a.GetLanSnapshot(), err
+	}
 	if a.lanSvc == nil {
 		return lan.Snapshot{}, errors.New("局域网发现尚未初始化")
 	}

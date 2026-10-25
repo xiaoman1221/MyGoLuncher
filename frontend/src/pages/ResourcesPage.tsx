@@ -4,6 +4,7 @@ import {
   Database,
   Image,
   LoaderCircle,
+  LockKeyhole,
   PackageOpen,
   RefreshCw,
   Search,
@@ -35,7 +36,7 @@ const tabs: Array<{ key: ResourceType; labelKey: 'resources.type.mod' | 'resourc
 export function ResourcesPage() {
   const {
     instances, settings, selectedId, refreshInstances, selectInstance, navigate,
-    pushToast, t, locale,
+    pushToast, t, locale, hasFeature, openLicense,
   } = useApp();
   const [type, setType] = useState<ResourceType>('mod');
   const [targetId, setTargetId] = useState(selectedId ?? instances[0]?.id ?? '');
@@ -46,6 +47,7 @@ export function ResourcesPage() {
   const [error, setError] = useState('');
   const [installing, setInstalling] = useState<string | null>(null);
   const aiEnabled = settings?.aiSearchEnabled === true;
+  const aiEntitled = hasFeature('ai');
   const [useAI, setUseAI] = useState(aiEnabled);
   const [mirrors, setMirrors] = useState<ResourceMirror[]>([]);
   const [mirrorId, setMirrorId] = useState(settings?.resourceMirror || 'official');
@@ -97,7 +99,7 @@ export function ResourcesPage() {
       sort: debouncedQuery ? 'relevance' : 'downloads',
       offset: 0,
       limit: 18,
-      useAI: aiEnabled && useAI,
+      useAI: aiEnabled && aiEntitled && useAI,
     })
       .then((found) => {
         if (alive) setResult(found);
@@ -112,7 +114,7 @@ export function ResourcesPage() {
         if (alive) setLoading(false);
       });
     return () => { alive = false; };
-  }, [type, targetId, debouncedQuery, needsInstance, aiEnabled, useAI]);
+  }, [type, targetId, debouncedQuery, needsInstance, aiEnabled, aiEntitled, useAI]);
 
   const projects = result?.items ?? [];
   const warnings = useMemo(() => {
@@ -228,11 +230,17 @@ export function ResourcesPage() {
           </div>
           <div className="resource-toolbar-actions">
             {aiEnabled ? (
-              <label className="ai-search-toggle">
-                <input type="checkbox" checked={useAI} onChange={(event) => setUseAI(event.target.checked)} />
-                <Sparkles size={13} />
-                <span>{t('resources.aiSearch')}</span>
-              </label>
+              aiEntitled ? (
+                <label className="ai-search-toggle">
+                  <input type="checkbox" checked={useAI} onChange={(event) => setUseAI(event.target.checked)} />
+                  <Sparkles size={13} />
+                  <span>{t('resources.aiSearch')}</span>
+                </label>
+              ) : (
+                <button type="button" className="text-button ai-enable" onClick={openLicense}>
+                  <LockKeyhole size={13} /> {t('resources.aiLocked')}
+                </button>
+              )
             ) : (
               <button type="button" className="text-button ai-enable" onClick={() => navigate('settings')}>
                 <Sparkles size={13} /> {t('resources.aiEnable')}

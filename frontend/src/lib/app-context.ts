@@ -53,6 +53,10 @@ export interface AppContextValue {
   pushToast: (kind: ToastKind, title: string, message?: string) => void;
   lanPeerCount: number;
   isDemo: boolean;
+  licenseOpen: boolean;
+  openLicense: () => void;
+  closeLicense: () => void;
+  hasFeature: (feature: string) => boolean;
 }
 
 export const AppContext = createContext<AppContextValue | null>(null);

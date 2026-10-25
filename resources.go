@@ -13,6 +13,7 @@ import (
 
 	"MyMinecraftGoLuncher/internal/aisearch"
 	"MyMinecraftGoLuncher/internal/curseforge"
+	licensepkg "MyMinecraftGoLuncher/internal/license"
 	"MyMinecraftGoLuncher/internal/modrinth"
 	"MyMinecraftGoLuncher/internal/store"
 )
@@ -149,6 +150,11 @@ func modrinthType(resourceType string) string {
 func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, error) {
 	if err := a.ready(); err != nil {
 		return ResourceSearchResult{}, err
+	}
+	if req.UseAI {
+		if err := a.requireFeature(licensepkg.FeatureAI); err != nil {
+			return ResourceSearchResult{}, err
+		}
 	}
 	req.Type = normalizeResourceType(req.Type)
 	if !validResourceType(req.Type) {

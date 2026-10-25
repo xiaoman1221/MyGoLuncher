@@ -16,7 +16,9 @@ import type {
   JavaRuntime,
   LanSnapshot,
   LanSyncPreview,
+  LicenseStatus,
   LaunchState,
+  UpdateInfo,
   ModUpdateReport,
   ModpackImportResponse,
   Project,
@@ -768,6 +770,12 @@ function clone<T>(value: T): T {
 
 function bootstrap(): Bootstrap {
   return {
+    license: {
+      state: 'active', configured: true, activated: true, machineCode: 'MOCK-DEMO-MACHINE', features: ['launch'],
+      message: '演示模式已授权', graceDays: 7,
+    },
+    elevated: false,
+    elevationConfirmed: true,
     settings: clone(settings),
     instances: clone(instances),
     paths,
@@ -946,6 +954,38 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
   switch (method) {
     case 'Bootstrap':
       return clone(bootstrap()) as T;
+    case 'GetLicenseStatus':
+      return { ...bootstrap().license } as T;
+    case 'StartTrial':
+      return {
+        state: 'trial', configured: true, activated: true, machineCode: 'MOCK-DEMO-MACHINE',
+        features: ['*'], message: '演示试用中', graceDays: 7, trial: true,
+        trialRemaining: 2, trialDaysLeft: 7, trialDays: 7,
+      } satisfies LicenseStatus as T;
+    case 'ActivateLicense':
+      return {
+        state: 'active', configured: true, activated: true, code: 'DEMO-****-CODE', machineCode: 'MOCK-DEMO-MACHINE',
+        features: ['launch'], message: '演示模式已授权', graceDays: 7,
+      } satisfies LicenseStatus as T;
+    case 'ValidateLicense':
+      return { ...bootstrap().license } as T;
+    case 'UnbindLicense':
+      return {
+        state: 'inactive', configured: true, activated: false, machineCode: 'MOCK-DEMO-MACHINE', features: [],
+        message: '演示模式不支持解绑', graceDays: 7,
+      } satisfies LicenseStatus as T;
+    case 'CheckForUpdates':
+      return {
+        configured: false, currentVersion: '1.0.0', mandatory: false, available: false,
+        hasWeb: false, hasApp: false,
+      } satisfies UpdateInfo as T;
+    case 'ApplyWebUpdate':
+    case 'ApplyAppUpdate':
+      throw new Error('演示模式不支持更新');
+    case 'RollbackWebUpdate':
+      return undefined as T;
+    case 'ConfirmElevation':
+      return undefined as T;
     case 'GetInstances':
       return clone(instances) as T;
     case 'TestDownloadMirrors':

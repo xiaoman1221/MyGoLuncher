@@ -5,6 +5,7 @@ import {
   FolderInput,
   Laptop,
   LoaderCircle,
+  LockKeyhole,
   Plus,
   RefreshCw,
   Search,
@@ -44,8 +45,9 @@ const filters: Array<{ key: VersionFilter; labelKey: 'versions.filter.release' |
 
 export function VersionsPage() {
   const {
-    pushToast, refreshInstances, selectInstance, navigate, t, locale,
+    pushToast, refreshInstances, selectInstance, navigate, t, locale, hasFeature, openLicense,
   } = useApp();
+  const versionDownloadAllowed = hasFeature('versions');
   const [filter, setFilter] = useState<VersionFilter>('release');
   const [query, setQuery] = useState('');
   const [data, setData] = useState<VersionList | null>(null);
@@ -260,6 +262,19 @@ export function VersionsPage() {
           </button>
         </div>
 
+        {!versionDownloadAllowed && (
+          <div className="inline-banner banner-warning">
+            <LockKeyhole size={16} />
+            <div>
+              <strong>{t('versions.downloadLocked')}</strong>
+              <span>{t('versions.downloadLockedHint')}</span>
+            </div>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={openLicense}>
+              {t('paid.activate')}
+            </button>
+          </div>
+        )}
+
         {error && (
           <div className="inline-banner banner-error">
             <TriangleAlert size={17} />
@@ -336,7 +351,7 @@ export function VersionsPage() {
                 <span className="version-action">
                   {version.installed ? (
                     <span className="installed-state"><Check size={14} /> {t('common.installed')}</span>
-                  ) : (
+                  ) : versionDownloadAllowed ? (
                     <button
                       type="button"
                       className="btn btn-ghost btn-sm"
@@ -345,6 +360,10 @@ export function VersionsPage() {
                     >
                       {pending.has(version.id) ? <LoaderCircle size={14} className="spin" /> : <ArrowDownToLine size={14} />}
                       {pending.has(version.id) ? t('common.installing') : t('common.install')}
+                    </button>
+                  ) : (
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={openLicense}>
+                      <LockKeyhole size={14} /> {t('versions.downloadLockedShort')}
                     </button>
                   )}
                 </span>

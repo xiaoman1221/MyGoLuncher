@@ -99,7 +99,44 @@ export interface PathsView {
   cache: string;
 }
 
+export interface LicenseStatus {
+  state: 'inactive' | 'active' | 'grace' | 'expired' | 'invalid' | 'error' | 'machine_changed' | 'trial' | 'trial_expired';
+  configured: boolean;
+  activated: boolean;
+  code?: string;
+  machineCode: string;
+  expiresAt?: string;
+  features: string[];
+  lastChecked?: string;
+  graceUntil?: string;
+  message?: string;
+  graceDays: number;
+  trial?: boolean;
+  trialRemaining?: number;
+  trialDaysLeft?: number;
+  trialDays?: number;
+  trialEndsAt?: string;
+}
+
+export interface UpdateInfo {
+  configured: boolean;
+  currentVersion: string;
+  version?: string;
+  minVersion?: string;
+  notes?: string;
+  mandatory: boolean;
+  available: boolean;
+  hasWeb: boolean;
+  hasApp: boolean;
+  webVersion?: string;
+  appVersion?: string;
+  publishedAt?: string;
+}
+
 export interface Bootstrap {
+  license: LicenseStatus;
+  elevated: boolean;
+  elevationConfirmed: boolean;
   settings: Settings;
   instances: InstanceView[];
   paths: PathsView;

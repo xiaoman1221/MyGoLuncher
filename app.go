@@ -23,6 +23,7 @@ import (
 	"MyMinecraftGoLuncher/internal/lan"
 	"MyMinecraftGoLuncher/internal/launcher"
 	"MyMinecraftGoLuncher/internal/launcherprofiles"
+	licensepkg "MyMinecraftGoLuncher/internal/license"
 	"MyMinecraftGoLuncher/internal/loader"
 	"MyMinecraftGoLuncher/internal/mcsm"
 	"MyMinecraftGoLuncher/internal/mirror"
@@ -30,6 +31,7 @@ import (
 	"MyMinecraftGoLuncher/internal/modrinth"
 	"MyMinecraftGoLuncher/internal/mojang"
 	"MyMinecraftGoLuncher/internal/secretstore"
+	securitypkg "MyMinecraftGoLuncher/internal/security"
 	"MyMinecraftGoLuncher/internal/serverpack"
 	"MyMinecraftGoLuncher/internal/store"
 	"MyMinecraftGoLuncher/internal/sysinfo"
@@ -52,7 +54,12 @@ type App struct {
 	javaMgr   *java.Manager
 	loaders   *loader.Installer
 	launcher  *launcher.Launcher
+	license   *licensepkg.Manager
 	initError string
+	elevated  bool
+
+	elevationMu        sync.Mutex
+	elevationConfirmed bool
 
 	syncMu sync.Mutex
 
@@ -102,7 +109,10 @@ func (r *logRing) snapshot() []string {
 
 // NewApp constructs the application and loads persisted state.
 func NewApp() *App {
-	a := &App{procs: map[string]*launcher.Process{}, logs: map[string]*logRing{}}
+	a := &App{
+		procs: map[string]*launcher.Process{}, logs: map[string]*logRing{},
+		elevated: securitypkg.IsElevated(),
+	}
 	a.totalMemoryMB = sysinfo.TotalMemoryMB()
 	a.autoMemoryMB = sysinfo.RecommendedMemoryMB(a.totalMemoryMB)
 	paths, err := store.DefaultPaths()
@@ -125,6 +135,12 @@ func NewApp() *App {
 	if st == nil {
 		return a
 	}
+	licenseMgr, licenseErr := licensepkg.NewManager(secrets, appVersion)
+	if licenseMgr == nil {
+		a.initError = "初始化授权模块失败: " + licenseErr.Error()
+		return a
+	}
+	a.license = licenseMgr
 	accountStore, err := auth.OpenWithSecrets(secrets, paths.Accounts, st.Settings().PlayerName)
 	if err != nil {
 		a.initError = err.Error()
@@ -147,10 +163,14 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if err := securitypkg.Guard(); err != nil {
+		a.initError = err.Error()
+		return
+	}
+	go a.validateLicenseOnStartup()
 	a.syncLauncherProfiles()
-	// Peer/world discovery runs for the lifetime of the app so other launcher
-	// clients on the LAN are discovered even when the LAN page is closed.
-	a.startLanBackground()
+	// LAN discovery is a paid feature. Start/stop it as entitlement changes.
+	a.syncLanEntitlement()
 }
 
 // syncLauncherProfiles keeps .minecraft/launcher_profiles.json in sync with
@@ -222,12 +242,28 @@ func (a *App) context() context.Context {
 	return context.Background()
 }
 
-func (a *App) ready() error {
+func (a *App) baseReady() error {
 	if a.initError != "" {
 		return errors.New(a.initError)
 	}
-	if a.store == nil || a.accounts == nil || a.mojang == nil || a.javaMgr == nil || a.loaders == nil || a.launcher == nil {
+	if a.store == nil || a.accounts == nil || a.mojang == nil || a.javaMgr == nil || a.loaders == nil || a.launcher == nil || a.license == nil {
 		return errors.New("启动器尚未完成初始化")
+	}
+	return nil
+}
+
+// ready performs the common initialization and elevated-run confirmation gate.
+// Free features must remain usable without a license; paid APIs call
+// requireFeature separately.
+func (a *App) ready() error {
+	if err := a.baseReady(); err != nil {
+		return err
+	}
+	a.elevationMu.Lock()
+	needsElevationConfirm := a.elevated && !a.elevationConfirmed
+	a.elevationMu.Unlock()
+	if needsElevationConfirm {
+		return errors.New("请先确认管理员权限运行提示")
 	}
 	return nil
 }
@@ -282,16 +318,19 @@ type InstanceView struct {
 
 // Bootstrap is loaded once by the frontend.
 type Bootstrap struct {
-	Settings          store.Settings `json:"settings"`
-	Instances         []InstanceView `json:"instances"`
-	Paths             PathsView      `json:"paths"`
-	Version           string         `json:"version"`
-	InitError         string         `json:"initError"`
-	Running           []string       `json:"running"`
-	Accounts          []auth.View    `json:"accounts"`
-	SelectedAccountID string         `json:"selectedAccountId"`
-	TotalMemoryMB     int            `json:"totalMemoryMB"`
-	AutoMemoryMB      int            `json:"autoMemoryMB"`
+	Settings           store.Settings    `json:"settings"`
+	Instances          []InstanceView    `json:"instances"`
+	Paths              PathsView         `json:"paths"`
+	Version            string            `json:"version"`
+	InitError          string            `json:"initError"`
+	Running            []string          `json:"running"`
+	Accounts           []auth.View       `json:"accounts"`
+	SelectedAccountID  string            `json:"selectedAccountId"`
+	TotalMemoryMB      int               `json:"totalMemoryMB"`
+	AutoMemoryMB       int               `json:"autoMemoryMB"`
+	License            licensepkg.Status `json:"license"`
+	Elevated           bool              `json:"elevated"`
+	ElevationConfirmed bool              `json:"elevationConfirmed"`
 }
 
 // Bootstrap returns all initial state.
@@ -300,6 +339,13 @@ func (a *App) Bootstrap() Bootstrap {
 		Version: appVersion, Running: []string{},
 		TotalMemoryMB: a.totalMemoryMB, AutoMemoryMB: a.autoMemoryMB,
 	}
+	if a.license != nil {
+		b.License = a.license.Status()
+	}
+	a.elevationMu.Lock()
+	b.Elevated = a.elevated
+	b.ElevationConfirmed = a.elevationConfirmed
+	a.elevationMu.Unlock()
 	if a.paths.Root != "" {
 		b.Paths = PathsView{
 			Base: a.paths.Base, Root: a.paths.Root, Data: a.paths.Data, Instances: a.paths.Instances,
@@ -307,7 +353,7 @@ func (a *App) Bootstrap() Bootstrap {
 			Assets: a.paths.Assets, Runtimes: a.paths.Runtimes, Cache: a.paths.Cache,
 		}
 	}
-	if err := a.ready(); err != nil {
+	if err := a.baseReady(); err != nil {
 		b.InitError = err.Error()
 		return b
 	}
@@ -1074,6 +1120,9 @@ func (a *App) InstallVersion(id string) (err error) {
 	if err := a.ready(); err != nil {
 		return err
 	}
+	if err := a.requireFeature(licensepkg.FeatureVersions); err != nil {
+		return err
+	}
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return errors.New("版本 ID 不能为空")
@@ -1109,6 +1158,11 @@ func (a *App) CreateInstance(req CreateInstanceRequest) (view InstanceView, err 
 	}
 	if _, err := a.mojang.ManifestEntry(a.context(), req.MCVersion); err != nil {
 		return InstanceView{}, fmt.Errorf("无效的 Minecraft 版本: %w", err)
+	}
+	if !a.mojang.IsInstalled(req.MCVersion) {
+		if err := a.requireFeature(licensepkg.FeatureVersions); err != nil {
+			return InstanceView{}, err
+		}
 	}
 	loaderType := loader.Normalize(req.Loader)
 	if loaderType == "" {
@@ -1157,6 +1211,11 @@ func (a *App) installInstanceRuntime(ctx context.Context, inst *store.Instance, 
 	defer a.installMu.Unlock()
 	workers := a.store.Settings().DownloadWorkers
 	t.update("game", "正在准备游戏文件…", 0, 0)
+	if !a.mojang.IsInstalled(inst.MCVersion) {
+		if err := a.requireFeature(licensepkg.FeatureVersions); err != nil {
+			return err
+		}
+	}
 	if err := a.mojang.Install(ctx, inst.MCVersion, workers, t.mojangProgress("game")); err != nil {
 		return fmt.Errorf("安装游戏版本失败: %w", err)
 	}

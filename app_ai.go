@@ -9,12 +9,16 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"MyMinecraftGoLuncher/internal/aisearch"
+	licensepkg "MyMinecraftGoLuncher/internal/license"
 )
 
 // BeginOrcaRouterLogin runs the OrcaRouter PKCE one-click login. It opens the
 // system browser, waits for the loopback callback, exchanges the code, and
 // stores the returned API key in the encrypted secret store.
 func (a *App) BeginOrcaRouterLogin() error {
+	if err := a.requireFeature(licensepkg.FeatureAI); err != nil {
+		return err
+	}
 	if err := a.ready(); err != nil {
 		return err
 	}

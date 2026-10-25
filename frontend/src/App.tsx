@@ -20,6 +20,7 @@ import type {
   InstanceView,
   LanSnapshot,
   LaunchState,
+  LicenseStatus,
   PageKey,
   Settings,
   Theme,
@@ -36,6 +37,9 @@ import { EditInstanceModal } from './components/EditInstanceModal';
 import { ConfirmDeleteModal } from './components/ConfirmDeleteModal';
 import { AccountModal } from './components/AccountModal';
 import { LaunchOverlay } from './components/LaunchOverlay';
+import { LicenseGate } from './components/LicenseGate';
+import { ElevationGate } from './components/ElevationGate';
+import { PaidFeaturePage } from './components/PaidFeaturePage';
 import { HomePage } from './pages/HomePage';
 import { VersionsPage } from './pages/VersionsPage';
 import { InstanceSettingsPage } from './pages/InstanceSettingsPage';
@@ -70,6 +74,9 @@ export default function App() {
   const [accountsOpen, setAccountsOpen] = useState(false);
   const [launchingId, setLaunchingId] = useState<string | null>(null);
   const [launchPhase, setLaunchPhase] = useState<'preparing' | 'waiting'>('preparing');
+  const [licenseOpen, setLicenseOpen] = useState(false);
+  const licenseActive = ['active', 'grace', 'trial'].includes(bootstrap?.license?.state ?? '');
+  const elevationBlocked = Boolean(bootstrap?.elevated && !bootstrap.elevationConfirmed);
 
   const toastId = useRef(0);
   const toastTimers = useRef(new Map<number, number>());
@@ -182,7 +189,7 @@ export default function App() {
   }, [setLanguage]);
 
   useEffect(() => {
-    if (!bootstrap || bootError) return;
+    if (!bootstrap || bootError || elevationBlocked) return;
     let alive = true;
     api.getLanSnapshot()
       .then((snapshot) => {
@@ -192,7 +199,7 @@ export default function App() {
         // Discovery may still be starting; the lan:changed event will catch up.
       });
     return () => { alive = false; };
-  }, [Boolean(bootstrap), Boolean(bootError)]);
+  }, [Boolean(bootstrap), Boolean(bootError), elevationBlocked]);
 
   useEffect(() => {
     if (selectedId) {
@@ -269,7 +276,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!bootstrap || bootError) return () => {};
+    if (bootstrap?.license?.state !== 'trial') return;
+    const timer = window.setInterval(() => {
+      api.getLicenseStatus()
+        .then((next) => setBootstrap((current) => current ? { ...current, license: next } : current))
+        .catch(() => {});
+    }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [bootstrap?.license?.state]);
+
+  useEffect(() => {
+    if (!bootstrap || bootError) return;
+    return onEvent<LicenseStatus>('license:changed', (next) => {
+      setBootstrap((current) => current ? { ...current, license: next } : current);
+    });
+  }, [Boolean(bootstrap), Boolean(bootError)]);
+
+  useEffect(() => {
+    if (!bootstrap || bootError || elevationBlocked) return () => {};
     const disposers = [
       onEvent<null>('instances:changed', () => { void refreshInstances(); }),
       onEvent<AccountState>('accounts:changed', (state) => {
@@ -317,7 +341,7 @@ export default function App() {
       }),
     ];
     return () => disposers.forEach((dispose) => dispose());
-  }, [Boolean(bootstrap), Boolean(bootError), refreshInstances, openConsole, pushToast, reloadBootstrap, t]);
+  }, [Boolean(bootstrap), Boolean(bootError), elevationBlocked, refreshInstances, openConsole, pushToast, reloadBootstrap, t]);
 
   useEffect(() => {
     const timers = toastTimers.current;
@@ -339,6 +363,18 @@ export default function App() {
   const selectedInstance = instances.find((instance) => instance.id === selectedId) ?? null;
   const activeConsole = instances.find((instance) => instance.id === consoleId) ?? null;
   const launchingInstance = instances.find((instance) => instance.id === launchingId) ?? null;
+
+  const hasFeature = useCallback((feature: string) => {
+    if (!licenseActive) return false;
+    const normalized = feature.toLowerCase();
+    return (bootstrap?.license?.features ?? []).some((granted) => {
+      const value = granted.toLowerCase();
+      return value === normalized || ['*', 'all', 'pro', 'commercial'].includes(value);
+    });
+  }, [bootstrap?.license?.features, licenseActive]);
+
+  const openLicense = useCallback(() => setLicenseOpen(true), []);
+  const closeLicense = useCallback(() => setLicenseOpen(false), []);
 
   const contextValue = useMemo(() => ({
     bootstrap,
@@ -374,12 +410,16 @@ export default function App() {
     pushToast,
     lanPeerCount,
     isDemo,
+    licenseOpen,
+    openLicense,
+    closeLicense,
+    hasFeature,
   }), [
     bootstrap, instances, settings, accounts, selectedAccount, page, theme, setTheme,
     language, locale, t, setLanguage,
     navigate, selectedId, selectedInstance, launchingId, selectInstance, refreshInstances,
     reloadBootstrap, saveSettings, openDataFolder, openInstanceFolder, launch, launchToServer, stop, lanPeerCount,
-    openConsole, pushToast,
+    openConsole, pushToast, licenseOpen, openLicense, closeLicense, hasFeature,
   ]);
 
   if (loading) {
@@ -425,13 +465,17 @@ export default function App() {
     instanceSettings: <InstanceSettingsPage />,
     resources: <ResourcesPage />,
     modpacks: <ModpacksPage />,
-    servers: <ServersPage />,
-    lan: <LanPage />,
+    servers: hasFeature('server') ? <ServersPage /> : <PaidFeaturePage feature="server" />,
+    lan: hasFeature('lan') ? <LanPage /> : <PaidFeaturePage feature="lan" />,
     settings: <SettingsPage />,
   };
 
   return (
     <AppContext.Provider value={contextValue}>
+      {elevationBlocked ? (
+        <ElevationGate onConfirmed={reloadBootstrap} />
+      ) : (
+        <>
       <div className="app-shell">
         <Sidebar />
         <div className="app-main">
@@ -468,6 +512,19 @@ export default function App() {
 
       <TaskTray />
       <ToastStack toasts={toasts} onDismiss={dismissToast} withConsole={Boolean(activeConsole)} />
+
+      {licenseOpen && (
+        <LicenseGate
+          status={bootstrap.license ?? {
+            state: 'error', configured: false, activated: false, machineCode: '', features: [],
+            message: t('license.failed'), graceDays: 7,
+          }}
+          onActivated={reloadBootstrap}
+          onClose={closeLicense}
+        />
+      )}
+        </>
+      )}
     </AppContext.Provider>
   );
 }

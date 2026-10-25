@@ -11,10 +11,14 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	licensepkg "MyMinecraftGoLuncher/internal/license"
 	"MyMinecraftGoLuncher/internal/mcsm"
 )
 
 func (a *App) requireServers() error {
+	if err := a.requireFeature(licensepkg.FeatureServer); err != nil {
+		return err
+	}
 	if a.serverErr != "" {
 		return errors.New(a.serverErr)
 	}
