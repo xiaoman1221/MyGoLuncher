@@ -88,6 +88,24 @@ export interface InstanceView extends Instance {
   effectiveMemoryMB: number;
 }
 
+export type InstanceResourceKind = 'mods' | 'resourcepacks' | 'shaderpacks';
+
+export interface InstanceResource {
+  kind: InstanceResourceKind;
+  fileName: string;
+  name: string;
+  enabled: boolean;
+  directory: boolean;
+  size: number;
+  modifiedAt?: string;
+}
+
+export interface InstanceResources {
+  mods: InstanceResource[];
+  resourcePacks: InstanceResource[];
+  shaders: InstanceResource[];
+}
+
 export interface PathsView {
   base: string;
   root: string;

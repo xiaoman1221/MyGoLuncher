@@ -585,7 +585,8 @@ func countEntries(dir string) int {
 	}
 	n := 0
 	for _, e := range entries {
-		if e.Name() != "" && !strings.HasPrefix(e.Name(), ".") {
+		name := e.Name()
+		if name != "" && !strings.HasPrefix(name, ".") && !strings.HasSuffix(strings.ToLower(name), ".disabled") {
 			n++
 		}
 	}

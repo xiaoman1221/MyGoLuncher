@@ -14,6 +14,8 @@ import type {
   ExternalScanResult,
   Hitokoto,
   InstallProjectResult,
+  InstanceResourceKind,
+  InstanceResources,
   InstanceView,
   JavaPackage,
   JavaReleaseInfo,
@@ -143,6 +145,9 @@ export const api = {
   getInstanceLog: (id: string) => call<string[]>('GetInstanceLog', id),
   openInstanceFolder: (id: string) => call<void>('OpenInstanceFolder', id),
   openInstanceSubfolder: (id: string, folder: string) => call<void>('OpenInstanceSubfolder', id, folder),
+  getInstanceResources: (id: string) => call<InstanceResources>('GetInstanceResources', id),
+  setInstanceResourceEnabled: (id: string, kind: InstanceResourceKind, fileName: string, enabled: boolean) =>
+    call<InstanceResources>('SetInstanceResourceEnabled', id, kind, fileName, enabled),
   openDataFolder: () => call<void>('OpenDataFolder'),
   openConfigFolder: () => call<void>('OpenConfigFolder'),
   openURL: (url: string) => call<void>('OpenURL', url),

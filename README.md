@@ -17,7 +17,7 @@
 - **添加本地版本**：扫描本机官方启动器、HMCL、PCL2、Prism Launcher / MultiMC、Modrinth App、CurseForge、ATLauncher、GDLauncher 与 FTB App，也可以手动选择 `.minecraft`、`versions`、`instances` / `profiles` 目录或单个版本/实例文件夹。支持一次勾选多个版本批量导入；「自定义导入」可手动填写版本名称、Minecraft 版本、加载器与可选的来源目录，并支持递归搜索指定目录下的 `.minecraft` / `versions` 文件夹、自动识别版本并填入信息。缺少版本 JSON 的版本文件夹会从名称推断版本并给出警告；导入时复制存档、模组、资源包、`kubejs`、`scripts`、`datapacks` 与配置，并准备游戏运行环境。
 - **下载官方版本**：从 Mojang 元数据获取正式版、快照和远古版本，下载客户端、运行库、本地库与资源文件。下载 Minecraft 游戏版本和修复版本文件不收费，也不依赖激活。
 - **多下载源**：官方源、BMCLAPI、清华 Adoptium 与自定义镜像，安装前按当前网络测速并自动回退，所有文件仍做哈希校验。游戏本体、Fabric/Quilt/Forge/NeoForge 的元数据与安装器、以及 Adoptium Java 归档都会优先尝试镜像；自定义 proxy 镜像也会参与 Java API/归档测速。整合包与资源下载另支持 MCIM 等 Modrinth / CurseForge 镜像，可在设置中配置默认源，也可在导入/安装时临时切换。
-- **版本设置**：在左侧「版本设置」中统一管理已安装版本，可修改名称、内存与 Java，查看游戏目录；支持「修复版本」，校验并补充缺失或损坏的游戏本体、运行库、资源与加载器文件。首页选中某个版本后，启动按钮旁也会直接显示「修复版本」。安装了模组加载器的版本会额外显示「资源设置」：查看模组、资源包、光影数量，直接打开对应目录，并快速调整该版本内存。
+- **版本设置**：在左侧「版本设置」中统一管理已安装版本，可修改名称、内存与 Java，查看游戏目录；支持「修复版本」，校验并补充缺失或损坏的游戏本体、运行库、资源与加载器文件。首页选中某个版本后，启动按钮旁也会直接显示「修复版本」。安装了模组加载器的版本会额外显示「资源设置」：查看并启用/禁用模组、资源包和光影，打开对应目录，并快速调整该版本内存。禁用文件会加上 `.disabled` 后缀并保留原文件。
 - **版本隔离**：可在设置中开启或关闭。开启时每个版本在 `.minecraft/versions/<版本名>/` 中拥有独立的 `mods/`、`shaderpacks/`、`resourcepacks/`、`saves/` 与日志目录；关闭后所有版本共用 `.minecraft`。版本文件夹同时包含可被其他启动器识别的 `<版本名>.json` 和 `<版本名>.jar`。
 - **加载器**：Fabric、Quilt、Forge、NeoForge；创建版本时会按当前选中的 Minecraft 版本获取兼容的加载器版本下拉列表，默认自动选择最新稳定版。Forge/NeoForge 优先执行官方安装器（方式 A）；旧版 Forge 官方安装器失败时，会自动解包 `install_profile`、版本 JSON 和 Maven 运行库进行兼容安装（方式 B，参考 PCL2 的 Legacy 处理）。
 - **资源中心**：从 Modrinth 与 CurseForge 搜索并安装模组、光影、资源包、数据包与整合包；可在设置中填写 CurseForge API Key。

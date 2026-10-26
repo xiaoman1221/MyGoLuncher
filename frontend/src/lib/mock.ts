@@ -10,6 +10,7 @@ import type {
   ExternalScanResult,
   Hitokoto,
   InstallProjectResult,
+  InstanceResources,
   InstanceView,
   JavaPackage,
   JavaReleaseInfo,
@@ -239,6 +240,20 @@ let serverStatuses: ServerStatus[] = [{
   statusText: 'running',
   nickname: '生存服',
 }];
+
+let mockResources: InstanceResources = {
+  mods: [
+    { kind: 'mods', fileName: 'sodium.jar', name: 'sodium.jar', enabled: true, directory: false, size: 1_200_000 },
+    { kind: 'mods', fileName: 'oldmod.jar.disabled', name: 'oldmod.jar', enabled: false, directory: false, size: 400_000 },
+  ],
+  resourcePacks: [
+    { kind: 'resourcepacks', fileName: 'faithful.zip', name: 'faithful.zip', enabled: true, directory: false, size: 16_000_000 },
+    { kind: 'resourcepacks', fileName: 'vanilla-tweaks', name: 'vanilla-tweaks', enabled: true, directory: true, size: 0 },
+  ],
+  shaders: [
+    { kind: 'shaderpacks', fileName: 'complementary.zip', name: 'complementary.zip', enabled: false, directory: false, size: 8_000_000 },
+  ],
+};
 
 let lanToolsState: LanToolState = {
   selfId: 'mock-self',
@@ -1236,6 +1251,21 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
     }
     case 'GetInstanceLog':
       return clone(logs.get(String(args[0])) ?? []) as T;
+    case 'GetInstanceResources':
+      return clone(mockResources) as T;
+    case 'SetInstanceResourceEnabled': {
+      const kind = String(args[1]);
+      const fileName = String(args[2]);
+      const enabled = Boolean(args[3]);
+      const groups = kind === 'mods' ? mockResources.mods : kind === 'resourcepacks' ? mockResources.resourcePacks : mockResources.shaders;
+      mockResources = {
+        ...mockResources,
+        mods: kind === 'mods' ? groups.map((item) => item.fileName === fileName ? { ...item, enabled } : item) : mockResources.mods,
+        resourcePacks: kind === 'resourcepacks' ? groups.map((item) => item.fileName === fileName ? { ...item, enabled } : item) : mockResources.resourcePacks,
+        shaders: kind === 'shaderpacks' ? groups.map((item) => item.fileName === fileName ? { ...item, enabled } : item) : mockResources.shaders,
+      };
+      return clone(mockResources) as T;
+    }
     case 'OpenInstanceFolder':
     case 'OpenInstanceSubfolder':
     case 'OpenDataFolder':
