@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MyGoLuncher
+Comment=Minecraft launcher
+Exec=mygoluncher
+Icon=mygoluncher
+Terminal=false
+Categories=Game;
+StartupWMClass=MyMinecraftGoLuncher

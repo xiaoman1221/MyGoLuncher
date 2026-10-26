@@ -51,7 +51,7 @@ const (
 )
 
 var contentDirs = []string{
-	"mods", "config", "defaultconfigs", "scripts", "kubejs", "datapacks", "resourcepacks",
+	"mods", "plugins", "config", "defaultconfigs", "scripts", "kubejs", "datapacks", "resourcepacks",
 }
 
 var contentFiles = []string{
@@ -413,13 +413,16 @@ func addModsDir(zw *zip.Writer, root, prefix string, warnings *[]string) error {
 		if entry.IsDir() || !entry.Type().IsRegular() {
 			return nil
 		}
-		if modfilter.IsModJar(path) {
-			if clientOnly, reason := modfilter.IsClientOnly(path); clientOnly {
-				if warnings != nil {
-					*warnings = append(*warnings, "已跳过仅客户端模组: "+entry.Name()+"（"+reason+"）")
-				}
-				return nil
+		// Only jars are loaded from mods/. Keep configs and disabled jars out of
+		// a server pack; they are not needed on the server and only add noise.
+		if !modfilter.IsModJar(path) {
+			return nil
+		}
+		if clientOnly, reason := modfilter.IsClientOnly(path); clientOnly {
+			if warnings != nil {
+				*warnings = append(*warnings, "已跳过仅客户端模组: "+entry.Name()+"（"+reason+"）")
 			}
+			return nil
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {

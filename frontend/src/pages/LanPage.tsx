@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Download,
   LoaderCircle,
@@ -18,6 +18,7 @@ import { onEvent } from '../lib/events';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { LanSyncModal } from '../components/LanSyncModal';
+import { LanVersionInstallModal } from '../components/LanVersionInstallModal';
 import { cn } from '../lib/format';
 import type { MessageKey } from '../lib/i18n';
 import type {
@@ -41,6 +42,16 @@ function isShareDir(value: string): value is LanShareDir {
   return value === 'mods' || value === 'shaderpacks' || value === 'resourcepacks' || value === 'config';
 }
 
+function normalizeVersion(value: string): string {
+  return value.toLowerCase().replace(/\([^)]*\)|\[[^\]]*\]/g, '').replace(/\s+/g, '').trim();
+}
+
+function versionMatches(local: string, remote: string): boolean {
+  const normalizedRemote = normalizeVersion(remote);
+  if (!normalizedRemote) return true;
+  return normalizeVersion(local) === normalizedRemote;
+}
+
 const emptySnapshot: LanSnapshot = {
   running: false,
   broadcast: true,
@@ -61,8 +72,13 @@ export function LanPage() {
   const [joinInstance, setJoinInstance] = useState(selectedId ?? instances[0]?.id ?? '');
   const [shareInstance, setShareInstance] = useState(selectedId ?? instances[0]?.id ?? '');
   const [shareDirs, setShareDirs] = useState<LanShareDir[]>(['mods', 'shaderpacks', 'resourcepacks']);
+  const [shareFull, setShareFull] = useState(false);
   const [shareBusy, setShareBusy] = useState(false);
   const [syncPeer, setSyncPeer] = useState<LanPeer | null>(null);
+  const [installPeer, setInstallPeer] = useState<LanPeer | null>(null);
+  const startedRef = useRef(false);
+  const sharingRef = useRef(false);
+  sharingRef.current = snapshot.sharing;
 
   useEffect(() => {
     if (selectedId && instances.some((instance) => instance.id === selectedId)) {
@@ -76,21 +92,38 @@ export function LanPage() {
       if (active) setSnapshot(next);
     });
     api.getLanSnapshot()
-      .then((current) => {
-        if (active) setSnapshot(current);
-      })
-      .catch((error) => {
-        if (active) pushToast('error', t('lan.startFailed'), (error as Error).message);
-      })
-      .finally(() => {
-        if (active) setStarting(false);
-      });
+      .then((current) => { if (active) setSnapshot(current); })
+      .finally(() => { if (active) setStarting(false); });
     return () => {
       active = false;
       unsubscribe();
     };
-    // Discovery runs for the lifetime of the app; this page only observes it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!joinInstance) {
+      setStarting(false);
+      return;
+    }
+    let active = true;
+    // Discovery runs in the background, but advertising is page-scoped:
+    // enable it for the selected instance and turn it off on unmount.
+    setStarting(true);
+    const broadcast = startedRef.current ? snapshot.broadcast : true;
+    startedRef.current = true;
+    api.startLanDiscovery(joinInstance, broadcast)
+      .then((current) => { if (active) setSnapshot(current); })
+      .catch((error) => {
+        if (active) pushToast('error', t('lan.startFailed'), (error as Error).message);
+      })
+      .finally(() => { if (active) setStarting(false); });
+    return () => { active = false; };
+  }, [joinInstance]);
+
+  useEffect(() => () => {
+    // Keep advertising while this launcher is still sharing files; otherwise
+    // leaving the page would make the share disappear from other clients.
+    if (!sharingRef.current) void api.setLanBroadcast(false).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -112,6 +145,9 @@ export function LanPage() {
     if (snapshot.sharedInstanceId && instances.some((instance) => instance.id === snapshot.sharedInstanceId)) {
       setShareInstance((current) => current === snapshot.sharedInstanceId ? current : snapshot.sharedInstanceId!);
     }
+    const all = (snapshot.shareDirs ?? []).includes('*');
+    setShareFull(all);
+    if (all) return;
     const dirs = (snapshot.shareDirs ?? []).filter(isShareDir);
     if (dirs.length > 0) {
       setShareDirs((current) => current.join(',') === dirs.join(',') ? current : dirs);
@@ -124,7 +160,7 @@ export function LanPage() {
       const next = await api.setLanBroadcast(enabled);
       setSnapshot(next);
     } catch (error) {
-      pushToast('error', t('lan.scanFailed'), (error as Error).message);
+      pushToast('error', t('lan.startFailed'), (error as Error).message);
     }
   };
 
@@ -139,17 +175,27 @@ export function LanPage() {
     }
   };
 
-  const join = async (address: string, key: string) => {
+  const join = async (address: string, key: string, worldVersion?: string) => {
     const target = address.trim();
     if (!target) return;
     if (!joinInstance) {
       pushToast('error', t('lan.joinFailed'), t('lan.noInstance'));
       return;
     }
+    const instance = instances.find((item) => item.id === joinInstance);
+    if (worldVersion && instance && !versionMatches(instance.mcVersion, worldVersion)) {
+      pushToast('error', t('lan.versionMismatch'), t('lan.versionMismatchBody', {
+        world: worldVersion,
+        local: instance.mcVersion,
+      }));
+      return;
+    }
     setJoining(key);
     try {
       if (joinInstance !== selectedId) selectInstance(joinInstance);
       await launchToServer(joinInstance, target);
+    } catch (error) {
+      pushToast('error', t('lan.joinFailed'), (error as Error).message);
     } finally {
       setJoining(null);
     }
@@ -160,14 +206,14 @@ export function LanPage() {
       pushToast('error', t('lan.shareFailed'), t('lan.noInstance'));
       return;
     }
-    if (enabled && shareDirs.length === 0) {
+    if (enabled && !shareFull && shareDirs.length === 0) {
       pushToast('error', t('lan.shareFailed'), t('lan.shareDirsRequired'));
       return;
     }
     setShareBusy(true);
     try {
       const next = enabled
-        ? await api.startLanShare(shareInstance, shareDirs)
+        ? await api.startLanShare(shareInstance, shareFull ? ['*'] : shareDirs)
         : await api.stopLanShare();
       setSnapshot(next);
       pushToast(enabled ? 'success' : 'info', enabled ? t('lan.shareStarted') : t('lan.shareStopped'));
@@ -179,7 +225,7 @@ export function LanPage() {
   };
 
   const toggleShareDir = (dir: LanShareDir) => {
-    if (snapshot.sharing) return;
+    if (snapshot.sharing || shareFull) return;
     setShareDirs((current) => current.includes(dir)
       ? current.filter((item) => item !== dir)
       : [...current, dir]);
@@ -331,7 +377,7 @@ export function LanPage() {
                   type="button"
                   className={cn('chip', 'chip-button', shareDirs.includes(dir) && 'is-active')}
                   onClick={() => toggleShareDir(dir)}
-                  disabled={snapshot.sharing || shareBusy}
+                  disabled={snapshot.sharing || shareBusy || shareFull}
                 >
                   {t(SHARE_DIR_KEYS[dir])}
                 </button>
@@ -339,6 +385,19 @@ export function LanPage() {
             </div>
           </div>
         </div>
+        <label className="toggle-row lan-full-share">
+          <span>
+            <strong>{t('lan.shareFull')}</strong>
+            <small>{t('lan.shareFullHint')}</small>
+          </span>
+          <input
+            type="checkbox"
+            className="switch"
+            checked={shareFull}
+            disabled={snapshot.sharing || shareBusy}
+            onChange={(event) => setShareFull(event.target.checked)}
+          />
+        </label>
         <p className="field-hint">{t('lan.shareHint')}</p>
         {snapshot.sharing && (
           <p className="field-hint">{t('lan.shareActive', { instance: sharedInstanceName })}</p>
@@ -398,7 +457,7 @@ export function LanPage() {
                 world={world}
                 busy={joining === world.id}
                 disabled={!joinInstance}
-                onJoin={() => void join(world.address, world.id)}
+                onJoin={() => void join(world.address, world.id, world.version)}
                 formatClock={formatClock}
               />
             ))}
@@ -428,7 +487,7 @@ export function LanPage() {
                   <span>{t('lan.peerLine', { instance: peer.instance || 'Minecraft', version: peer.mcVersion || '—' })}</span>
                   {peer.canSync && peer.syncDirs && peer.syncDirs.length > 0 && (
                     <span className="lan-peer-dirs">
-                      <Download size={11} /> {peer.syncDirs.join(' · ')}
+                      <Download size={11} /> {peer.syncDirs.map((dir) => dir === '*' ? t('lan.fullVersion') : dir).join(' · ')}
                     </span>
                   )}
                 </div>
@@ -436,9 +495,9 @@ export function LanPage() {
                   <button
                     type="button"
                     className="btn btn-primary btn-sm lan-peer-sync"
-                    onClick={() => setSyncPeer(peer)}
+                    onClick={() => (peer.syncDirs?.includes('*') ? setInstallPeer(peer) : setSyncPeer(peer))}
                   >
-                    <Download size={14} /> {t('lan.sync')}
+                    <Download size={14} /> {peer.syncDirs?.includes('*') ? t('lan.installVersion') : t('lan.sync')}
                   </button>
                 )}
                 <div className="lan-peer-meta">
@@ -457,6 +516,13 @@ export function LanPage() {
           instances={instances}
           selectedId={selectedId}
           onClose={() => setSyncPeer(null)}
+        />
+      )}
+
+      {installPeer && (
+        <LanVersionInstallModal
+          peer={installPeer}
+          onClose={() => setInstallPeer(null)}
         />
       )}
     </div>

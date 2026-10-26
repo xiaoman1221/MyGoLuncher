@@ -154,6 +154,7 @@ type Settings struct {
 	DownloadWorkers       int            `json:"downloadWorkers"`
 	ShowGameConsole       bool           `json:"showGameConsole"`
 	ShowLauncherOnLaunch  bool           `json:"showLauncherOnLaunch"`
+	CloseBehavior         string         `json:"closeBehavior"`
 	HitokotoAPIURL        string         `json:"hitokotoApiUrl"`
 	LanguageAuto          bool           `json:"languageAuto"`
 	Language              string         `json:"language"`
@@ -178,13 +179,14 @@ func DefaultSettings() Settings {
 		CustomResourceMirrors: []MirrorConfig{},
 		DownloadWorkers:       8,
 		ShowGameConsole:       true,
+		CloseBehavior:         "ask",
 		HitokotoAPIURL:        hitokoto.DefaultAPIURL,
 		LanguageAuto:          true,
 		Language:              "zh-CN",
 		VersionIsolation:      true,
 		AISearchProvider:      "deepseek",
 		AISearchModel:         "deepseek-chat",
-		SchemaVersion:         3,
+		SchemaVersion:         4,
 	}
 }
 
@@ -300,6 +302,12 @@ func OpenWithSecrets(paths Paths, secrets secretstore.Store) (*Store, error) {
 		s.settings.SchemaVersion = 3
 		settingsDirty = true
 	}
+	if s.settings.SchemaVersion < 4 {
+		s.settings.CloseBehavior = normalizeCloseBehavior(s.settings.CloseBehavior)
+		s.settings.SchemaVersion = 4
+		settingsDirty = true
+	}
+	s.settings.CloseBehavior = normalizeCloseBehavior(s.settings.CloseBehavior)
 	if s.settings.DefaultMemoryMB != 0 && (s.settings.DefaultMemoryMB < 512 || s.settings.DefaultMemoryMB > 65536) {
 		s.settings.DefaultMemoryMB = 0
 		settingsDirty = true
@@ -598,6 +606,7 @@ func (s *Store) SaveSettings(next Settings) (Settings, error) {
 		next.HitokotoAPIURL = hitokoto.DefaultAPIURL
 	}
 	next.Language = normalizeLanguage(next.Language)
+	next.CloseBehavior = normalizeCloseBehavior(next.CloseBehavior)
 	next.AISearchBaseURL = strings.TrimSpace(next.AISearchBaseURL)
 	next.AISearchAPIKey = strings.TrimSpace(next.AISearchAPIKey)
 	next.AISearchProvider = normalizeAIProvider(next.AISearchProvider, next.AISearchModel)
@@ -614,7 +623,7 @@ func (s *Store) SaveSettings(next Settings) (Settings, error) {
 	if strings.TrimSpace(next.ResourceMirror) == "" {
 		next.ResourceMirror = "official"
 	}
-	next.SchemaVersion = 3
+	next.SchemaVersion = 4
 	if err := s.saveSecrets(next); err != nil {
 		return Settings{}, err
 	}
@@ -875,6 +884,17 @@ func defaultAIModel(provider string) string {
 		return "orcarouter/auto"
 	default:
 		return "deepseek-chat"
+	}
+}
+
+func normalizeCloseBehavior(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "exit":
+		return "exit"
+	case "minimize":
+		return "minimize"
+	default:
+		return "ask"
 	}
 }
 

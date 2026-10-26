@@ -95,3 +95,33 @@ func TestDownloadAnyFallsBack(t *testing.T) {
 		t.Fatalf("unexpected fallback content: %q", data)
 	}
 }
+
+func TestDownloadReplacesCorruptExistingFile(t *testing.T) {
+	payload := []byte("replacement content")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	}))
+	defer server.Close()
+
+	dest := filepath.Join(t.TempDir(), "mod.jar")
+	if err := os.WriteFile(dest, []byte("corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha512.Sum512(payload)
+	if err := Download(context.Background(), File{
+		URL: server.URL, Dest: dest, SHA512: hex.EncodeToString(sum[:]),
+		Size: int64(len(payload)), Verify: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, payload) {
+		t.Fatalf("content mismatch: %q", data)
+	}
+	if _, err := os.Stat(dest + ".download-backup"); !os.IsNotExist(err) {
+		t.Fatalf("backup was not cleaned up: %v", err)
+	}
+}

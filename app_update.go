@@ -7,11 +7,21 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	licensepkg "MyMinecraftGoLuncher/internal/license"
 	"MyMinecraftGoLuncher/internal/updater"
 )
 
-// CheckForUpdates fetches the signed OTA manifest. An empty update server is
-// reported as a normal error so the Settings page can show "not configured".
+func (a *App) configureUpdates() {
+	baseURL, apiKey, err := licensepkg.UpdateCredentials()
+	if err != nil {
+		return
+	}
+	updater.ConfigureAPI(baseURL, apiKey)
+}
+
+// CheckForUpdates fetches the OTA manifest from the LicensingGo product API.
+// An unconfigured build is reported as a normal error so Settings can show
+// "not configured".
 func (a *App) CheckForUpdates() (updater.Info, error) {
 	if err := a.baseReady(); err != nil {
 		return updater.Info{CurrentVersion: appVersion}, err

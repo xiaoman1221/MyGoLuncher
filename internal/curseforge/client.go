@@ -392,8 +392,13 @@ func (c *Client) DownloadFileAny(ctx context.Context, file File, dir string, rew
 			urls = candidates
 		}
 	}
+	sha1sum := file.SHA1()
+	if sha1sum == "" {
+		// Without a checksum an existing same-sized file cannot be trusted.
+		_ = os.Remove(dest)
+	}
 	if err := httpx.DownloadAny(ctx, urls, httpx.File{
-		Dest: dest, SHA1: file.SHA1(), Size: file.FileLength, Verify: file.SHA1() != "",
+		Dest: dest, SHA1: sha1sum, Size: file.FileLength, Verify: sha1sum != "",
 	}); err != nil {
 		return "", err
 	}

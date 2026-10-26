@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Download, LoaderCircle, RefreshCw, RotateCcw, Sparkles, TriangleAlert } from 'lucide-react';
+import { Download, LoaderCircle, RefreshCw, RotateCcw, Sparkles, TriangleAlert, Zap } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import type { UpdateInfo } from '../lib/types';
@@ -26,6 +26,26 @@ export function UpdatePanel() {
     const next = await api.checkForUpdates();
     setInfo(next);
     if (!next.available) pushToast('info', t('settings.updateUpToDate'));
+  });
+
+  const oneClick = () => void run('oneClick', async () => {
+    const next = await api.checkForUpdates();
+    setInfo(next);
+    if (!next.available) {
+      pushToast('info', t('settings.updateUpToDate'));
+      return;
+    }
+    if (next.hasApp) {
+      if (!window.confirm(t('settings.updateAppConfirm'))) return;
+      await api.applyAppUpdate();
+      return;
+    }
+    if (next.hasWeb) {
+      await api.applyWebUpdate();
+      pushToast('success', t('settings.updateWebApplied'));
+      return;
+    }
+    pushToast('info', t('settings.updateUpToDate'));
   });
 
   const applyWeb = () => void run('web', async () => {
@@ -57,7 +77,7 @@ export function UpdatePanel() {
       <div className="settings-fields">
         <div className="update-row">
           <div>
-            <strong>{t('settings.updateCurrent', { version: info?.currentVersion ?? '1.0.0' })}</strong>
+            <strong>{t('settings.updateCurrent', { version: info?.currentVersion ?? '1.0.2' })}</strong>
             {info?.configured && info.available && (
               <span className="field-hint">
                 {t('settings.updateAvailable', { version: info.version ?? info.appVersion ?? info.webVersion ?? '' })}
@@ -65,10 +85,16 @@ export function UpdatePanel() {
             )}
             {info?.notes && <p className="update-notes">{info.notes}</p>}
           </div>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={check} disabled={Boolean(busy)}>
-            {busy === 'check' ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}
-            {busy === 'check' ? t('settings.updateChecking') : t('settings.updateCheck')}
-          </button>
+          <div className="update-row-actions">
+            <button type="button" className="btn btn-ghost btn-sm" onClick={check} disabled={Boolean(busy)}>
+              {busy === 'check' ? <LoaderCircle size={14} className="spin" /> : <RefreshCw size={14} />}
+              {busy === 'check' ? t('settings.updateChecking') : t('settings.updateCheck')}
+            </button>
+            <button type="button" className="btn btn-primary btn-sm" onClick={oneClick} disabled={Boolean(busy)}>
+              {busy === 'oneClick' ? <LoaderCircle size={14} className="spin" /> : <Zap size={14} />}
+              {busy === 'oneClick' ? t('settings.updateApplying') : t('settings.updateOneClick')}
+            </button>
+          </div>
         </div>
 
         {info?.available && (
@@ -93,6 +119,7 @@ export function UpdatePanel() {
         )}
 
         {info?.mandatory && <p className="license-message">{t('settings.updateMandatory')}</p>}
+        {info?.force && <p className="license-message">{t('settings.updateForce')}</p>}
         {error && (
           <div className="inline-banner banner-error">
             <TriangleAlert size={16} />

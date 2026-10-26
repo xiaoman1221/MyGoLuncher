@@ -10,6 +10,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -36,9 +37,10 @@ import (
 	"MyMinecraftGoLuncher/internal/store"
 	"MyMinecraftGoLuncher/internal/sysinfo"
 	"MyMinecraftGoLuncher/internal/sysutil"
+	"MyMinecraftGoLuncher/internal/tray"
 )
 
-const appVersion = "1.0.0"
+const appVersion = "1.0.2"
 
 // App binds backend services to the Wails frontend.
 type App struct {
@@ -71,6 +73,8 @@ type App struct {
 	orcaLoginID int
 
 	installMu sync.Mutex
+	taskMu    sync.Mutex
+	taskLogs  map[string]*taskLog
 	authMu    sync.Mutex
 	msCancel  context.CancelFunc
 	yssCancel context.CancelFunc
@@ -79,9 +83,13 @@ type App struct {
 	autoMemoryMB  int
 	autoHidden    bool
 
-	procMu sync.Mutex
-	procs  map[string]*launcher.Process
-	logs   map[string]*logRing
+	procMu     sync.Mutex
+	procs      map[string]*launcher.Process
+	logs       map[string]*logRing
+	gameJob    *sysutil.Job
+	trayIcon   *tray.Tray
+	allowClose atomic.Bool
+	uiReady    atomic.Bool
 }
 
 type logRing struct {
@@ -112,6 +120,7 @@ func NewApp() *App {
 	a := &App{
 		procs: map[string]*launcher.Process{}, logs: map[string]*logRing{},
 		elevated: securitypkg.IsElevated(),
+		gameJob:  sysutil.NewKillOnCloseJob(),
 	}
 	a.totalMemoryMB = sysinfo.TotalMemoryMB()
 	a.autoMemoryMB = sysinfo.RecommendedMemoryMB(a.totalMemoryMB)
@@ -163,6 +172,7 @@ func NewApp() *App {
 
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.configureUpdates()
 	if err := securitypkg.Guard(); err != nil {
 		a.initError = err.Error()
 		return
@@ -171,6 +181,9 @@ func (a *App) startup(ctx context.Context) {
 	a.syncLauncherProfiles()
 	// LAN discovery is a paid feature. Start/stop it as entitlement changes.
 	a.syncLanEntitlement()
+	if icon, err := tray.New(a.showMainWindow, a.QuitApp); err == nil {
+		a.trayIcon = icon
+	}
 }
 
 // syncLauncherProfiles keeps .minecraft/launcher_profiles.json in sync with
@@ -196,7 +209,92 @@ func (a *App) SyncLauncherProfiles() error {
 	return launcherprofiles.Sync(a.paths.Data, a.store.Instances(), settings.VersionIsolation)
 }
 
+// RequestClose handles the custom title-bar close button according to the
+// saved close behavior. "ask" emits app:close-request so the frontend can show
+// the confirmation dialog.
+func (a *App) RequestClose() {
+	switch a.closeBehavior() {
+	case "exit":
+		a.QuitApp()
+	case "minimize":
+		a.MinimizeWindow()
+	default:
+		if a.ctx != nil {
+			runtime.EventsEmit(a.ctx, "app:close-request")
+		}
+	}
+}
+
+// MinimizeWindow hides the launcher in the notification area without touching
+// running games. If the tray icon could not be created, fall back to a normal
+// taskbar minimize.
+func (a *App) MinimizeWindow() {
+	if a.ctx == nil {
+		return
+	}
+	if a.trayIcon != nil {
+		runtime.WindowHide(a.ctx)
+		return
+	}
+	runtime.WindowMinimise(a.ctx)
+}
+
+func (a *App) showMainWindow() {
+	if a.ctx == nil {
+		return
+	}
+	runtime.WindowShow(a.ctx)
+	runtime.WindowUnminimise(a.ctx)
+}
+
+// QuitApp bypasses the close confirmation and exits the launcher. Shutdown
+// then terminates every game process owned by the launcher.
+func (a *App) QuitApp() {
+	a.allowClose.Store(true)
+	if a.ctx != nil {
+		runtime.Quit(a.ctx)
+	}
+}
+
+func (a *App) closeBehavior() string {
+	if a.store == nil {
+		return "ask"
+	}
+	behavior := strings.ToLower(strings.TrimSpace(a.store.Settings().CloseBehavior))
+	switch behavior {
+	case "exit", "minimize":
+		return behavior
+	default:
+		return "ask"
+	}
+}
+
+// beforeClose intercepts the native window close button / Alt+F4. Returning
+// true keeps the window open while the frontend asks what to do.
+func (a *App) beforeClose(ctx context.Context) bool {
+	if a.allowClose.Load() || !a.uiReady.Load() {
+		return false
+	}
+	switch a.closeBehavior() {
+	case "exit":
+		return false
+	case "minimize":
+		a.MinimizeWindow()
+		return true
+	default:
+		runtime.EventsEmit(ctx, "app:close-request")
+		return true
+	}
+}
+
 func (a *App) shutdown(ctx context.Context) {
+	// Stop games first: closing the launcher must not leave a Minecraft JVM
+	// running if later shutdown steps block or take too long.
+	a.stopAllGames()
+	if a.trayIcon != nil {
+		a.trayIcon.Close()
+		a.trayIcon = nil
+	}
 	a.lanShare.mu.Lock()
 	if a.lanShare.server != nil {
 		a.lanShare.server.Stop()
@@ -224,6 +322,11 @@ func (a *App) shutdown(ctx context.Context) {
 		a.yssCancel = nil
 	}
 	a.authMu.Unlock()
+}
+
+// stopAllGames explicitly terminates every game process and then closes the
+// Windows job object as a final safety net.
+func (a *App) stopAllGames() {
 	a.procMu.Lock()
 	procs := make([]*launcher.Process, 0, len(a.procs))
 	for _, p := range a.procs {
@@ -232,6 +335,9 @@ func (a *App) shutdown(ctx context.Context) {
 	a.procMu.Unlock()
 	for _, p := range procs {
 		_ = p.Stop()
+	}
+	if a.gameJob != nil {
+		_ = a.gameJob.Close()
 	}
 }
 
@@ -370,6 +476,7 @@ func (a *App) Bootstrap() Bootstrap {
 	if b.Instances == nil {
 		b.Instances = []InstanceView{}
 	}
+	a.uiReady.Store(true)
 	return b
 }
 
@@ -1129,12 +1236,85 @@ func (a *App) InstallVersion(id string) (err error) {
 	}
 	t := a.newTask("安装 Minecraft " + id)
 	defer func() { t.finish(err) }()
-	if _, err := a.mojang.ManifestEntry(a.context(), id); err != nil {
+	if _, err := a.mojang.ManifestEntry(t.context(), id); err != nil {
 		return err
 	}
 	a.installMu.Lock()
 	defer a.installMu.Unlock()
-	return a.mojang.Install(a.context(), id, a.store.Settings().DownloadWorkers, t.mojangProgress(""))
+	return a.mojang.Install(t.context(), id, a.store.Settings().DownloadWorkers, t.mojangProgress(""))
+}
+
+// RepairVersion verifies the game files of an installed instance and fills in
+// missing or corrupted client, library, asset and loader files.
+func (a *App) RepairVersion(instanceID string) (err error) {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	if err := a.requireFeature(licensepkg.FeatureVersions); err != nil {
+		return err
+	}
+	inst, ok := a.store.Instance(strings.TrimSpace(instanceID))
+	if !ok {
+		return errors.New("版本不存在")
+	}
+	a.procMu.Lock()
+	_, running := a.procs[inst.ID]
+	a.procMu.Unlock()
+	if running {
+		return errors.New("请先关闭游戏再修复版本")
+	}
+	workers := a.store.Settings().DownloadWorkers
+	t := a.newTask("修复版本 · " + inst.Name)
+	defer func() { t.finish(err) }()
+
+	a.installMu.Lock()
+	defer a.installMu.Unlock()
+	t.update("game", "正在校验游戏本体、运行库与资源…", 0, 0)
+	if err := a.mojang.Repair(t.context(), inst.MCVersion, workers, t.mojangProgress("game")); err != nil {
+		return fmt.Errorf("修复游戏版本失败: %w", err)
+	}
+	loaderType := loader.Normalize(inst.Loader)
+	profileID := strings.TrimSpace(inst.LaunchVersionID)
+	if loaderType != "" && loaderType != "vanilla" {
+		if profileID != "" && profileID != inst.MCVersion && a.mojang.IsProfileInstalled(profileID) {
+			t.update("loader", "正在校验加载器运行库…", 0, 0)
+			if err := a.mojang.RepairProfile(t.context(), profileID, workers, t.mojangProgress("loader")); err != nil {
+				return fmt.Errorf("修复加载器文件失败: %w", err)
+			}
+		} else {
+			javaPath := inst.JavaPath
+			if loaderType == "forge" || loaderType == "neoforge" {
+				rt, javaErr := a.ensureJavaForLoader(t.context(), &inst, t)
+				if javaErr != nil {
+					return javaErr
+				}
+				javaPath = rt.Path
+			}
+			repairedID, installErr := a.loaders.Ensure(t.context(), inst.MCVersion, loaderType, inst.LoaderVersion, javaPath, workers, t.mojangProgress("loader"))
+			if installErr != nil {
+				return fmt.Errorf("补充加载器文件失败: %w", installErr)
+			}
+			profileID = repairedID
+			updated, updateErr := a.store.UpdateInstance(inst.ID, func(item *store.Instance) error {
+				item.LaunchVersionID = repairedID
+				return nil
+			})
+			if updateErr != nil {
+				return updateErr
+			}
+			inst = updated
+			// Ensure may return an already-marked profile without checking every
+			// library. Repair explicitly verifies the loader's own libraries so a
+			// stale profile cannot survive a "repair version" click.
+			t.update("loader", "正在校验加载器运行库…", 0, 0)
+			if err := a.mojang.RepairProfile(t.context(), repairedID, workers, t.mojangProgress("loader")); err != nil {
+				return fmt.Errorf("修复加载器文件失败: %w", err)
+			}
+		}
+	}
+	t.update("done", "版本文件校验完成", 1, 1)
+	a.emitInstancesChanged()
+	return nil
 }
 
 // CreateInstanceRequest creates a new isolated instance.
@@ -1173,8 +1353,9 @@ func (a *App) CreateInstance(req CreateInstanceRequest) (view InstanceView, err 
 	defer func() { t.finish(err) }()
 
 	if loaderType != "vanilla" && loaderVersion == "" {
+		t.update("mirror", "正在为模组加载器测速并选择下载源…", 0, 0)
 		t.update("metadata", "正在选择 "+loaderType+" 版本…", 0, 0)
-		loaderVersion, err = a.loaders.LatestVersion(a.context(), loaderType, req.MCVersion)
+		loaderVersion, err = a.loaders.LatestVersion(t.context(), loaderType, req.MCVersion)
 		if err != nil {
 			return InstanceView{}, err
 		}
@@ -1197,7 +1378,7 @@ func (a *App) CreateInstance(req CreateInstanceRequest) (view InstanceView, err 
 			_ = a.store.DeleteInstance(inst.ID, true)
 		}
 	}()
-	if err = a.installInstanceRuntime(a.context(), &inst, t); err != nil {
+	if err = a.installInstanceRuntime(t.context(), &inst, t); err != nil {
 		return InstanceView{}, err
 	}
 	success = true
@@ -1248,6 +1429,7 @@ func (a *App) installInstanceRuntime(ctx context.Context, inst *store.Instance, 
 		}
 		javaPath = rt.Path
 	}
+	t.update("mirror", "正在为模组加载器测速并选择镜像…", 0, 0)
 	profileID, err := a.loaders.Ensure(ctx, inst.MCVersion, loaderType, loaderVersion, javaPath, workers, t.mojangProgress("loader"))
 	if err != nil {
 		return err
@@ -1375,6 +1557,61 @@ func (a *App) LaunchInstanceToServer(id, language, address string) error {
 	return a.launchInstance(id, language, server)
 }
 
+// resolveLaunchVersion prefers the installed loader profile, but falls back to
+// a self-contained merged version (as created by PCL/HMCL imports) when the
+// separate loader profile was removed or never existed.
+func (a *App) resolveLaunchVersion(inst store.Instance) store.Instance {
+	launchID := strings.TrimSpace(inst.LaunchVersionID)
+	if launchID != "" && a.mojang.IsInstalled(launchID) {
+		return inst
+	}
+	versionID := strings.TrimSpace(inst.VersionID)
+	if versionID == "" {
+		versionID = strings.TrimSpace(inst.ID)
+	}
+	if versionID == "" || versionID == launchID || !a.mojang.IsInstalled(versionID) {
+		return inst
+	}
+	version, err := a.mojang.LocalVersion(versionID)
+	if err != nil || !hasLoaderMainClass(version) {
+		return inst
+	}
+	updated, err := a.store.UpdateInstance(inst.ID, func(item *store.Instance) error {
+		item.LaunchVersionID = versionID
+		return nil
+	})
+	if err == nil {
+		return updated
+	}
+	inst.LaunchVersionID = versionID
+	return inst
+}
+
+func hasLoaderMainClass(version mojang.Version) bool {
+	mainClass := strings.ToLower(strings.TrimSpace(version.MainClass))
+	return strings.Contains(mainClass, "bootstraplauncher") ||
+		strings.Contains(mainClass, "modlauncher") ||
+		strings.Contains(mainClass, "launchwrapper") ||
+		strings.Contains(mainClass, "fabric") ||
+		strings.Contains(mainClass, "quilt")
+}
+
+func (a *App) ensureLoaderReady(inst store.Instance) error {
+	loaderType := loader.Normalize(inst.Loader)
+	if loaderType == "" || loaderType == "vanilla" {
+		return nil
+	}
+	launchID := strings.TrimSpace(inst.LaunchVersionID)
+	if launchID == "" || launchID == strings.TrimSpace(inst.MCVersion) || !a.mojang.IsInstalled(launchID) {
+		return errors.New("模组加载器尚未安装完成，请先点击「修复版本」")
+	}
+	version, err := a.mojang.LocalVersion(launchID)
+	if err != nil || strings.TrimSpace(version.MainClass) == "" {
+		return errors.New("模组加载器档案不完整，请先点击「修复版本」")
+	}
+	return nil
+}
+
 func (a *App) launchInstance(id, language string, server *launcher.ServerAddress) (err error) {
 	if err := a.ready(); err != nil {
 		return err
@@ -1390,6 +1627,10 @@ func (a *App) launchInstance(id, language string, server *launcher.ServerAddress
 	}
 	a.procMu.Unlock()
 
+	inst = a.resolveLaunchVersion(inst)
+	if err := a.ensureLoaderReady(inst); err != nil {
+		return err
+	}
 	launchAccount, err := a.resolveLaunchAuth(a.context())
 	if err != nil {
 		return err
@@ -1407,7 +1648,7 @@ func (a *App) launchInstance(id, language string, server *launcher.ServerAddress
 		// runtime on demand so the first launch can proceed directly.
 		t := a.newTask(fmt.Sprintf("准备 Java %d", required))
 		var installErr error
-		rt, installErr = a.javaMgr.Install(a.context(), required, t.javaBytesProgress("java"))
+		rt, installErr = a.javaMgr.Install(t.context(), required, t.javaBytesProgress("java"))
 		t.finish(installErr)
 		if installErr != nil {
 			return fmt.Errorf("需要 Java %d，自动安装失败: %w", required, installErr)
@@ -1459,6 +1700,9 @@ func (a *App) launchInstance(id, language string, server *launcher.ServerAddress
 	})
 	if err != nil {
 		return err
+	}
+	if err := a.gameJob.Assign(proc.PID()); err != nil {
+		ring.add("[启动器] 无法启用退出自动清理: " + err.Error())
 	}
 	a.procMu.Lock()
 	// Re-check under the lock in case two clicks raced during Java detection.
@@ -1575,6 +1819,31 @@ func (a *App) OpenInstanceFolder(id string) error {
 		return errors.New("版本不存在")
 	}
 	return openPath(a.instanceDir(inst))
+}
+
+// OpenInstanceSubfolder opens one of the known content directories for an
+// instance. The whitelist keeps this API from becoming an arbitrary file browser.
+func (a *App) OpenInstanceSubfolder(id, folder string) error {
+	if err := a.ready(); err != nil {
+		return err
+	}
+	inst, ok := a.store.Instance(id)
+	if !ok {
+		return errors.New("版本不存在")
+	}
+	folder = strings.ToLower(strings.TrimSpace(folder))
+	allowed := map[string]bool{
+		"mods": true, "plugins": true, "config": true, "defaultconfigs": true,
+		"resourcepacks": true, "shaderpacks": true, "datapacks": true, "saves": true,
+	}
+	if !allowed[folder] || filepath.Base(folder) != folder {
+		return errors.New("资源目录无效")
+	}
+	dir := filepath.Join(a.instanceDir(inst), folder)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	return openPath(dir)
 }
 
 // OpenDataFolder opens the portable game directory.
@@ -1716,7 +1985,7 @@ func (a *App) installProject(instanceID, projectID, versionID, mirrorID string, 
 	var path string
 	if project.ProjectType == modrinth.TypeMod {
 		cacheDir := filepath.Join(a.paths.Cache, "resources")
-		tempPath, downloadErr := modrinth.DownloadFileAny(a.context(), version, cacheDir, rewriter)
+		tempPath, downloadErr := modrinth.DownloadFileAny(t.context(), version, cacheDir, rewriter)
 		if downloadErr != nil {
 			return InstallProjectResult{}, downloadErr
 		}
@@ -1728,7 +1997,7 @@ func (a *App) installProject(instanceID, projectID, versionID, mirrorID string, 
 		}
 		path, err = installDownloadedFile(tempPath, dir)
 	} else {
-		path, err = modrinth.DownloadFileAny(a.context(), version, dir, rewriter)
+		path, err = modrinth.DownloadFileAny(t.context(), version, dir, rewriter)
 	}
 	if err != nil {
 		return InstallProjectResult{}, err
@@ -1741,7 +2010,7 @@ func (a *App) installProject(instanceID, projectID, versionID, mirrorID string, 
 	if project.ProjectType == modrinth.TypeMod {
 		t.update("dependencies", "正在检查前置模组…", 0, 0)
 		deps, depErr := modrinth.InstallDependencies(
-			a.context(), version, inst.MCVersion, loaderName, dir, 6,
+			t.context(), version, inst.MCVersion, loaderName, dir, 6,
 			func(message string) { t.update("dependencies", message, 0, 0) },
 		)
 		if deps == nil {
@@ -1787,7 +2056,7 @@ func (a *App) ImportModpackDialog(mirrorID string) (resp ModpackImportResponse, 
 	}
 	t := a.newTask("导入整合包")
 	defer func() { t.finish(err) }()
-	return a.importModpack(a.context(), path, t, a.resourceSource(mirrorID))
+	return a.importModpack(t.context(), path, t, a.resourceSource(mirrorID))
 }
 
 func (a *App) importModpack(ctx context.Context, path string, t *progressTask, source mirror.ResourceSource) (ModpackImportResponse, error) {
@@ -1847,7 +2116,7 @@ func (a *App) InstallModpackProject(projectID, versionID, mirrorID string) (resp
 	source := a.resourceSource(mirrorID)
 	t := a.newTask("安装整合包")
 	defer func() { t.finish(err) }()
-	version, err := modrinth.VersionByID(a.context(), versionID)
+	version, err := modrinth.VersionByID(t.context(), versionID)
 	if err != nil {
 		return ModpackImportResponse{}, err
 	}
@@ -1864,7 +2133,7 @@ func (a *App) InstallModpackProject(projectID, versionID, mirrorID string) (resp
 	}
 	t.update("download", "正在下载整合包…", 0, 0)
 	dest := filepath.Join(dir, filepath.Base(file.Filename))
-	if err := httpx.DownloadAny(a.context(), mirror.ResourceURLs(source, file.URL), httpx.File{
+	if err := httpx.DownloadAny(t.context(), mirror.ResourceURLs(source, file.URL), httpx.File{
 		Dest: dest, SHA512: file.Hashes["sha512"], SHA1: file.Hashes["sha1"],
 		Size: file.Size, Verify: true,
 		Progress: func(done, total int64) {
@@ -1873,7 +2142,7 @@ func (a *App) InstallModpackProject(projectID, versionID, mirrorID string) (resp
 	}); err != nil {
 		return ModpackImportResponse{}, err
 	}
-	return a.importModpack(a.context(), dest, t, source)
+	return a.importModpack(t.context(), dest, t, source)
 }
 
 // PickExternalLauncher lets the user select another launcher's data or
@@ -1918,9 +2187,9 @@ func (a *App) SearchMinecraftFolders(root string) ([]external.ScanResult, error)
 	if root == "" {
 		return nil, errors.New("请选择要搜索的目录")
 	}
-	ctx, cancel := context.WithTimeout(a.context(), 45*time.Second)
-	defer cancel()
 	task := a.newTask("搜索 .minecraft 文件夹")
+	ctx, cancel := context.WithTimeout(task.context(), 45*time.Second)
+	defer cancel()
 	results, err := external.SearchMinecraftFolders(ctx, root, func(directory string, found int) {
 		task.update("scan", fmt.Sprintf("正在搜索 %s · 已找到 %d 个目录", directory, found), 0, 0)
 	})
@@ -2055,7 +2324,7 @@ func (a *App) ImportCustomInstance(req CustomImportRequest) (response ExternalIm
 		t.update("copy", "版本内容复制完成", 1, 1)
 	}
 	warnings := []string{}
-	if err := a.installInstanceRuntime(a.context(), &inst, t); err != nil {
+	if err := a.installInstanceRuntime(t.context(), &inst, t); err != nil {
 		warnings = append(warnings, "版本内容已导入，但游戏/加载器安装失败："+err.Error())
 	}
 	cleanup = false
@@ -2191,7 +2460,7 @@ func (a *App) ImportExternalInstance(root, candidateID, nameOverride string) (re
 	if candidate.Loader == "vanilla" && candidate.ModCount > 0 {
 		warnings = append(warnings, "该版本包含模组但未声明模组加载器，导入后可能无法加载这些模组")
 	}
-	if err := a.installInstanceRuntime(a.context(), &inst, t); err != nil {
+	if err := a.installInstanceRuntime(t.context(), &inst, t); err != nil {
 		warnings = append(warnings, "版本内容已导入，但游戏/加载器安装失败："+err.Error())
 	}
 	cleanup = false
@@ -2259,7 +2528,7 @@ func (a *App) ExportServerPackDialog(instanceID string) (response ServerPackExpo
 	}
 	t := a.newTask("导出服务器包")
 	defer func() { t.finish(err) }()
-	pack, packErr := serverpack.Export(a.context(), serverpack.Options{
+	pack, packErr := serverpack.Export(t.context(), serverpack.Options{
 		Client:    a.mojang,
 		Instance:  inst,
 		GameDir:   a.instanceDir(inst),
@@ -2341,7 +2610,7 @@ func (a *App) InstallJava(feature int) (rt java.Runtime, err error) {
 	}
 	t := a.newTask(fmt.Sprintf("安装 Java %d", feature))
 	defer func() { t.finish(err) }()
-	rt, err = a.javaMgr.Install(a.context(), feature, t.javaBytesProgress("java"))
+	rt, err = a.javaMgr.Install(t.context(), feature, t.javaBytesProgress("java"))
 	if err != nil {
 		return java.Runtime{}, err
 	}

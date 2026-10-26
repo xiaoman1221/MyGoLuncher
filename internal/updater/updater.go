@@ -26,11 +26,30 @@ import (
 	"MyMinecraftGoLuncher/internal/util"
 )
 
-// ManifestURL is injected by the release build. Empty disables update checks.
+// ManifestURL is the legacy static signed-manifest endpoint. New builds use
+// the LicensingGo update API configured by ConfigureAPI instead.
 var ManifestURL = ""
 
-// PublicKey is the Ed25519 key used to verify manifest signatures. The private
-// key must stay offline; only the public key ships with the client.
+// APIBaseURL and APIKey point at the LicensingGo activation server. When both
+// are set, GET /api/v1/update is preferred over the legacy signed manifest.
+var (
+	APIBaseURL = ""
+	APIKey     = ""
+)
+
+// ConfigureAPI selects the LicensingGo product update endpoint. It is called
+// after the official product configuration is loaded.
+func ConfigureAPI(baseURL, apiKey string) {
+	APIBaseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	APIKey = strings.TrimSpace(apiKey)
+}
+
+func configured() bool {
+	return (APIBaseURL != "" && APIKey != "") || strings.TrimSpace(ManifestURL) != ""
+}
+
+// PublicKey is the Ed25519 key used to verify legacy manifest signatures. The
+// private key must stay offline; only the public key ships with the client.
 var PublicKey = mustPublicKey("/IYyZqpFAy8oGPzLuCnctjJOAws2lQFu94yZlt4NtjY=")
 
 // Artifact is one downloadable package listed in the signed manifest.
@@ -47,6 +66,7 @@ type Manifest struct {
 	MinVersion string    `json:"minVersion,omitempty"`
 	Notes      string    `json:"notes,omitempty"`
 	Mandatory  bool      `json:"mandatory,omitempty"`
+	Force      bool      `json:"force,omitempty"`
 	Published  string    `json:"publishedAt,omitempty"`
 	Web        *Artifact `json:"web,omitempty"`
 	App        *Artifact `json:"app,omitempty"`
@@ -60,6 +80,7 @@ type Info struct {
 	MinVersion     string `json:"minVersion,omitempty"`
 	Notes          string `json:"notes,omitempty"`
 	Mandatory      bool   `json:"mandatory"`
+	Force          bool   `json:"force"`
 	Available      bool   `json:"available"`
 	HasWeb         bool   `json:"hasWeb"`
 	HasApp         bool   `json:"hasApp"`
@@ -82,14 +103,21 @@ func mustPublicKey(encoded string) ed25519.PublicKey {
 // Check fetches and verifies the update manifest, then compares versions.
 func Check(ctx context.Context, currentVersion, currentWebVersion string) (Info, error) {
 	result := Info{CurrentVersion: currentVersion}
-	if strings.TrimSpace(ManifestURL) == "" {
+	if !configured() {
 		return result, ErrNotConfigured
 	}
-	if err := validateRemoteURL(ManifestURL); err != nil {
+	target := ManifestURL
+	if APIBaseURL != "" && APIKey != "" {
+		target = APIBaseURL
+	}
+	if err := validateRemoteURL(target); err != nil {
 		return result, err
 	}
 	result.Configured = true
 	manifest, _, err := fetchManifest(ctx)
+	if errors.Is(err, ErrUpdateNotAvailable) {
+		return result, nil
+	}
 	if err != nil {
 		return result, err
 	}
@@ -97,6 +125,7 @@ func Check(ctx context.Context, currentVersion, currentWebVersion string) (Info,
 	result.MinVersion = manifest.MinVersion
 	result.Notes = manifest.Notes
 	result.Mandatory = manifest.Mandatory
+	result.Force = manifest.Force
 	result.Published = manifest.Published
 	if compareVersions(manifest.Version, currentVersion) > 0 {
 		result.Available = true
@@ -118,7 +147,17 @@ func Check(ctx context.Context, currentVersion, currentWebVersion string) (Info,
 	return result, nil
 }
 
+var ErrUpdateNotAvailable = errors.New("暂无更新")
+
+type apiError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 func fetchManifest(ctx context.Context) (Manifest, []byte, error) {
+	if APIBaseURL != "" && APIKey != "" {
+		return fetchAPIManifest(ctx)
+	}
 	var manifest Manifest
 	client := &http.Client{Timeout: 20 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ManifestURL, nil)
@@ -149,6 +188,49 @@ func fetchManifest(ctx context.Context) (Manifest, []byte, error) {
 	}
 	if strings.TrimSpace(manifest.Version) == "" {
 		return manifest, nil, errors.New("更新清单缺少版本号")
+	}
+	return manifest, raw, nil
+}
+
+func fetchAPIManifest(ctx context.Context) (Manifest, []byte, error) {
+	var manifest Manifest
+	endpoint := strings.TrimRight(APIBaseURL, "/") + "/api/v1/update"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return manifest, nil, err
+	}
+	req.Header.Set("X-API-Key", APIKey)
+	req.Header.Set("Accept", "application/json")
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return manifest, nil, fmt.Errorf("无法连接授权更新服务: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return manifest, nil, err
+	}
+	if resp.StatusCode == http.StatusNotFound {
+		return manifest, raw, ErrUpdateNotAvailable
+	}
+	if resp.StatusCode != http.StatusOK {
+		var failure apiError
+		_ = json.Unmarshal(raw, &failure)
+		message := strings.TrimSpace(failure.Message)
+		if message == "" {
+			message = strings.TrimSpace(failure.Code)
+		}
+		if message == "" {
+			message = fmt.Sprintf("授权更新服务返回 HTTP %d", resp.StatusCode)
+		}
+		return manifest, raw, errors.New(message)
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return manifest, raw, fmt.Errorf("解析更新清单失败: %w", err)
+	}
+	if strings.TrimSpace(manifest.Version) == "" {
+		return manifest, raw, errors.New("更新清单缺少版本号")
 	}
 	return manifest, raw, nil
 }
@@ -184,7 +266,7 @@ func fetchSignature(ctx context.Context, client *http.Client, header string) ([]
 // ApplyWeb downloads, verifies and swaps the front-end web package. The
 // previous directory is kept as web.old for manual rollback.
 func ApplyWeb(ctx context.Context, root string) (string, error) {
-	if strings.TrimSpace(ManifestURL) == "" {
+	if !configured() {
 		return "", ErrNotConfigured
 	}
 	manifest, _, err := fetchManifest(ctx)
@@ -235,7 +317,7 @@ func ApplyApp(ctx context.Context, root, currentExe, currentVersion string) (str
 	if runtime.GOOS != "windows" {
 		return "", errors.New("自动替换当前仅支持 Windows")
 	}
-	if strings.TrimSpace(ManifestURL) == "" {
+	if !configured() {
 		return "", ErrNotConfigured
 	}
 	manifest, _, err := fetchManifest(ctx)

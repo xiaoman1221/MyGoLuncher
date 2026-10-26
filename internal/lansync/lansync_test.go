@@ -182,3 +182,65 @@ func writeTestFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestFullVersionShareSkipsLogs(t *testing.T) {
+	source := t.TempDir()
+	writeTestFile(t, filepath.Join(source, "mods", "example.jar"), "jar")
+	writeTestFile(t, filepath.Join(source, "saves", "world", "level.dat"), "save")
+	writeTestFile(t, filepath.Join(source, "options.txt"), "lang:zh_cn")
+	writeTestFile(t, filepath.Join(source, "logs", "latest.log"), "log")
+	writeTestFile(t, filepath.Join(source, "crash-reports", "crash.txt"), "crash")
+	writeTestFile(t, filepath.Join(source, "natives", "lwjgl.dll"), "native")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server, err := StartServer(ctx, source, InstanceInfo{
+		Name: "Full", MCVersion: "1.19.2", Loader: "forge", LoaderVersion: "43.5.2",
+	}, []string{DirAll}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+	manifest := server.Manifest()
+	if !manifest.Full || len(manifest.Dirs) != 1 || manifest.Dirs[0] != DirAll {
+		t.Fatalf("manifest full metadata = %#v", manifest)
+	}
+	paths := map[string]bool{}
+	for _, file := range manifest.Files {
+		paths[file.Path] = true
+	}
+	for _, expected := range []string{"mods/example.jar", "saves/world/level.dat", "options.txt"} {
+		if !paths[expected] {
+			t.Fatalf("full share missing %s: %#v", expected, paths)
+		}
+	}
+	for _, skipped := range []string{"logs/latest.log", "crash-reports/crash.txt", "natives/lwjgl.dll"} {
+		if paths[skipped] {
+			t.Fatalf("full share contains generated file %s", skipped)
+		}
+	}
+	destination := t.TempDir()
+	plan, err := BuildPlan(destination, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.NewFiles != len(manifest.Files) {
+		t.Fatalf("plan = %#v", plan)
+	}
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", server.Port())
+	result, err := Sync(ctx, baseURL, server.Token(), destination, manifest, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Downloaded != len(manifest.Files) {
+		t.Fatalf("sync result = %#v", result)
+	}
+	for _, expected := range []string{"mods/example.jar", "saves/world/level.dat", "options.txt"} {
+		if _, err := os.Stat(filepath.Join(destination, filepath.FromSlash(expected))); err != nil {
+			t.Fatalf("installed file %s missing: %v", expected, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(destination, "logs", "latest.log")); !os.IsNotExist(err) {
+		t.Fatalf("generated logs should not be installed: %v", err)
+	}
+}

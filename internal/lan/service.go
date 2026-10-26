@@ -89,7 +89,9 @@ func (s *Service) Start(ctx context.Context, cfg Config) error {
 		}
 		s.mu.Lock()
 		s.running = false
+		s.warnings = append(s.warnings, err.Error())
 		s.mu.Unlock()
+		s.notify()
 		return err
 	}
 	s.startPeerListener()
@@ -442,7 +444,7 @@ func (s *Service) startLoops() {
 		defer s.wg.Done()
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		refresh := time.NewTicker(5 * time.Second)
+		refresh := time.NewTicker(15 * time.Second)
 		defer refresh.Stop()
 		for {
 			select {

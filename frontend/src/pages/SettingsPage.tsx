@@ -8,7 +8,9 @@ import {
   Info,
   Link2,
   LoaderCircle,
+  Minimize2,
   Moon,
+  Power,
   Quote,
   Save,
   Sun,
@@ -365,6 +367,54 @@ export function SettingsPage() {
             </label>
             <span className="field-hint">{t('settings.serverBackupNote')}</span>
           </div>
+        </div>
+      </section>
+
+      <section className="panel">
+        <div className="panel-head">
+          <h2>{t('settings.windowTitle')}</h2>
+          <p>{t('settings.windowBody')}</p>
+        </div>
+        <div className="window-choice-grid" role="radiogroup" aria-label={t('settings.closeBehavior')}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={(form.closeBehavior ?? 'ask') === 'ask'}
+            className={cn('window-choice', (form.closeBehavior ?? 'ask') === 'ask' && 'is-active')}
+            onClick={() => patch('closeBehavior', 'ask')}
+          >
+            <Info size={18} />
+            <span>
+              <strong>{t('settings.closeAsk')}</strong>
+              <small>{t('settings.closeAskHint')}</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={form.closeBehavior === 'minimize'}
+            className={cn('window-choice', form.closeBehavior === 'minimize' && 'is-active')}
+            onClick={() => patch('closeBehavior', 'minimize')}
+          >
+            <Minimize2 size={18} />
+            <span>
+              <strong>{t('settings.closeMinimize')}</strong>
+              <small>{t('settings.closeMinimizeHint')}</small>
+            </span>
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={form.closeBehavior === 'exit'}
+            className={cn('window-choice', form.closeBehavior === 'exit' && 'is-active')}
+            onClick={() => patch('closeBehavior', 'exit')}
+          >
+            <Power size={18} />
+            <span>
+              <strong>{t('settings.closeExit')}</strong>
+              <small>{t('settings.closeExitHint')}</small>
+            </span>
+          </button>
         </div>
       </section>
 

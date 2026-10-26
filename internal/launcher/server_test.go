@@ -1,6 +1,8 @@
 package launcher
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -97,5 +99,54 @@ func TestBuildArgumentsLegacyDirectConnect(t *testing.T) {
 	joined := strings.Join(game, " ")
 	if !strings.Contains(joined, "--server lan.local --port 25565") {
 		t.Fatalf("legacy direct connect arguments missing: %s", joined)
+	}
+}
+
+func TestModernForgeClasspathSkipsVanillaClient(t *testing.T) {
+	paths := store.PathsFor(t.TempDir())
+	client := mojang.New(paths)
+	l := New(client, paths)
+	libPath := "net/minecraftforge/fmlloader/1.0/fmlloader-1.0.jar"
+	fullLib := filepath.Join(paths.Libraries, filepath.FromSlash(libPath))
+	if err := os.MkdirAll(filepath.Dir(fullLib), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullLib, []byte("jar"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fullClient := client.ClientJar("1.19.2")
+	if err := os.MkdirAll(filepath.Dir(fullClient), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fullClient, []byte("client"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	child := mojang.Version{
+		ID: "1.19.2-forge-43.5.2", MainClass: "cpw.mods.bootstraplauncher.BootstrapLauncher",
+		Libraries: []mojang.Library{{
+			Name:      "net.minecraftforge:fmlloader:1.0",
+			Downloads: mojang.LibraryDownloads{Artifact: &mojang.Download{Path: libPath}},
+		}},
+	}
+	parent := mojang.Version{
+		ID: "1.19.2", MainClass: "net.minecraft.client.main.Main",
+		Downloads: map[string]mojang.Download{"client": {Size: 6}},
+	}
+	classpath, err := l.buildClasspath(child, []mojang.Version{child, parent}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(classpath, fullClient) {
+		t.Fatalf("modern Forge classpath contains vanilla client jar: %s", classpath)
+	}
+	if !strings.Contains(classpath, fullLib) {
+		t.Fatalf("modern Forge classpath lost loader library: %s", classpath)
+	}
+	classpath, err = l.buildClasspath(child, []mojang.Version{child, parent}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(classpath, fullClient) {
+		t.Fatalf("vanilla/Fabric classpath lost client jar: %s", classpath)
 	}
 }

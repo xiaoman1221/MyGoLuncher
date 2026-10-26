@@ -4,7 +4,6 @@ param(
   [string]$ProductServerURL = $env:MGL_PRODUCT_SERVER_URL,
   [string]$ProductName = $env:MGL_PRODUCT_NAME,
   [string]$ProductSlug = $env:MGL_PRODUCT_SLUG,
-  [string]$UpdateManifestUrl = "",
   [string]$PfxPath = "",
   [string]$TimestampUrl = "http://timestamp.digicert.com",
   [string]$UpxPath = "",
@@ -29,18 +28,8 @@ if ([string]::IsNullOrWhiteSpace($ProductAPIKey) -xor [string]::IsNullOrWhiteSpa
   throw "官方商业构建必须同时提供 ProductAPIKey 和 ProductServerURL"
 }
 
-if (-not [string]::IsNullOrWhiteSpace($UpdateManifestUrl)) {
-  $updateUri = [Uri]$UpdateManifestUrl
-  if ($updateUri.Scheme -ne "https" -and -not $AllowHttp -and $updateUri.Host -notin @("localhost", "127.0.0.1")) {
-    throw "更新清单必须使用 HTTPS；本机调试可加 -AllowHttp"
-  }
-}
-
 $quote = '"'
 $ldflags = "-s -w -X " + $quote + "MyMinecraftGoLuncher/internal/security.Enforce=true" + $quote
-if (-not [string]::IsNullOrWhiteSpace($UpdateManifestUrl)) {
-  $ldflags += " -X " + $quote + "MyMinecraftGoLuncher/internal/updater.ManifestURL=" + $UpdateManifestUrl + $quote
-}
 
 $privateFile = Join-Path $root "internal/license/product_private.go"
 if (Test-Path -LiteralPath $privateFile) {

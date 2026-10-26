@@ -21,7 +21,10 @@ import type {
   LanSnapshot,
   LanSyncPreview,
   LanSyncResult,
+  LanVersionInstallResult,
+  LanVersionPreview,
   LicenseStatus,
+  LoaderVersionInfo,
   McsmConnectRequest,
   ModpackImportResponse,
   ModUpdateApplyRequest,
@@ -41,6 +44,7 @@ import type {
   ServerSyncResult,
   ServerBackup,
   Settings,
+  TaskLog,
   UpdateInfo,
   UpdateInstanceRequest,
   VersionList,
@@ -103,6 +107,9 @@ export const api = {
   listVersions: (includeSnapshots: boolean, includeOld: boolean) =>
     call<VersionList>('ListVersions', includeSnapshots, includeOld),
   installVersion: (id: string) => call<void>('InstallVersion', id),
+  repairVersion: (instanceId: string) => call<void>('RepairVersion', instanceId),
+  getLoaderVersions: (loaderType: string, mcVersion: string) =>
+    call<LoaderVersionInfo[]>('GetLoaderVersions', loaderType, mcVersion),
 
   createInstance: (request: CreateInstanceRequest) =>
     call<InstanceView>('CreateInstance', request),
@@ -115,6 +122,8 @@ export const api = {
   launchInstanceToServer: (id: string, language: string, address: string) =>
     call<void>('LaunchInstanceToServer', id, language, address),
   stopInstance: (id: string) => call<void>('StopInstance', id),
+  getTaskLog: (taskId: string) => call<TaskLog>('GetTaskLog', taskId),
+  cancelTask: (taskId: string) => call<void>('CancelTask', taskId),
   getLicenseStatus: () => call<LicenseStatus>('GetLicenseStatus'),
   activateLicense: (code: string) => call<LicenseStatus>('ActivateLicense', code),
   startTrial: () => call<LicenseStatus>('StartTrial'),
@@ -130,9 +139,13 @@ export const api = {
     call<InstallProjectResult>('ApplyModUpdate', request),
   getInstanceLog: (id: string) => call<string[]>('GetInstanceLog', id),
   openInstanceFolder: (id: string) => call<void>('OpenInstanceFolder', id),
+  openInstanceSubfolder: (id: string, folder: string) => call<void>('OpenInstanceSubfolder', id, folder),
   openDataFolder: () => call<void>('OpenDataFolder'),
   openConfigFolder: () => call<void>('OpenConfigFolder'),
   openURL: (url: string) => call<void>('OpenURL', url),
+  requestClose: () => call<void>('RequestClose'),
+  quitApp: () => call<void>('QuitApp'),
+  minimizeWindow: () => call<void>('MinimizeWindow'),
 
   searchResources: (request: ResourceSearchRequest) =>
     call<ResourceSearchResult>('SearchResources', request),
@@ -199,6 +212,10 @@ export const api = {
   stopLanShare: () => call<LanSnapshot>('StopLanShare'),
   previewLanSync: (peerId: string, targetInstanceId: string) =>
     call<LanSyncPreview>('PreviewLanSync', peerId, targetInstanceId),
+  previewLanVersion: (peerId: string) =>
+    call<LanVersionPreview>('PreviewLanVersion', peerId),
+  installLanVersion: (peerId: string, expectedDigest: string) =>
+    call<LanVersionInstallResult>('InstallLanVersion', peerId, expectedDigest),
   syncFromLanPeer: (peerId: string, targetInstanceId: string, expectedDigest: string) =>
     call<LanSyncResult>('SyncFromLanPeer', peerId, targetInstanceId, expectedDigest),
   setLanBroadcast: (enabled: boolean) => call<LanSnapshot>('SetLanBroadcast', enabled),

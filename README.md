@@ -15,11 +15,11 @@
 ## 功能
 
 - **添加本地版本**：扫描本机官方启动器、HMCL、PCL2、Prism Launcher / MultiMC、Modrinth App、CurseForge、ATLauncher、GDLauncher 与 FTB App，也可以手动选择 `.minecraft`、`versions`、`instances` / `profiles` 目录或单个版本/实例文件夹。支持一次勾选多个版本批量导入；「自定义导入」可手动填写版本名称、Minecraft 版本、加载器与可选的来源目录，并支持递归搜索指定目录下的 `.minecraft` / `versions` 文件夹、自动识别版本并填入信息。缺少版本 JSON 的版本文件夹会从名称推断版本并给出警告；导入时复制存档、模组、资源包、`kubejs`、`scripts`、`datapacks` 与配置，并准备游戏运行环境。
-- **下载官方版本**：从 Mojang 元数据获取正式版、快照和远古版本，下载客户端、运行库、本地库与资源文件。
+- **下载官方版本（付费功能 `versions`）**：从 Mojang 元数据获取正式版、快照和远古版本，下载客户端、运行库、本地库与资源文件。已安装版本的启动、设置修改、模组/资源安装不受此限制。
 - **多下载源**：官方源、BMCLAPI、清华 Adoptium 与自定义镜像，安装前按当前网络测速并自动回退，所有文件仍做哈希校验。游戏本体、Fabric/Quilt/Forge/NeoForge 的元数据与安装器、以及 Adoptium Java 归档都会优先尝试镜像；自定义 proxy 镜像也会参与 Java API/归档测速。整合包与资源下载另支持 MCIM 等 Modrinth / CurseForge 镜像，可在设置中配置默认源，也可在导入/安装时临时切换。
-- **版本设置**：在左侧「版本设置」中统一管理已安装版本，可修改名称、内存与 Java，查看游戏目录。
+- **版本设置**：在左侧「版本设置」中统一管理已安装版本，可修改名称、内存与 Java，查看游戏目录；支持「修复版本」，校验并补充缺失或损坏的游戏本体、运行库、资源与加载器文件。首页选中某个版本后，启动按钮旁也会直接显示「修复版本」。安装了模组加载器的版本会额外显示「资源设置」：查看模组、资源包、光影数量，直接打开对应目录，并快速调整该版本内存。
 - **版本隔离**：可在设置中开启或关闭。开启时每个版本在 `.minecraft/versions/<版本名>/` 中拥有独立的 `mods/`、`shaderpacks/`、`resourcepacks/`、`saves/` 与日志目录；关闭后所有版本共用 `.minecraft`。版本文件夹同时包含可被其他启动器识别的 `<版本名>.json` 和 `<版本名>.jar`。
-- **加载器**：Fabric、Quilt、Forge、NeoForge。
+- **加载器**：Fabric、Quilt、Forge、NeoForge；创建版本时会按当前选中的 Minecraft 版本获取兼容的加载器版本下拉列表，默认自动选择最新稳定版。Forge/NeoForge 优先执行官方安装器（方式 A）；旧版 Forge 官方安装器失败时，会自动解包 `install_profile`、版本 JSON 和 Maven 运行库进行兼容安装（方式 B，参考 PCL2 的 Legacy 处理）。
 - **资源中心**：从 Modrinth 与 CurseForge 搜索并安装模组、光影、资源包、数据包与整合包；可在设置中填写 CurseForge API Key。
   - 中文搜索：内置大量模组别名与类型词（如“钠”“小地图”“苹果皮”“机械动力”“农夫乐事”“物品管理器”），会同时用规范化英文词和原文搜索，并把项目名/短名精确匹配的结果排在兼容补丁和附属模组之前；不开启 AI 也能使用，未命中的关键词可使用 AI 搜索，或直接输入英文名。
   - 安装前会扫描已安装模组的 Fabric / Quilt / Forge / NeoForge 元数据，检测重复模组文件、`breaks` 声明和版本不兼容依赖；检测到冲突时取消安装并给出说明，确认风险后可继续。
@@ -30,9 +30,9 @@
 - **整合包与服务器包**：
   - 导入 `.mrpack`、CurseForge `.zip`、Prism / MultiMC 或通用 `.zip`。
   - 一键导出 `.mrpack` 或完整备份 `.zip`。`.mrpack` 可被 Modrinth App、Prism 等支持该格式的启动器导入；`.zip` 备份采用 Prism / MultiMC 实例布局，可直接导入对应启动器。导出 `.mrpack` 时会自动排除日志、存档和本机选项。
-  - 一键导出服务器包 `.zip`：包含加载器运行时或安装器、`mods/`、`config/`、`defaultconfigs/`、`scripts/`、`kubejs/`、`datapacks/`、`server.properties`、启动脚本与 EULA 模板。导出时会根据 Fabric / Quilt / Forge / NeoForge 元数据自动剔除仅客户端模组，并把剔除记录写入 `README.txt`。
+  - 一键导出服务器包 `.zip`：包含加载器运行时或安装器、`mods/`、`plugins/`、`config/`、`defaultconfigs/`、`scripts/`、`kubejs/`、`datapacks/`、`server.properties`、启动脚本与 EULA 模板。`mods/` 只收录 `.jar`；导出时会扫描每个模组 jar 内的 Fabric / Quilt / Forge / NeoForge 元数据，剔除仅客户端模组，并把剔除记录写入 `README.txt`。
 - **服务器管理（MCSM）**：添加多个 MCSManager 面板与实例，绑定本地版本后，把 `mods/`、`config/`、`defaultconfigs/`、`scripts/`、`kubejs/`、`datapacks/`、`resourcepacks/`、`shaderpacks/` 增量同步到服务器；支持远程启动、停止、重启、手动勾选要更新的文件，以及可选删除远端多余文件。每次同步前会在服务器上创建 `.mgl-backups/` 回滚快照，保留最近 5 份，可一键恢复。
-- **局域网联机**：启动后自动发现同一局域网内使用本启动器的其他客户端（侧边栏显示数量），并自动发现「对局域网开放」的 Minecraft 世界和局域网服务器，显示版本、MOTD 与在线玩家。选择本地版本即可一键直连，也支持手动输入地址。
+- **局域网联机**：启动后自动发现同一局域网内使用本启动器的其他客户端（侧边栏显示数量），并自动发现「对局域网开放」的 Minecraft 世界和局域网服务器，显示版本、MOTD 与在线玩家。选择本地版本即可一键直连，也支持手动输入地址；加入前会校验游戏版本，避免版本不匹配导致启动失败。玩家名与版本广播只在联机页打开期间开启，离开页面自动停止。
 - **局域网版本同步**：可把本地版本的 `mods/`、`shaderpacks/`、`resourcepacks/`、`config/` 共享给同一局域网的其他客户端；对方在联机页选择本地版本后，启动器会先比较 Minecraft 版本、加载器版本以及新增/变更文件，确认差异后再增量同步，SHA-256 校验，只下载缺失或变化的文件。共享清单在确认后发生变化时必须重新确认。加载器版本不同时，确认后会同步更新本地加载器。
 - **账户**：
   - Microsoft 正版登录（设备码 OAuth）。
@@ -41,11 +41,17 @@
   - 离线账户，可添加、重命名和切换。
 - **Java**：自动扫描本机 Java，按版本元数据匹配；缺失时从 Adoptium 下载 Temurin JRE。
 - **游戏控制台**：实时日志、错误高亮、复制日志、结束游戏进程。
+- **后台任务日志与取消**：点击任务托盘中的任意任务即可展开该任务的实时日志，包含准备、下载、镜像测速、加载器安装、校验和完成/失败信息；运行中的任务可直接取消，已下载/写入的部分会保留，任务结束后日志仍可查看一段时间。
+- **加载器加速**：Fabric/Quilt 元数据、Forge/NeoForge Maven、安装器与加载器依赖都会按当前网络选择镜像；任务日志会显示加载器镜像选择阶段。Forge/NeoForge 安装器自身启动后的部分依赖下载不受启动器控制。
 - **启动动画**：点击启动后显示旋转方块与进度动画；检测到游戏窗口出现后动画结束。
 - **游戏语言同步**：启动游戏前将 Minecraft 语言设置为启动器当前界面语言（`zh_cn` / `zh_tw` / `en_us` / `ja_jp` / `ko_kr`），写入实例的 `options.txt`。
 - **启动后隐藏**：检测到游戏窗口真正出现后才隐藏启动器；游戏窗口关闭（进程退出）后自动恢复启动器窗口。可在设置中关闭。
+- **退出清理**：关闭启动器时先强制结束所有由它启动的 Minecraft 游戏进程；Windows 上还会把游戏加入 `KILL_ON_JOB_CLOSE` Job Object，即使启动器异常退出或被强制结束，游戏 JVM 也会被系统一并终止。
+- **退出确认**：默认关闭窗口时询问「最小化 / 退出」，可勾选记住选择，之后在「设置 → 窗口与退出」中改为每次询问、最小化到系统托盘或直接退出。最小化后窗口收起到任务栏右侧的通知区域，左键恢复，右键菜单可退出。版本号为 `v1.0.2`。
+- **加载器修复**：Forge/NeoForge 安装器通过 BMCLAPI `--mirror` 下载，并预取 `mcp_config`；现代 Forge 启动时不再把原版 client jar 和 Forge 补丁 client 同时放入类路径，避免 `module ResolutionException`。Fabric/Quilt 档案兼容 `+0000` 时间戳。加载器未安装完成时不再静默启动原版。
 - **主题**：黑夜模式（荧光绿）/ 白天模式（粉色），主题保存在本机。
 - **多语言**：简体中文、繁體中文、English、日本語、한국어。默认跟随系统语言，无法识别时回退简体中文；可在设置中关闭自动跟随并固定启动语言。
+- **关于页面**：显示客户端版本、官方/社区构建、数据目录、AGPL-3.0 许可、GitHub 仓库、问题反馈与技术栈；侧边栏「关于」和底部版本号均可进入。
 - **MyGO 彩蛋**：启动/加载文案会偶尔穿插「为什么要演奏春日影！」与「迷子でもいい、迷子でも進め。」，侧边栏 MYGO 标记悬停也可看到后一句；仅在界面文案中出现，不会写入日志或影响启动。
 - **内置窗口控制**：隐藏系统标题栏，顶部栏可拖动窗口，并提供最小化、最大化 / 还原和关闭按钮。
 - **内容保护**：全局禁止选择、复制、剪切、拖拽文字和图像，并拦截右键菜单与 `Ctrl/Cmd+C`、`Ctrl/Cmd+X`、`Ctrl/Cmd+A` 等快捷键；输入框仍可输入和粘贴，但不能选中或复制。设备码与日志复制按钮已移除，需要手动输入或记录。截图、系统级录屏与开发者工具无法由 WebView 应用层完全阻止。
@@ -88,7 +94,7 @@ wails dev
 wails build
 ```
 
-构建产物位于 `build/bin/`。Windows 可执行文件名为 `MyMinecraftGoLuncher.exe`。
+构建产物位于 `build/bin/`。Windows 可执行文件名为 `MyMinecraftGoLuncher.exe`。官方 GitHub Actions 发布 Linux 时会同时生成 tar.gz、`.deb` 与 `.rpm` 包。
 
 仅调试前端界面时：
 
@@ -147,11 +153,11 @@ cd frontend && npm run build
 
 - **免费功能**：启动已安装的游戏、已安装版本管理、Java 管理、基础模组/资源安装、本地备份。
 - **付费功能**：游戏版本下载（`versions`）、服务器管理（`server`）、局域网联机（`lan`）、AI 搜索（`ai`）、云同步/备份（`cloud`）、整合包 CDN（`cdn`）、服务器托管（`hosting`）、优先支持（`priority`）。
-- 已安装版本的启动、设置修改、模组/资源安装、存档编辑不受 `versions` 限制；只有下载新的 Minecraft 游戏版本需要授权。
+- 已安装版本的启动、设置修改、模组/资源安装、存档编辑不受 `versions` 限制；下载新的 Minecraft 游戏版本，以及修复/补充版本文件需要 `versions` 授权。
 - 免费功能不再需要激活；只有付费 API 调用 `requireFeature`。客户端检查只是 UI 辅助，真正的权益校验在服务端。
 - LicensingGo 激活码的 `features` 数组必须包含 `versions`、`server`、`lan`、`ai` 等对应值，付费功能才会解锁；`*` / `pro` 可作为全量权益。
 - 社区构建不包含产品 API Key 和授权服务地址，付费入口显示 PRO 提示；官方构建通过私有 CI secret 注入产品配置。
-- 官方构建的签名证书、OTA 私钥、发布密钥不进入公开仓库。
+- 官方构建的代码签名证书、产品 API Key / 授权服务器地址不进入公开仓库；旧式静态 OTA 清单的 Ed25519 私钥仅用于兼容模式，也不进入仓库。
 
 ### 授权数据
 
@@ -185,59 +191,80 @@ $env:MGL_SIGN_PFX_PASSWORD = "PFX 密码"
 - 发布构建启用 `-trimpath`、去除符号表，并通过 `-X .../security.Enforce=true` 开启调试器检测。
 - `-Pack` 使用 UPX 加壳；加壳后如需代码签名必须重新签名。
 - 代码签名使用 `signtool` 和受信任的 Authenticode 证书；证书密码只从环境变量读取。
-- 当前内置更新地址为空（OTA 暂定），设置页会显示未配置；确定地址后通过 `-UpdateManifestUrl` 注入。
+- 官方构建会使用 `MGL_PRODUCT_SERVER_URL` 和 `MGL_PRODUCT_API_KEY` 请求 LicensingGo 的 `GET /api/v1/update`；不需要单独配置更新地址。社区构建没有产品 Key，设置页会显示未配置。
+- GitHub Actions 官方三平台构建、自签名与 Release 发布流程见 [docs/GITHUB_RELEASE.md](docs/GITHUB_RELEASE.md)；只有 commit message 中包含 `vX.Y.Z` 或手动运行才会触发。
 - 如果检测到进程以 Windows 管理员或 Unix root 身份运行，界面会先显示风险提示；用户可以选择继续本次运行或直接退出。程序清单仍为 `asInvoker`，不会主动请求提权。
 
 贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)、[TRADEMARK.md](TRADEMARK.md) 与 [CLA.md](CLA.md)。
 
 ## 热更新与 OTA
 
-更新清单和安装包使用 Ed25519 签名，客户端只内置公钥；发布私钥必须离线保管。默认构建没有配置更新地址，设置页会提示未配置。
+官方构建通过 **LicensingGo 授权服务器的产品更新 API** 查询最新版本，不需要在客户端内单独写死更新清单地址。
 
-- `CheckForUpdates` 请求清单 JSON，并读取响应头 `X-MGL-Signature`，或同目录的 `<manifest>.json.sig`（Base64 Ed25519 签名）。
-- 清单示例：
+### 查询流程
+
+```http
+GET {ProductServerURL}/api/v1/update
+X-API-Key: {ProductAPIKey}
+```
+
+- 产品 API Key 与授权使用同一把产品 Key。
+- 查询更新不需要激活码，未激活或授权过期也可检查更新。
+- 服务端返回该产品最新 OTA 清单；`404 update_not_available` 视为暂无更新。
+- API 使用 HTTPS；客户端仍会校验更新包 URL、SHA256 和大小。
+
+### 管理端配置
+
+在 LicensingGo 控制台的「产品 → OTA 更新清单」中填写：
 
 ```json
 {
-  "version": "1.1.0",
+  "version": "1.0.2",
   "minVersion": "1.0.0",
   "notes": "修复若干问题",
   "mandatory": false,
+  "force": false,
   "web": {
-    "version": "1.1.0",
-    "url": "https://updates.example.com/web-1.1.0.zip",
+    "version": "1.0.2",
+    "url": "https://updates.example.com/ota/1.0.2/web-1.0.2.zip",
     "sha256": "…",
-    "size": 123456
+    "size": 342397
   },
   "app": {
-    "version": "1.1.0",
-    "url": "https://updates.example.com/MyMinecraftGoLuncher-1.1.0.exe",
+    "version": "1.0.2",
+    "url": "https://updates.example.com/ota/1.0.2/MyMinecraftGoLuncher-1.0.2.exe",
     "sha256": "…",
-    "size": 12345678
+    "size": 23863808
   }
 }
 ```
 
-- 前端热更新：下载 `frontend/dist` 的 zip，校验后解压到 `MGL/web`，Wails 重新加载 WebView；旧版本保留为 `MGL/web.old`，可在设置页回滚。
+- `web` / `app` 至少配置一个。
+- `mandatory` 提示必须升级，`force` 表示需要立即安装；客户端会在更新面板显示对应提示。
+- 更新包 URL 必须是 HTTPS，客户端会校验 SHA256 与 size。
+- 修改清单后不需要 Ed25519 签名；LicensingGo 在 HTTPS 接口下直接返回。
+- 旧式的静态签名清单仍保留在 updater 代码中用于兼容，但官方构建优先使用 API。
+
+### 客户端行为
+
+- 前端热更新：下载 web zip，校验后解压到 `MGL/web`，Wails 重新加载 WebView；旧版本保留为 `MGL/web.old`，可在设置页回滚。
 - 完整 OTA：下载并校验新 exe，生成本地 PowerShell 替换脚本，退出后替换并重启；旧 exe 保留 `.bak`。
-- 发布构建时注入清单地址：
+- 「一键更新」会自动检查最新清单：有完整客户端更新时优先下载并重启替换；只有前端更新时直接应用热更新。
+- 如果未配置产品 API Key 或服务器地址，设置页显示未配置。
+
+### 官方构建
 
 ```powershell
 $env:MGL_PRODUCT_API_KEY = "官方构建专用产品 Key"
 $env:MGL_PRODUCT_SERVER_URL = "https://license.example.com"
+$env:MGL_SIGN_PFX_PASSWORD = "PFX 密码"
 
 .\scripts\build-release.ps1 `
-  -UpdateManifestUrl "https://updates.example.com/manifest.json" `
-  -PfxPath ".\certs\codesign.pfx"
+  -PfxPath ".\certs\codesign.pfx" `
+  -Pack
 ```
 
-- 签名清单：
-
-```powershell
-node .\scripts\sign-update-manifest.mjs .\dist\manifest.json
-```
-
-- 更新服务器必须提供 HTTPS 和正确的 `Content-Type`；清单、签名和安装包均应做缓存控制。客户端会校验签名和 SHA256，但不会信任未签名清单。
+构建时产品 Key 和服务器地址会写入私有构建文件，启动后自动配置更新 API。
 
 ## 安全存储
 
@@ -289,21 +316,23 @@ env_key  = "ORCA_KEY"
 
 - 在 Minecraft 中「对局域网开放」后，世界会通过 `224.0.2.60:4445` 组播广播，启动器会自动发现并显示版本、MOTD 与在线玩家。
 - 「扫描局域网」会并发探测本机各私有 IPv4 `/24` 网段的 `25565` 端口（最多 4 个网段），并且只把真正返回 Minecraft Server List Ping 状态响应的地址判定为服务器；仅端口开放不会被误报。
-- 「启动器玩家」使用本启动器的轻量组播协议 `224.0.2.61:4446`。启动器启动后会自动监听并广播玩家名、版本与实例名，无需打开联机页即可发现其他客户端；侧边栏「联机」会显示发现的客户端数量。可在联机页关闭广播，关闭后仍可发现其他人。
+- 「启动器玩家」使用本启动器的轻量组播协议 `224.0.2.61:4446`。启动器启动后会持续监听其他客户端；玩家名、版本与实例名只在打开联机页期间广播，离开页面后停止广播（正在共享版本时除外）。侧边栏「联机」会显示发现的客户端数量。
 - 选择本地版本后点击「加入」即可直连：
   - Minecraft 1.20+ 使用 `--quickPlayMultiplayer host:port`。
   - 1.20 以下使用 `--server host --port port`。
 - 若发现不到房间或玩家，请允许启动器通过 Windows 防火墙，并确认双方处于同一局域网；VPN、多网卡与禁止组播的网络可能影响发现。
 
-### 局域网版本同步
+### 版本共享
 
-1. 在共享方打开「联机 → 局域网共享」，选择要共享的本地版本与目录（模组、光影、资源包、配置），开启开关。
-2. 其他客户端会在「启动器玩家」列表中看到「同步版本」按钮，选择本地版本后会先读取对方清单，展示 Minecraft 版本、加载器版本、新增/变更/相同文件数量和预计下载大小。
-3. 确认差异后才会开始同步；共享清单若在确认后发生变化，需要重新确认。MC 版本或加载器不一致时会阻止同步，避免把不同版本的模组写进同一实例。
-4. 同步使用 SHA-256 校验，仅下载缺失或内容变化的文件，不会删除本地多余文件；加载器版本不同且已确认时，会一并更新本地加载器。
-5. 目标版本需要先关闭游戏；首次同步或文件较多时请保持双方在局域网内。
+1. 在共享方打开「联机 → 版本共享」，选择要共享的本地版本。可以只共享模组/光影/资源包/配置，也可以开启「共享整个版本」，包含存档、设置、模组、资源包与光影。
+2. 其他客户端会在「启动器玩家」列表中看到「同步版本」或「复制并安装」按钮：
+   - 普通共享：选择本地版本后读取对方清单，展示版本、加载器、文件差异和预计下载大小。
+   - 整个版本：确认后创建新的隔离版本，复制全部文件，并自动安装运行库与加载器，不覆盖现有版本。
+3. 普通同步确认后才会写入文件；共享清单若在确认后变化，需要重新确认。MC 版本或加载器不一致时会阻止普通同步。
+4. 同步使用 SHA-256 校验，仅下载缺失或内容变化的文件；完整版本安装会创建新版本目录。
+5. 目标版本需要先关闭游戏；首次同步或文件较多时请保持双方在局域网内。完整版本安装要求开启版本隔离。
 
-> 共享服务使用随机端口和随机访问令牌，仅共享启动器选中的目录；API 令牌随局域网点对点广播，不会上传到公网。仍请只同步来源可信的局域网玩家文件。
+> 共享服务使用随机端口和随机访问令牌，仅共享启动器选中的内容；API 令牌随局域网点对点广播，不会上传到公网。完整版本会包含存档和设置，请只与可信玩家共享。
 
 ## 账户说明
 
@@ -351,7 +380,7 @@ env_key  = "ORCA_KEY"
 - 导入使用自定义启动主类、OptiFine 等特殊组件的版本时，启动器会给出警告；这类运行库无法仅凭版本名称自动还原，可能需要改用自定义导入并手动补充。缺少版本 JSON 的版本会从文件夹名称推断 MC 与加载器版本。
 - 导出的 `.mrpack` 会排除日志、存档、本机选项等用户数据；需要完整备份（含存档与设置）时请使用 Prism / MultiMC 备份 `.zip`。导出要求加载器版本已知，否则会拒绝生成不完整的整合包。
 - 启动器玩家发现从启动器启动时自动运行；所有客户端都需要运行本启动器并处于同一局域网。关闭广播后不会主动出现在其他人的列表中，但仍能发现别人。广播内容只有玩家名、实例名、MC 版本与局域网 IP。
-- 服务器包会按常见元数据（Fabric / Quilt 的 `environment`、Forge / NeoForge 的 `displayTest`、旧版 `clientSideOnly`）自动排除仅客户端模组；无法确认的模组会保守保留，必要时仍可在 `mods/` 中手动移除。Forge / NeoForge / Quilt 服务器包首次使用需运行 `install-server` 脚本。
+- 服务器包会扫描每个模组 jar 的元数据：Fabric `fabric.mod.json` 的 `environment=client`、Quilt `quilt.mod.json` 的 `minecraft.environment=client`、Forge/NeoForge `mods.toml` 的 `displayTest=IGNORE_*` / `clientSideOnly=true`、旧版 `mcmod.info` 与 `META-INF/MANIFEST.MF` 的客户端标记。无法确认的模组会保守保留，必要时仍可在 `mods/` 中手动移除。`plugins/` 按服务器插件目录完整收录。Forge / NeoForge / Quilt 服务器包首次使用需运行 `install-server` 脚本。
 - 服务器包不会自动接受 Minecraft EULA，请阅读后自行将 `eula.txt` 中的 `eula=false` 改为 `true`。
 - 每次启动游戏都会把当前启动器语言写入 `options.txt`；如果之后在游戏内修改语言，下次通过启动器启动时会被重新同步。
 - 内容保护是界面层的防误选/防复制措施，不是 DRM：无法阻止系统截图、录屏、屏幕阅读器、开发者工具或直接读取 WebView 数据。登录设备码需要手动输入，控制台日志不再提供复制按钮。

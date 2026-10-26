@@ -102,7 +102,11 @@ func TestWritePackExcludesClientOnlyMods(t *testing.T) {
 		`{"id":"sodium","environment":"client"}`)
 	writeModJar(t, filepath.Join(gameDir, "mods", "lithium.jar"), "fabric.mod.json",
 		`{"id":"lithium","environment":"*"}`)
+	writeModJar(t, filepath.Join(gameDir, "mods", "forge-client.jar"), "META-INF/mods.toml",
+		`displayTest="IGNORE_ALL_VERSION"`)
 	writeTestFile(t, filepath.Join(gameDir, "mods", "unknown.jar"), "not a zip")
+	writeTestFile(t, filepath.Join(gameDir, "mods", "readme.txt"), "not a mod")
+	writeTestFile(t, filepath.Join(gameDir, "plugins", "server-plugin.jar"), "jar")
 
 	zipPath := filepath.Join(t.TempDir(), "server.zip")
 	out, err := os.Create(zipPath)
@@ -131,11 +135,17 @@ func TestWritePackExcludesClientOnlyMods(t *testing.T) {
 	for _, file := range reader.File {
 		files[file.Name] = true
 	}
-	if files["mods/sodium.jar"] {
-		t.Fatal("client-only mod must not be included")
+	if files["mods/sodium.jar"] || files["mods/forge-client.jar"] {
+		t.Fatal("client-only mods must not be included")
 	}
 	if !files["mods/lithium.jar"] || !files["mods/unknown.jar"] {
 		t.Fatalf("server-safe mods missing: %#v", files)
+	}
+	if files["mods/readme.txt"] {
+		t.Fatal("non-jar file in mods must not be included")
+	}
+	if !files["plugins/server-plugin.jar"] {
+		t.Fatalf("server plugin missing: %#v", files)
 	}
 }
 

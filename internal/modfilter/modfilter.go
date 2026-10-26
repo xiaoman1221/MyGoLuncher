@@ -4,6 +4,7 @@ package modfilter
 
 import (
 	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"io"
 	"path/filepath"
@@ -14,9 +15,11 @@ import (
 const maxMetadataSize = 2 << 20
 
 var (
-	forgeDisplayTest = regexp.MustCompile(`(?mi)^\s*displayTest\s*=\s*["'](IGNORE_SERVER_VERSION|IGNORE_ALL_VERSION)["']`)
-	forgeSideOnly    = regexp.MustCompile(`(?mi)^\s*clientSideOnly\s*=\s*true`)
-	mcmodSideOnly    = regexp.MustCompile(`(?i)"clientSideOnly"\s*:\s*true`)
+	forgeDisplayTest   = regexp.MustCompile(`(?mi)^\s*displayTest\s*=\s*["'](IGNORE_SERVER_VERSION|IGNORE_ALL_VERSION)["']`)
+	forgeSideOnly      = regexp.MustCompile(`(?mi)^\s*clientSideOnly\s*=\s*true`)
+	manifestSideOnly   = regexp.MustCompile(`(?mi)^\s*(?:modSide|side)\s*:\s*CLIENT\s*$`)
+	manifestClientOnly = regexp.MustCompile(`(?mi)^\s*clientSideOnly\s*:\s*true\s*$`)
+	mcmodSideOnly      = regexp.MustCompile(`(?i)"clientSideOnly"\s*:\s*true`)
 )
 
 // IsClientOnly inspects common mod metadata formats inside a jar. It is
@@ -69,6 +72,15 @@ func IsClientOnly(jarPath string) (bool, string) {
 			}
 		}
 	}
+	if file := files["meta-inf/manifest.mf"]; file != nil {
+		data := readBytes(file)
+		if manifestSideOnly.Match(data) {
+			return true, "META-INF/MANIFEST.MF side=CLIENT"
+		}
+		if manifestClientOnly.Match(data) {
+			return true, "META-INF/MANIFEST.MF clientSideOnly=true"
+		}
+	}
 	if file := files["mcmod.info"]; file != nil {
 		if mcmodSideOnly.Match(readBytes(file)) {
 			return true, "mcmod.info clientSideOnly=true"
@@ -87,7 +99,12 @@ func readJSON(file *zip.File, out any) error {
 		return err
 	}
 	defer reader.Close()
-	return json.NewDecoder(io.LimitReader(reader, maxMetadataSize)).Decode(out)
+	data, err := io.ReadAll(io.LimitReader(reader, maxMetadataSize))
+	if err != nil {
+		return err
+	}
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+	return json.Unmarshal(data, out)
 }
 
 func readBytes(file *zip.File) []byte {

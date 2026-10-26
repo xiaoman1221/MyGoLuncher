@@ -31,8 +31,7 @@ internal/license/product_private.go
 # Local capture/debug artifacts
 _*
 
-.idea/workspace.xml
-.idea/claudeCodeTabState.xml
+.idea/
 .idea/shelf/
 .DS_Store
 Thumbs.db

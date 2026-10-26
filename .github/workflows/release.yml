@@ -1,0 +1,387 @@
+name: Official release
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version without the v prefix (must match every source version field)'
+        required: true
+        default: '1.0.2'
+      publish:
+        description: 'Create or update the GitHub Release after all builds succeed'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: official-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  WAILS_VERSION: v2.17.0
+
+jobs:
+  gate:
+    name: Detect release commit
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.detect.outputs.enabled }}
+      version: ${{ steps.detect.outputs.version }}
+    steps:
+      - name: Detect vX.Y.Z in commit message
+        id: detect
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          MANUAL_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="${MANUAL_VERSION#v}"
+            ENABLED="true"
+          else
+            VERSION="$(printf '%s' "$COMMIT_MESSAGE" | grep -Eo 'v[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 | tr -d 'v' || true)"
+            if [ -n "$VERSION" ]; then ENABLED="true"; else ENABLED="false"; fi
+          fi
+          echo "enabled=$ENABLED" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release enabled=$ENABLED version=$VERSION"
+
+  test:
+    name: Verify source
+    needs: gate
+    if: ${{ needs.gate.outputs.enabled == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+      - name: Test backend
+        run: |
+          go test ./...
+          go vet ./...
+
+  web:
+    name: Package web hot update
+    needs: [gate, test]
+    if: ${{ needs.gate.outputs.enabled == 'true' }}
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Verify release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-release-version.mjs "$VERSION"
+      - name: Build frontend and package web update
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+          mkdir -p ../dist
+          VERSION="${VERSION:?VERSION is not set}"
+          (cd dist && zip -r -q "../../dist/MyGoLuncher-$VERSION-web.zip" .)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-web
+          path: dist
+          if-no-files-found: error
+
+  build:
+    name: Build ${{ matrix.artifact }}
+    needs: [gate, test]
+    if: ${{ needs.gate.outputs.enabled == 'true' }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows/amd64
+            artifact: windows-amd64
+          - os: macos-14
+            platform: darwin/universal
+            artifact: macos-universal
+          - os: ubuntu-22.04
+            platform: linux/amd64
+            artifact: linux-amd64
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+      MGL_PRODUCT_API_KEY: ${{ secrets.MGL_PRODUCT_API_KEY }}
+      MGL_PRODUCT_SERVER_URL: ${{ secrets.MGL_PRODUCT_SERVER_URL }}
+      MGL_PRODUCT_NAME: ${{ vars.MGL_PRODUCT_NAME }}
+      MGL_PRODUCT_SLUG: ${{ vars.MGL_PRODUCT_SLUG }}
+      WINDOWS_PFX_BASE64: ${{ secrets.WINDOWS_PFX_BASE64 }}
+      WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_PFX_PASSWORD }}
+      MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Wails
+        shell: bash
+        run: |
+          set -euo pipefail
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+          go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.48.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify release version
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/check-release-version.mjs "$VERSION"
+
+      - name: Write official product configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/write-product-config.mjs
+        env:
+          MGL_PRODUCT_API_KEY: ${{ secrets.MGL_PRODUCT_API_KEY }}
+          MGL_PRODUCT_SERVER_URL: ${{ secrets.MGL_PRODUCT_SERVER_URL }}
+          MGL_PRODUCT_NAME: ${{ vars.MGL_PRODUCT_NAME }}
+          MGL_PRODUCT_SLUG: ${{ vars.MGL_PRODUCT_SLUG }}
+
+      - name: Build official desktop application
+        shell: bash
+        run: |
+          set -euo pipefail
+          wails build \
+            -platform "${{ matrix.platform }}" \
+            -tags mgl_private \
+            -trimpath \
+            -ldflags "-s -w -X MyMinecraftGoLuncher/internal/security.Enforce=true"
+
+      - name: Remove private product configuration
+        if: always()
+        shell: bash
+        run: rm -f internal/license/product_private.go
+
+      - name: Sign and package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_PFX_BASE64)) { throw 'WINDOWS_PFX_BASE64 secret is missing' }
+          if ([string]::IsNullOrWhiteSpace($env:WINDOWS_PFX_PASSWORD)) { throw 'WINDOWS_PFX_PASSWORD secret is missing' }
+          $version = $env:VERSION
+          $exe = 'build/bin/MyMinecraftGoLuncher.exe'
+          if (-not (Test-Path -LiteralPath $exe)) { throw "build output missing: $exe" }
+          $pfx = Join-Path $env:RUNNER_TEMP 'code-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
+          $secure = ConvertTo-SecureString $env:WINDOWS_PFX_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $secure
+          if ($cert.Subject -eq $cert.Issuer) {
+            $cer = Join-Path $env:RUNNER_TEMP 'code-signing.cer'
+            Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+            Import-Certificate -FilePath $cer -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+            Import-Certificate -FilePath $cer -CertStoreLocation Cert:\CurrentUser\TrustedPublisher | Out-Null
+          }
+          $env:MGL_SIGN_PFX_PASSWORD = $env:WINDOWS_PFX_PASSWORD
+          & .\scripts\sign-windows.ps1 -Exe $exe -PfxPath $pfx
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -LiteralPath $exe -Destination "dist/MyGoLuncher-$version-windows-amd64.exe" -Force
+          $stage = Join-Path $env:RUNNER_TEMP 'windows-package'
+          Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -LiteralPath $exe -Destination $stage -Force
+          Copy-Item -LiteralPath README.md, LICENSE -Destination $stage -Force
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath "dist/MyGoLuncher-$version-windows-amd64.zip" -Force
+
+      - name: Clean Windows signing material
+        if: ${{ always() && runner.os == 'Windows' }}
+        shell: pwsh
+        run: Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'code-signing.pfx') -Force -ErrorAction SilentlyContinue
+
+      - name: Sign and package macOS with a self-signed certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in MACOS_CERTIFICATE_BASE64 MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::$name secret is missing"
+              exit 1
+            fi
+          done
+          VERSION="${VERSION:?VERSION is not set}"
+          APP="build/bin/MyMinecraftGoLuncher.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::macOS app bundle is missing: $APP"
+            exit 1
+          fi
+          CERT="$RUNNER_TEMP/macos-cert.p12"
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | python3 -c 'import base64,sys;sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' > "$CERT"
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KC_PASS="$(openssl rand -hex 16)"
+          security create-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
+          security import "$CERT" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+          codesign --force --deep --options runtime --timestamp=none --sign "$MACOS_SIGNING_IDENTITY" "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          mkdir -p dist
+          STAGE="$RUNNER_TEMP/macos-package"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -R "$APP" "$STAGE/"
+          cp README.md LICENSE "$STAGE/"
+          (cd "$STAGE" && zip -r -q "$GITHUB_WORKSPACE/dist/MyGoLuncher-$VERSION-macos-universal.zip" .)
+
+      - name: Clean macOS signing material
+        if: ${{ always() && runner.os == 'macOS' }}
+        shell: bash
+        run: |
+          if [ -n "${KEYCHAIN:-}" ]; then security delete-keychain "$KEYCHAIN" || true; fi
+          rm -f "$RUNNER_TEMP/macos-cert.p12"
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION:?VERSION is not set}"
+          BIN="build/bin/MyMinecraftGoLuncher"
+          if [ ! -x "$BIN" ]; then
+            echo "::error::Linux build output is missing: $BIN"
+            exit 1
+          fi
+          STAGE="$RUNNER_TEMP/linux-package"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp "$BIN" "$STAGE/"
+          cp README.md LICENSE build/linux/mygoluncher.desktop "$STAGE/"
+          chmod +x "$STAGE/MyMinecraftGoLuncher"
+          mkdir -p dist
+          tar -C "$STAGE" -czf "dist/MyGoLuncher-$VERSION-linux-amd64.tar.gz" .
+          sed "s/__VERSION__/$VERSION/g" packaging/nfpm-deb.yaml > "$RUNNER_TEMP/nfpm-deb.yaml"
+          sed "s/__VERSION__/$VERSION/g" packaging/nfpm-rpm.yaml > "$RUNNER_TEMP/nfpm-rpm.yaml"
+          nfpm package -f "$RUNNER_TEMP/nfpm-deb.yaml" -p deb -t "dist/MyGoLuncher-$VERSION-linux-amd64.deb"
+          nfpm package -f "$RUNNER_TEMP/nfpm-rpm.yaml" -p rpm -t "dist/MyGoLuncher-$VERSION-linux-amd64.rpm"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.artifact }}
+          path: dist
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: [gate, build, web]
+    if: ${{ needs.gate.outputs.enabled == 'true' && (github.event_name == 'push' || inputs.publish) }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+      LINUX_GPG_PRIVATE_KEY_BASE64: ${{ secrets.LINUX_GPG_PRIVATE_KEY_BASE64 }}
+      LINUX_GPG_PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Generate and self-sign checksums
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION:?VERSION is not set}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [ -z "${LINUX_GPG_PRIVATE_KEY_BASE64:-}" ]; then
+            echo "::error::LINUX_GPG_PRIVATE_KEY_BASE64 secret is missing"
+            exit 1
+          fi
+          cd dist
+          find . -maxdepth 1 -type f ! -name 'SHA256SUMS.txt' ! -name 'SHA256SUMS.txt.asc' -printf '%f\n' | sort | while read -r file; do
+            sha256sum "$file"
+          done > SHA256SUMS.txt
+          GNUPGHOME="$RUNNER_TEMP/gnupg"
+          export GNUPGHOME
+          mkdir -m 700 -p "$GNUPGHOME"
+          printf '%s' "$LINUX_GPG_PRIVATE_KEY_BASE64" | base64 -d | gpg --batch --import
+          gpg --armor --export > linux-public-key.asc
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "${LINUX_GPG_PASSPHRASE:-}" \
+            --armor --detach-sign \
+            --output SHA256SUMS.txt.asc SHA256SUMS.txt
+          gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
+          rm -rf "$GNUPGHOME"
+          cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.meta.outputs.version }}
+          name: MyGoLuncher v${{ steps.meta.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*
+          body: |
+            MyGoLuncher v${{ steps.meta.outputs.version }} official build.
+
+            - Windows: self-signed executable and zip
+            - macOS: self-signed universal app zip (trust the publisher certificate before opening)
+            - Linux: x86_64 tar.gz, .deb and .rpm
+            - SHA256SUMS.txt and SHA256SUMS.txt.asc (self-signed GPG)

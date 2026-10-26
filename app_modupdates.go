@@ -288,7 +288,7 @@ func (a *App) ApplyModUpdate(req ModUpdateApplyRequest) (result InstallProjectRe
 	var curseFile curseforge.File
 	switch source {
 	case sourceModrinth:
-		version, fetchErr := modrinth.VersionByID(a.context(), req.VersionID)
+		version, fetchErr := modrinth.VersionByID(task.context(), req.VersionID)
 		if fetchErr != nil {
 			return result, fetchErr
 		}
@@ -300,7 +300,7 @@ func (a *App) ApplyModUpdate(req ModUpdateApplyRequest) (result InstallProjectRe
 		}
 		modrinthVersion = version
 		incompatibleFiles, incompatibleIDs = modrinthIncompatibilities(version)
-		tempPath, err = modrinth.DownloadFileAny(a.context(), version, cacheDir, rewriter)
+		tempPath, err = modrinth.DownloadFileAny(task.context(), version, cacheDir, rewriter)
 		result = InstallProjectResult{
 			VersionID: version.ID, VersionName: version.Name,
 			GameVersion: instance.MCVersion, Loader: instance.Loader, Dependencies: []string{},
@@ -319,7 +319,7 @@ func (a *App) ApplyModUpdate(req ModUpdateApplyRequest) (result InstallProjectRe
 			return result, errors.New("未配置 CurseForge API Key")
 		}
 		curseClient = curseforge.New(key)
-		file, fetchErr := curseClient.FileByID(a.context(), projectID, fileID)
+		file, fetchErr := curseClient.FileByID(task.context(), projectID, fileID)
 		if fetchErr != nil {
 			return result, fetchErr
 		}
@@ -331,7 +331,7 @@ func (a *App) ApplyModUpdate(req ModUpdateApplyRequest) (result InstallProjectRe
 		}
 		curseFile = file
 		incompatibleIDs = curseForgeIncompatibilities(file)
-		tempPath, err = curseClient.DownloadFileAny(a.context(), file, cacheDir, rewriter)
+		tempPath, err = curseClient.DownloadFileAny(task.context(), file, cacheDir, rewriter)
 		result = InstallProjectResult{
 			VersionID: strconv.FormatInt(file.ID, 10), VersionName: firstString(file.DisplayName, file.FileName),
 			GameVersion: instance.MCVersion, Loader: instance.Loader, Dependencies: []string{},
@@ -368,7 +368,7 @@ func (a *App) ApplyModUpdate(req ModUpdateApplyRequest) (result InstallProjectRe
 	result.Path = installedPath
 	result.RollbackPath = rollbackPath
 	if source == sourceModrinth {
-		if deps, depErr := modrinth.InstallDependencies(a.context(), modrinthVersion, instance.MCVersion, instance.Loader, filepath.Dir(oldPath), 6, func(message string) {
+		if deps, depErr := modrinth.InstallDependencies(task.context(), modrinthVersion, instance.MCVersion, instance.Loader, filepath.Dir(oldPath), 6, func(message string) {
 			task.update("dependencies", message, 0, 0)
 		}); depErr != nil {
 			return result, depErr
@@ -376,7 +376,7 @@ func (a *App) ApplyModUpdate(req ModUpdateApplyRequest) (result InstallProjectRe
 			result.Dependencies = deps
 		}
 	} else if curseClient != nil {
-		if deps, depErr := curseClient.InstallDependencies(a.context(), curseFile, instance.MCVersion, instance.Loader, filepath.Dir(oldPath), 6, func(message string) {
+		if deps, depErr := curseClient.InstallDependencies(task.context(), curseFile, instance.MCVersion, instance.Loader, filepath.Dir(oldPath), 6, func(message string) {
 			task.update("dependencies", message, 0, 0)
 		}); depErr != nil {
 			return result, depErr

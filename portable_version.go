@@ -46,7 +46,7 @@ func (a *App) ensurePortableVersion(inst store.Instance) error {
 		merged.Type = "release"
 	}
 	if merged.Time.IsZero() {
-		merged.Time = time.Now().UTC()
+		merged.Time = mojang.FlexTime{Time: time.Now().UTC()}
 	}
 	if merged.ReleaseTime.IsZero() {
 		merged.ReleaseTime = merged.Time

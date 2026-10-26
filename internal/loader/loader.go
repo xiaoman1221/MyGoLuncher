@@ -1,7 +1,9 @@
 package loader
 
 import (
+	"archive/zip"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -282,10 +284,13 @@ func (i *Installer) fetchProfile(ctx context.Context, sources []mirror.Source, l
 }
 
 func (i *Installer) installForge(ctx context.Context, sources []mirror.Source, mcVersion, loaderType, loaderVersion, javaPath string, progress mojang.ProgressFunc) (string, error) {
-	if strings.TrimSpace(javaPath) == "" {
-		return "", errors.New("安装 Forge/NeoForge 需要可用的 Java")
-	}
 	loaderVersion = cleanLoaderVersion(loaderVersion, mcVersion, loaderType)
+	if id := findInstalledProfile(i.Paths.Versions, mcVersion, loaderType, loaderVersion); id != "" && i.Mojang.IsProfileInstalled(id) {
+		if progress != nil {
+			progress("loader", displayLoader(loaderType)+" 已安装", 1, 1)
+		}
+		return id, nil
+	}
 	installerURL, err := forgeInstallerURL(mcVersion, loaderType, loaderVersion)
 	if err != nil {
 		return "", err
@@ -298,13 +303,54 @@ func (i *Installer) installForge(ctx context.Context, sources []mirror.Source, m
 	if progress != nil {
 		progress("loader", "正在下载 "+displayLoader(loaderType)+" 安装器…", 0, 1)
 	}
-	if err := downloadCandidates(ctx, loaderCandidates(sources, mirror.ResourceLoaderArtifact, installerURL, mcVersion), httpx.File{
-		Dest: installerPath, Size: 0,
-	}); err != nil {
+	installerFile := httpx.File{Dest: installerPath}
+	if raw, hashErr := getRawCandidates(ctx, loaderCandidates(sources, mirror.ResourceLoaderArtifact, installerURL+".sha1", mcVersion)); hashErr == nil {
+		if fields := strings.Fields(string(raw)); len(fields) > 0 && len(fields[0]) == 40 {
+			installerFile.SHA1 = fields[0]
+			installerFile.Verify = true
+		}
+	}
+	if !installerFile.Verify {
+		// An installer without a checksum must not be reused: a truncated or
+		// corrupted cached jar can otherwise produce a broken loader profile.
+		_ = os.Remove(installerPath)
+	}
+	if err := downloadCandidates(ctx, loaderCandidates(sources, mirror.ResourceLoaderArtifact, installerURL, mcVersion), installerFile); err != nil {
 		return "", fmt.Errorf("下载加载器安装器失败: %w", err)
 	}
-	// Forge's installer is run from the data root so libraries and version
-	// profiles land in the same directories used by our launcher.
+	display := displayLoader(loaderType)
+	var officialErr error
+	if strings.TrimSpace(javaPath) == "" {
+		officialErr = errors.New("安装 " + display + " 需要可用的 Java")
+	} else {
+		var id string
+		id, officialErr = i.runForgeInstaller(ctx, javaPath, installerPath, mcVersion, loaderType, loaderVersion, display, sources, progress)
+		if officialErr == nil {
+			return id, nil
+		}
+	}
+
+	// PCL2 keeps a second path for legacy Forge installers: extract the
+	// install_profile/version JSON and bundled Maven artifacts directly. New
+	// Forge and NeoForge installers require their processor-based installer, so
+	// only use this fallback for the old format.
+	if loaderType == "forge" && isLegacyForgeVersion(loaderVersion) {
+		if progress != nil {
+			progress("loader", "官方安装器失败，尝试方式 B（兼容安装）…", 0, 1)
+		}
+		id, legacyErr := i.installForgeLegacy(installerPath, mcVersion, loaderVersion, progress)
+		if legacyErr == nil {
+			return id, nil
+		}
+		return "", fmt.Errorf("%s 安装失败：官方安装器: %v；兼容方式: %v", display, officialErr, legacyErr)
+	}
+	return "", officialErr
+}
+
+// runForgeInstaller is the primary installation method: run the official
+// installer from the game data root so it creates the version profile and
+// downloads the patched client/libraries.
+func (i *Installer) runForgeInstaller(ctx context.Context, javaPath, installerPath, mcVersion, loaderType, loaderVersion, display string, sources []mirror.Source, progress mojang.ProgressFunc) (string, error) {
 	profilesPath := filepath.Join(i.Paths.Data, "launcher_profiles.json")
 	if !util.Exists(profilesPath) {
 		_ = util.WriteJSON(profilesPath, map[string]any{
@@ -315,11 +361,17 @@ func (i *Installer) installForge(ctx context.Context, sources []mirror.Source, m
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 20*time.Minute)
 	defer cancel()
-	display := displayLoader(loaderType)
-	if progress != nil {
-		progress("loader", "正在执行 "+display+" 安装器（可能需要数分钟）…", 0, 1)
+	if err := i.prefetchForgeInstallerData(runCtx, installerPath, mcVersion, sources, progress); err != nil {
+		return "", fmt.Errorf("准备 %s 安装数据失败: %w", display, err)
 	}
-	cmd := exec.CommandContext(runCtx, javaPath, "-jar", installerPath, "--installClient", i.Paths.Data)
+	if progress != nil {
+		progress("loader", "正在执行 "+display+" 安装器（方式 A，可能需要数分钟）…", 0, 1)
+	}
+	args := []string{"-jar", installerPath, "--installClient", i.Paths.Data}
+	if mirrorURL := forgeInstallerMirror(sources); mirrorURL != "" {
+		args = append(args, "--mirror", mirrorURL)
+	}
+	cmd := exec.CommandContext(runCtx, javaPath, args...)
 	cmd.Dir = i.Paths.Data
 	sysutil.HideWindow(cmd)
 	output, runErr := cmd.CombinedOutput()
@@ -334,10 +386,125 @@ func (i *Installer) installForge(ctx context.Context, sources []mirror.Source, m
 	if id == "" {
 		return "", fmt.Errorf("%s 安装器未生成版本档案\n%s", display, tailString(text, 1200))
 	}
+	if err := i.Mojang.MarkProfileInstalled(id); err != nil {
+		return "", fmt.Errorf("%s 版本档案已生成，但写入安装标记失败: %w", display, err)
+	}
 	if progress != nil {
-		progress("loader", display+" 安装完成", 1, 1)
+		progress("loader", display+" 安装完成（方式 A）", 1, 1)
 	}
 	return id, nil
+}
+
+// prefetchForgeInstallerData downloads Maven data artifacts referenced by the
+// Forge installer profile. The installer's --mirror option covers its library
+// list, but older installer versions still fetch mcp_config from the official
+// host, which is often unreachable from mainland China.
+func (i *Installer) prefetchForgeInstallerData(ctx context.Context, installerPath, mcVersion string, sources []mirror.Source, progress mojang.ProgressFunc) error {
+	reader, err := zip.OpenReader(installerPath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	var profile struct {
+		Data map[string]struct {
+			Client string `json:"client"`
+			Server string `json:"server"`
+		} `json:"data"`
+	}
+	found := false
+	for _, entry := range reader.File {
+		if entry.Name != "install_profile.json" {
+			continue
+		}
+		file, err := entry.Open()
+		if err != nil {
+			return err
+		}
+		decodeErr := json.NewDecoder(file).Decode(&profile)
+		_ = file.Close()
+		if decodeErr != nil {
+			return decodeErr
+		}
+		found = true
+		break
+	}
+	if !found {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	for _, entry := range profile.Data {
+		for _, raw := range []string{entry.Client, entry.Server} {
+			coordinate := strings.Trim(strings.TrimSpace(raw), "[]")
+			if !strings.HasPrefix(coordinate, "de.oceanlabs.mcp:mcp_config:") {
+				continue
+			}
+			// The classifier entries (mappings-merged@txt, etc.) are generated
+			// from the base mcp_config zip by the installer processors.
+			base := coordinate
+			if at := strings.LastIndex(base, "@"); at >= 0 {
+				base = base[:at]
+			}
+			if strings.Count(base, ":") != 2 {
+				continue
+			}
+			if seen[coordinate] {
+				continue
+			}
+			seen[coordinate] = true
+			relative, err := mojang.ArtifactPath(coordinate)
+			if err != nil {
+				return err
+			}
+			dest := filepath.Join(i.Paths.Libraries, filepath.FromSlash(relative))
+			if info, statErr := os.Stat(dest); statErr == nil && info.Size() > 100*1024 && validZipFile(dest) {
+				continue
+			}
+			_ = os.Remove(dest)
+			if progress != nil {
+				progress("loader", "正在准备 Forge 安装数据…", 0, 1)
+			}
+			original := "https://maven.minecraftforge.net/" + filepath.ToSlash(relative)
+			urls := mirror.CandidateURLs(sources, mirror.ResourceLibrary, original, mcVersion)
+			if err := downloadCandidates(ctx, urls, httpx.File{Dest: dest}); err != nil {
+				return fmt.Errorf("下载 %s 失败: %w", filepath.Base(dest), err)
+			}
+			if !validZipFile(dest) {
+				return fmt.Errorf("安装数据 %s 不是有效的压缩包", filepath.Base(dest))
+			}
+		}
+	}
+	return nil
+}
+
+func validZipFile(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() == 0 {
+		return false
+	}
+	reader, err := zip.OpenReader(path)
+	if err != nil {
+		return false
+	}
+	_ = reader.Close()
+	return true
+}
+
+func forgeInstallerMirror(sources []mirror.Source) string {
+	for _, source := range sources {
+		switch source.Kind {
+		case mirror.KindBMCLAPI, mirror.KindCustomBMCLAPI:
+			base := strings.TrimRight(strings.TrimSpace(source.BaseURL), "/")
+			if base == "" {
+				continue
+			}
+			if strings.HasSuffix(base, "/maven") {
+				return base + "/"
+			}
+			return base + "/maven/"
+		}
+	}
+	return ""
 }
 
 func forgeInstallerURL(mcVersion, loaderType, loaderVersion string) (string, error) {

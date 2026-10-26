@@ -217,7 +217,7 @@ func EnsureInjector(ctx context.Context, paths store.Paths) (string, error) {
 		}
 	}
 	jarPath := filepath.Join(dir, "authlib-injector-"+metadata.Version+".jar")
-	if util.Exists(jarPath) {
+	if util.Exists(jarPath) && strings.TrimSpace(metadata.Checksums.SHA256) == "" {
 		return jarPath, nil
 	}
 	if metadata.DownloadURL == "" {
@@ -225,6 +225,7 @@ func EnsureInjector(ctx context.Context, paths store.Paths) (string, error) {
 	}
 	if err := httpx.Download(ctx, httpx.File{
 		URL: metadata.DownloadURL, Dest: jarPath, SHA256: metadata.Checksums.SHA256,
+		Verify: strings.TrimSpace(metadata.Checksums.SHA256) != "",
 	}); err != nil {
 		return "", fmt.Errorf("下载 authlib-injector 失败: %w", err)
 	}

@@ -3,6 +3,8 @@ package loader
 import (
 	"strings"
 	"testing"
+
+	"MyMinecraftGoLuncher/internal/mirror"
 )
 
 func TestNormalize(t *testing.T) {
@@ -72,5 +74,19 @@ func TestCompareVersions(t *testing.T) {
 	}
 	if compareVersions("20.4.1", "21.0.0") >= 0 {
 		t.Fatal("20.4.1 should sort before 21.0.0")
+	}
+}
+
+func TestForgeInstallerMirror(t *testing.T) {
+	if got := forgeInstallerMirror([]mirror.Source{mirror.Official()}); got != "" {
+		t.Fatalf("official-only mirror = %q", got)
+	}
+	sources := []mirror.Source{mirror.Official(), mirror.BMCLAPI()}
+	if got := forgeInstallerMirror(sources); got != "https://bmclapi2.bangbang93.com/maven/" {
+		t.Fatalf("BMCLAPI mirror = %q", got)
+	}
+	custom := mirror.Source{Kind: mirror.KindCustomBMCLAPI, BaseURL: "https://mirror.example/maven"}
+	if got := forgeInstallerMirror([]mirror.Source{custom}); got != "https://mirror.example/maven/" {
+		t.Fatalf("custom BMCLAPI mirror = %q", got)
 	}
 }

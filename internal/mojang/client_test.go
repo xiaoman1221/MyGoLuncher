@@ -29,7 +29,7 @@ func TestLibraryDownloadsLegacyNativeAndClasses(t *testing.T) {
 			},
 		},
 	}
-	files, natives, err := client.libraryDownloads(Version{Libraries: []Library{lib}}, []mirror.Source{mirror.Official()})
+	files, natives, err := client.libraryDownloads(Version{Libraries: []Library{lib}}, []mirror.Source{mirror.Official()}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestLibraryDownloadsModernNative(t *testing.T) {
 			},
 		},
 	}
-	files, natives, err := client.libraryDownloads(Version{Libraries: []Library{lib}}, []mirror.Source{mirror.Official()})
+	files, natives, err := client.libraryDownloads(Version{Libraries: []Library{lib}}, []mirror.Source{mirror.Official()}, false)
 	if err != nil {
 		t.Fatal(err)
 	}

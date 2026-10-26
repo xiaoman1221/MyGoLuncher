@@ -96,3 +96,32 @@ func TestIncompatibilityExtraction(t *testing.T) {
 		t.Fatalf("curseforge incompatibilities = %#v", cfIDs)
 	}
 }
+
+func TestInstallDownloadedFileReplacesExisting(t *testing.T) {
+	modsDir := t.TempDir()
+	oldPath := filepath.Join(modsDir, "same.jar")
+	if err := os.WriteFile(oldPath, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	candidate := filepath.Join(t.TempDir(), "same.jar")
+	if err := os.WriteFile(candidate, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := installDownloadedFile(candidate, modsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != oldPath {
+		t.Fatalf("target = %s, want %s", got, oldPath)
+	}
+	data, err := os.ReadFile(oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "new" {
+		t.Fatalf("file content = %q", data)
+	}
+	if _, err := os.Stat(oldPath + ".old"); !os.IsNotExist(err) {
+		t.Fatalf("backup was not cleaned up: %v", err)
+	}
+}

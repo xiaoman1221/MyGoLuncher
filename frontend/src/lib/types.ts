@@ -39,6 +39,7 @@ export interface Settings {
   downloadWorkers: number;
   showGameConsole: boolean;
   showLauncherOnLaunch: boolean;
+  closeBehavior: 'ask' | 'minimize' | 'exit';
   hitokotoApiUrl: string;
   languageAuto: boolean;
   language: string;
@@ -125,6 +126,7 @@ export interface UpdateInfo {
   minVersion?: string;
   notes?: string;
   mandatory: boolean;
+  force?: boolean;
   available: boolean;
   hasWeb: boolean;
   hasApp: boolean;
@@ -203,6 +205,12 @@ export interface VersionList {
   latestSnapshot: string;
 }
 
+export interface LoaderVersionInfo {
+  version: string;
+  stable: boolean;
+  recommended: boolean;
+}
+
 export interface TaskProgress {
   taskId: string;
   title: string;
@@ -213,6 +221,33 @@ export interface TaskProgress {
   percent: number;
   done: boolean;
   failed: boolean;
+  canceled: boolean;
+}
+
+export interface TaskLogEntry {
+  seq: number;
+  time: string;
+  stage: string;
+  message: string;
+  current: number;
+  total: number;
+  done: boolean;
+  failed: boolean;
+  canceled: boolean;
+}
+
+export interface TaskLog {
+  taskId: string;
+  title: string;
+  done: boolean;
+  failed: boolean;
+  canceled: boolean;
+  entries: TaskLogEntry[];
+}
+
+export interface TaskLogEvent {
+  taskId: string;
+  entry: TaskLogEntry;
 }
 
 export interface LaunchState {
@@ -677,6 +712,20 @@ export interface LanSyncResult {
   bytes: number;
 }
 
+export interface LanVersionPreview {
+  peer: LanInstanceInfo;
+  files: number;
+  bytes: number;
+  dirs: string[];
+  digest: string;
+  warnings: string[];
+}
+
+export interface LanVersionInstallResult {
+  sync: LanSyncResult;
+  instance: InstanceView;
+}
+
 export type PageKey =
   | 'home'
   | 'versions'
@@ -685,7 +734,8 @@ export type PageKey =
   | 'modpacks'
   | 'servers'
   | 'lan'
-  | 'settings';
+  | 'settings'
+  | 'about';
 export type Theme = 'dark' | 'light';
 export type ResourceType = 'mod' | 'shader' | 'resourcepack' | 'datapack' | 'modpack';
 export type ResourceSource = 'modrinth' | 'curseforge';

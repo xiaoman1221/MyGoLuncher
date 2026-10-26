@@ -1,4 +1,4 @@
-import { Boxes, FolderOpen, Home, LayoutList, PackageOpen, RadioTower, Server, Settings, Settings2, TerminalSquare } from 'lucide-react';
+import { Boxes, FolderOpen, Home, Info, LayoutList, PackageOpen, RadioTower, Server, Settings, Settings2, TerminalSquare } from 'lucide-react';
 import { useApp } from '../lib/app-context';
 import { accountKindKey } from '../lib/i18n';
 import { cn, initials } from '../lib/format';
@@ -7,7 +7,7 @@ import { LogoMark } from './LogoMark';
 
 const navItems: Array<{
   key: PageKey;
-  labelKey: 'common.home' | 'common.versionDownload' | 'instanceSettings.title' | 'resources.title' | 'modpacks.title' | 'servers.title' | 'lan.title' | 'common.settings';
+  labelKey: 'common.home' | 'common.versionDownload' | 'instanceSettings.title' | 'resources.title' | 'modpacks.title' | 'servers.title' | 'lan.title' | 'common.settings' | 'common.about';
   icon: typeof Home;
 }> = [
   { key: 'home', labelKey: 'common.home', icon: Home },
@@ -18,6 +18,7 @@ const navItems: Array<{
   { key: 'servers', labelKey: 'servers.title', icon: Server },
   { key: 'lan', labelKey: 'lan.title', icon: RadioTower },
   { key: 'settings', labelKey: 'common.settings', icon: Settings },
+  { key: 'about', labelKey: 'common.about', icon: Info },
 ];
 
 export function Sidebar() {
@@ -91,11 +92,11 @@ export function Sidebar() {
         <span className={`profile-status kind-${selectedAccount?.kind ?? 'offline'}`} />
       </button>
 
-      <div className="sidebar-foot">
-        <span>v{bootstrap?.version ?? '1.0.0'}</span>
+      <button type="button" className="sidebar-foot" onClick={() => navigate('about')} title={t('common.about')}>
+        <span>v{bootstrap?.version ?? '1.0.2'}</span>
         <span className="foot-dot" />
         <span title={t('fun.mygoSlogan')}>MYGO</span>
-      </div>
+      </button>
     </aside>
   );
 }

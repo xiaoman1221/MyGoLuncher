@@ -158,7 +158,8 @@ func (l *Launcher) Start(ctx context.Context, opts Options) (*Process, error) {
 	if err != nil {
 		return nil, err
 	}
-	classpath, err := l.buildClasspath(merged, chain)
+	skipVanillaClient := isModernModLoader(merged, inst.Loader)
+	classpath, err := l.buildClasspath(merged, chain, skipVanillaClient)
 	if err != nil {
 		return nil, err
 	}
@@ -316,7 +317,7 @@ func (l *Launcher) prepareNatives(merged mojang.Version, gameDir, versionID stri
 	return base, effective, nil
 }
 
-func (l *Launcher) buildClasspath(merged mojang.Version, chain []mojang.Version) (string, error) {
+func (l *Launcher) buildClasspath(merged mojang.Version, chain []mojang.Version, skipVanillaClient bool) (string, error) {
 	var entries []string
 	seen := map[string]bool{}
 	for _, lib := range merged.Libraries {
@@ -350,6 +351,16 @@ func (l *Launcher) buildClasspath(merged mojang.Version, chain []mojang.Version)
 			entries = append(entries, full)
 		}
 	}
+	if skipVanillaClient {
+		// Modern Forge/NeoForge use the patched client jar from their installer
+		// and supply it through FML's module locator. Adding the vanilla client
+		// jar as well makes both jars export the same packages and ModLauncher
+		// fails with a module ResolutionException.
+		if len(entries) == 0 {
+			return "", errors.New("版本档案没有可用的运行库")
+		}
+		return strings.Join(entries, string(os.PathListSeparator)), nil
+	}
 	clientJar := ""
 	for _, v := range chain {
 		if _, ok := v.Downloads["client"]; ok {
@@ -365,6 +376,16 @@ func (l *Launcher) buildClasspath(merged mojang.Version, chain []mojang.Version)
 	}
 	entries = append(entries, clientJar)
 	return strings.Join(entries, string(os.PathListSeparator)), nil
+}
+
+func isModernModLoader(version mojang.Version, loaderType string) bool {
+	switch strings.ToLower(strings.TrimSpace(loaderType)) {
+	case "forge", "neoforge", "neo-forge":
+	default:
+		return false
+	}
+	mainClass := strings.ToLower(version.MainClass)
+	return strings.Contains(mainClass, "bootstraplauncher") || strings.Contains(mainClass, "modlauncher")
 }
 
 func (l *Launcher) prepareLegacyAssets(merged mojang.Version, gameDir string) (string, error) {
@@ -455,7 +476,7 @@ func (l *Launcher) buildArguments(merged mojang.Version, opts Options, gameDir, 
 		"version_type":          versionType,
 		"natives_directory":     nativesBaseDir,
 		"launcher_name":         "MyGoLuncher",
-		"launcher_version":      "1.0.0",
+		"launcher_version":      "1.0.2",
 		"classpath":             classpath,
 		"classpath_separator":   string(os.PathListSeparator),
 		"library_directory":     l.Paths.Libraries,
@@ -497,7 +518,7 @@ func (l *Launcher) buildArguments(merged mojang.Version, opts Options, gameDir, 
 		fmt.Sprintf("-Xmx%dM", memory),
 		"-Djava.library.path=" + nativesPath,
 		"-Dminecraft.launcher.brand=MyGoLuncher",
-		"-Dminecraft.launcher.version=1.0.0",
+		"-Dminecraft.launcher.version=1.0.2",
 		"-Dlog4j2.formatMsgNoLookups=true",
 	}
 	if merged.Logging.Client != nil {

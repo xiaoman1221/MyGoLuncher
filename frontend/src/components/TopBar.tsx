@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { useApp } from '../lib/app-context';
+import { api } from '../lib/api';
 import { accountKindKey, type MessageKey } from '../lib/i18n';
 import { initials } from '../lib/format';
 import type { PageKey } from '../lib/types';
@@ -25,6 +26,7 @@ const pageKeys: Record<PageKey, MessageKey> = {
   servers: 'topbar.page.servers',
   lan: 'topbar.page.lan',
   settings: 'topbar.page.settings',
+  about: 'common.about',
 };
 
 type WailsRuntime = {
@@ -61,12 +63,12 @@ export function TopBar() {
     return () => window.removeEventListener('resize', syncMaximised);
   }, [isDemo, syncMaximised]);
 
-  const minimise = () => wailsRuntime()?.WindowMinimise?.();
+  const minimise = () => void api.minimizeWindow();
   const toggleMaximise = () => {
     wailsRuntime()?.WindowToggleMaximise?.();
     window.setTimeout(syncMaximised, 160);
   };
-  const close = () => wailsRuntime()?.Quit?.();
+  const close = () => void api.requestClose();
 
   return (
     <div

@@ -22,10 +22,12 @@ const (
 	DirShaderpacks   = "shaderpacks"
 	DirResourcepacks = "resourcepacks"
 	DirConfig        = "config"
+	DirAll           = "*"
 )
 
-// AllowedDirs is the complete set of directories that may be shared.
-var AllowedDirs = []string{DirMods, DirShaderpacks, DirResourcepacks, DirConfig}
+// AllowedDirs is the complete set of directories that may be shared. DirAll
+// shares the complete isolated version directory, including saves and options.
+var AllowedDirs = []string{DirMods, DirShaderpacks, DirResourcepacks, DirConfig, DirAll}
 
 // DefaultDirs is the safe default: mods, shaders and resource packs.
 var DefaultDirs = []string{DirMods, DirShaderpacks, DirResourcepacks}
@@ -51,6 +53,7 @@ type FileEntry struct {
 type Manifest struct {
 	Instance  InstanceInfo `json:"instance"`
 	Dirs      []string     `json:"dirs"`
+	Full      bool         `json:"full,omitempty"`
 	Files     []FileEntry  `json:"files"`
 	CreatedAt string       `json:"createdAt"`
 }
@@ -143,16 +146,26 @@ func BuildPlan(localDir string, manifest Manifest) (Plan, error) {
 		plan.SameFiles++
 	}
 
+	full := containsDir(manifest.Dirs, DirAll)
 	for _, dir := range manifest.Dirs {
 		base := filepath.Join(localDir, dir)
+		if full && dir == DirAll {
+			base = localDir
+		}
 		if stat, err := os.Stat(base); err != nil || !stat.IsDir() {
 			continue
 		}
 		_ = filepath.WalkDir(base, func(filePath string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			if walkErr != nil {
 				return nil
 			}
-			if skipSyncName(entry.Name()) {
+			if entry.IsDir() {
+				if full && filePath != base && skipFullDir(entry.Name()) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() || skipSyncName(entry.Name()) {
 				return nil
 			}
 			rel, err := filepath.Rel(localDir, filePath)
@@ -187,6 +200,30 @@ func (p *Plan) appendChange(change FileChange) {
 	}
 }
 
+// ManifestDigest is the confirmation digest for a peer manifest.
+func ManifestDigest(manifest Manifest) string {
+	return manifestDigest(manifest)
+}
+
+func containsDir(dirs []string, target string) bool {
+	for _, dir := range dirs {
+		if dir == target {
+			return true
+		}
+	}
+	return false
+}
+
+// skipFullDir excludes generated/runtime-heavy directories from a complete
+// version share. Saves, options, mods, configs and resource packs stay.
+func skipFullDir(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "logs", "crash-reports", "natives", "cache", ".cache", "temp", "downloads":
+		return true
+	}
+	return false
+}
+
 func manifestDigest(manifest Manifest) string {
 	raw, _ := json.Marshal(manifest)
 	sum := sha256.Sum256(raw)
@@ -219,6 +256,9 @@ func NormalizeDirs(dirs []string) ([]string, error) {
 		dir = strings.Trim(dir, "/")
 		if dir == "" {
 			continue
+		}
+		if dir == DirAll {
+			return []string{DirAll}, nil
 		}
 		if !allowed[dir] {
 			return nil, fmt.Errorf("不支持共享的目录: %s", dir)
@@ -255,6 +295,11 @@ func safeRelativePath(rel string, dirs []string) (string, error) {
 	cleaned := path.Clean(rel)
 	if cleaned == "." || cleaned != rel {
 		return "", errors.New("共享路径未规范化")
+	}
+	for _, dir := range dirs {
+		if dir == DirAll {
+			return cleaned, nil
+		}
 	}
 	top := strings.SplitN(cleaned, "/", 2)[0]
 	for _, dir := range dirs {

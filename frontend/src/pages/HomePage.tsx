@@ -12,6 +12,7 @@ import {
   Settings2,
   Square,
   TerminalSquare,
+  Wrench,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
@@ -26,8 +27,9 @@ export function HomePage() {
   const {
     instances, selectedInstance, selectedId, selectInstance, settings, selectedAccount,
     navigate, openCreate, openEdit, askDelete, launch, stop, openConsole, openInstanceFolder,
-    t, locale, launchingId,
+    t, locale, launchingId, hasFeature, openLicense, pushToast, refreshInstances,
   } = useApp();
+  const [repairingId, setRepairingId] = useState<string | null>(null);
   const [hitokoto, setHitokoto] = useState<Hitokoto | null>(null);
   const [hitokotoLoading, setHitokotoLoading] = useState(true);
   const [hitokotoError, setHitokotoError] = useState('');
@@ -64,6 +66,23 @@ export function HomePage() {
   useEffect(() => {
     void loadHitokoto();
   }, [loadHitokoto]);
+
+  const repairVersion = async (instanceId: string) => {
+    if (!hasFeature('versions')) {
+      openLicense();
+      return;
+    }
+    setRepairingId(instanceId);
+    try {
+      await api.repairVersion(instanceId);
+      pushToast('success', t('instanceSettings.repairDone'));
+      await refreshInstances();
+    } catch (reason) {
+      pushToast('error', t('instanceSettings.repairFailed'), (reason as Error).message);
+    } finally {
+      setRepairingId(null);
+    }
+  };
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -144,6 +163,20 @@ export function HomePage() {
                 </button>
                 <button type="button" className="btn btn-ghost" onClick={() => openEdit(selectedInstance.id)}>
                   <Settings2 size={16} /> {t('common.versionSettings')}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  disabled={repairingId === selectedInstance.id}
+                  title={t('instanceSettings.repairHint')}
+                  onClick={() => void repairVersion(selectedInstance.id)}
+                >
+                  {repairingId === selectedInstance.id
+                    ? <LoaderCircle size={16} className="spin" />
+                    : <Wrench size={16} />}
+                  {repairingId === selectedInstance.id
+                    ? t('instanceSettings.repairing')
+                    : t('instanceSettings.repair')}
                 </button>
               </>
             )}

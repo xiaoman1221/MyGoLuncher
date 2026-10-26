@@ -79,6 +79,9 @@ func (a *App) StartLanShare(instanceID string, dirs []string) (lan.Snapshot, err
 	if err != nil {
 		return lan.Snapshot{}, err
 	}
+	if len(dirs) == 1 && dirs[0] == lansync.DirAll && !a.store.Settings().VersionIsolation {
+		return lan.Snapshot{}, errors.New("共享整个版本需要先开启版本隔离")
+	}
 
 	a.lanShare.mu.Lock()
 	previous := a.lanShare.server
@@ -90,8 +93,8 @@ func (a *App) StartLanShare(instanceID string, dirs []string) (lan.Snapshot, err
 		previous.Stop()
 	}
 
-	task := a.newTask("准备局域网共享 · " + instance.Name)
-	server, err := lansync.StartServer(a.context(), a.instanceDir(instance), lansync.InstanceInfo{
+	task := a.newTask("准备版本共享 · " + instance.Name)
+	server, err := lansync.StartServer(task.context(), a.instanceDir(instance), lansync.InstanceInfo{
 		ID:              instance.ID,
 		Name:            instance.Name,
 		MCVersion:       instance.MCVersion,
@@ -278,21 +281,189 @@ func (a *App) prepareLanSync(ctx context.Context, peerID, targetInstanceID strin
 	return prepared, nil
 }
 
+// LanVersionPreview describes a complete version shared by another launcher.
+type LanVersionPreview struct {
+	Peer     lansync.InstanceInfo `json:"peer"`
+	Files    int                  `json:"files"`
+	Bytes    int64                `json:"bytes"`
+	Dirs     []string             `json:"dirs"`
+	Digest   string               `json:"digest"`
+	Warnings []string             `json:"warnings"`
+}
+
+// PreviewLanVersion inspects a peer that shares its complete isolated version.
+func (a *App) PreviewLanVersion(peerID string) (LanVersionPreview, error) {
+	if err := a.requireFeature(licensepkg.FeatureLAN); err != nil {
+		return LanVersionPreview{}, err
+	}
+	if err := a.ready(); err != nil {
+		return LanVersionPreview{}, err
+	}
+	ctx, cancel := context.WithTimeout(a.context(), 30*time.Second)
+	defer cancel()
+	prepared, err := a.prepareLanVersion(ctx, peerID)
+	if err != nil {
+		return LanVersionPreview{}, err
+	}
+	return prepared.preview, nil
+}
+
+type preparedLanVersion struct {
+	target   lan.SyncTarget
+	manifest lansync.Manifest
+	baseURL  string
+	preview  LanVersionPreview
+}
+
+func (a *App) prepareLanVersion(ctx context.Context, peerID string) (preparedLanVersion, error) {
+	var prepared preparedLanVersion
+	if a.lanSvc == nil {
+		return prepared, errors.New("局域网发现尚未初始化")
+	}
+	target, ok := a.lanSvc.SyncTarget(peerID)
+	if !ok {
+		return prepared, errors.New("该玩家没有共享版本，或已经离线")
+	}
+	baseURL := "http://" + net.JoinHostPort(target.Address, strconv.Itoa(target.Port))
+	manifest, err := lansync.FetchManifest(ctx, baseURL, target.Token)
+	if err != nil {
+		return prepared, err
+	}
+	if !manifest.Full || !containsString(manifest.Dirs, lansync.DirAll) {
+		return prepared, errors.New("该玩家共享的不是完整版本")
+	}
+	if !containsString(target.Dirs, lansync.DirAll) {
+		return prepared, errors.New("共享模式与广播信息不一致")
+	}
+	preview := LanVersionPreview{
+		Peer:     manifest.Instance,
+		Files:    len(manifest.Files),
+		Dirs:     append([]string(nil), manifest.Dirs...),
+		Digest:   lansync.ManifestDigest(manifest),
+		Warnings: []string{},
+	}
+	for _, file := range manifest.Files {
+		preview.Bytes += file.Size
+	}
+	if !a.store.Settings().VersionIsolation {
+		preview.Warnings = append(preview.Warnings, "完整版本安装需要开启版本隔离")
+	}
+	if strings.TrimSpace(manifest.Instance.MCVersion) == "" {
+		preview.Warnings = append(preview.Warnings, "共享版本没有 Minecraft 版本信息")
+	}
+	if strings.TrimSpace(manifest.Instance.Loader) != "" && normalizeLoader(manifest.Instance.Loader) != "vanilla" &&
+		strings.TrimSpace(manifest.Instance.LoaderVersion) == "" {
+		preview.Warnings = append(preview.Warnings, "共享版本没有加载器版本信息，安装时可能需要手动选择")
+	}
+	prepared.target = target
+	prepared.manifest = manifest
+	prepared.baseURL = baseURL
+	prepared.preview = preview
+	return prepared, nil
+}
+
+// LanVersionInstallResult is returned after a complete shared version has been
+// copied and installed.
+type LanVersionInstallResult struct {
+	Sync     lansync.SyncResult `json:"sync"`
+	Instance InstanceView       `json:"instance"`
+}
+
+// InstallLanVersion copies a complete shared version into a new isolated
+// instance and installs its vanilla/loader runtime.
+func (a *App) InstallLanVersion(peerID, expectedDigest string) (result LanVersionInstallResult, err error) {
+	if err := a.requireFeature(licensepkg.FeatureLAN); err != nil {
+		return result, err
+	}
+	if err := a.ready(); err != nil {
+		return result, err
+	}
+	if strings.TrimSpace(expectedDigest) == "" {
+		return result, errors.New("请先确认要安装的共享版本")
+	}
+	if !a.store.Settings().VersionIsolation {
+		return result, errors.New("安装完整版本前请先在设置中开启版本隔离")
+	}
+	task := a.newTask("安装版本共享")
+	defer func() { task.finish(err) }()
+	ctx, cancel := context.WithTimeout(task.context(), 30*time.Minute)
+	defer cancel()
+	prepared, err := a.prepareLanVersion(ctx, peerID)
+	if err != nil {
+		return result, err
+	}
+	if prepared.preview.Digest != expectedDigest {
+		return result, errors.New("共享版本已变化，请重新确认")
+	}
+	a.lanSyncMu.Lock()
+	defer a.lanSyncMu.Unlock()
+
+	peer := prepared.preview.Peer
+	if strings.TrimSpace(peer.MCVersion) == "" {
+		return result, errors.New("共享版本缺少 Minecraft 版本信息")
+	}
+	name := strings.TrimSpace(peer.Name)
+	if name == "" {
+		name = strings.TrimSpace(peer.MCVersion) + " 版本"
+	}
+	name += " · 版本共享"
+	inst, err := a.store.CreateInstance(store.Instance{
+		Name:            name,
+		MCVersion:       peer.MCVersion,
+		Loader:          normalizeLoader(peer.Loader),
+		LoaderVersion:   peer.LoaderVersion,
+		LaunchVersionID: peer.LaunchVersionID,
+		Source:          "lan",
+	})
+	if err != nil {
+		return result, err
+	}
+	cleanup := func(cause error) (LanVersionInstallResult, error) {
+		_ = a.store.DeleteInstance(inst.ID, true)
+		return result, cause
+	}
+	targetDir := a.store.InstanceDir(inst.ID)
+	task.update("pack", "正在复制共享版本文件…", 0, int64(prepared.preview.Files))
+	result.Sync, err = lansync.Sync(ctx, prepared.baseURL, prepared.target.Token, targetDir, prepared.manifest, func(stage, message string, current, total int64) {
+		task.update(stage, message, current, total)
+	})
+	if err != nil {
+		return cleanup(err)
+	}
+	task.update("runtime", "正在安装共享版本的运行库与加载器…", 0, 0)
+	if err := a.installInstanceRuntime(ctx, &inst, task); err != nil {
+		return cleanup(fmt.Errorf("文件已复制，但运行库安装失败: %w", err))
+	}
+	a.emitInstancesChanged()
+	result.Instance = a.instanceView(inst)
+	return result, nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 // SyncFromLanPeer downloads a peer's shared instance content into a local
 // instance. expectedDigest comes from PreviewLanSync; it prevents applying a
 // changed manifest without a fresh confirmation.
-func (a *App) SyncFromLanPeer(peerID, targetInstanceID, expectedDigest string) (lansync.SyncResult, error) {
+func (a *App) SyncFromLanPeer(peerID, targetInstanceID, expectedDigest string) (result lansync.SyncResult, err error) {
 	if err := a.requireFeature(licensepkg.FeatureLAN); err != nil {
 		return lansync.SyncResult{}, err
 	}
-	var result lansync.SyncResult
 	if err := a.ready(); err != nil {
 		return result, err
 	}
 	if strings.TrimSpace(expectedDigest) == "" {
 		return result, errors.New("请先确认局域网版本差异")
 	}
-	ctx, cancel := context.WithTimeout(a.context(), 30*time.Minute)
+	task := a.newTask("局域网同步")
+	defer func() { task.finish(err) }()
+	ctx, cancel := context.WithTimeout(task.context(), 30*time.Minute)
 	defer cancel()
 	prepared, err := a.prepareLanSync(ctx, peerID, targetInstanceID)
 	if err != nil {
@@ -310,7 +481,6 @@ func (a *App) SyncFromLanPeer(peerID, targetInstanceID, expectedDigest string) (
 	a.lanSyncMu.Lock()
 	defer a.lanSyncMu.Unlock()
 
-	task := a.newTask("局域网同步 · " + prepared.target.Instance)
 	if prepared.preview.Plan.NewFiles > 0 || prepared.preview.Plan.ChangedFiles > 0 {
 		result, err = lansync.Sync(ctx, prepared.baseURL, prepared.target.Token, a.instanceDir(prepared.instance), prepared.manifest, func(stage, message string, current, total int64) {
 			task.update(stage, message, current, total)

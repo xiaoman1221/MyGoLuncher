@@ -106,7 +106,7 @@
   max-width: 100%;
   overflow: hidden;
   font-family: var(--font-display);
-  font-size: 24px;
+  font-size: 26px;
   font-weight: 600;
   letter-spacing: -0.025em;
   text-overflow: ellipsis;
@@ -115,7 +115,7 @@
 
 .launch-copy p {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .launch-progress {
@@ -139,14 +139,14 @@
 
 .launch-status {
   color: var(--text-soft);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
 }
 
 .launch-hint {
   max-width: 330px;
   color: var(--muted-2);
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -211,7 +211,7 @@
 
 .modal-header h2 {
   font-family: var(--font-display);
-  font-size: 23px;
+  font-size: 25px;
   font-weight: 600;
   letter-spacing: -0.025em;
   line-height: 1.15;
@@ -220,7 +220,7 @@
 .modal-header p {
   max-width: 620px;
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 13.5px;
   line-height: 1.55;
 }
 
@@ -264,14 +264,14 @@
   align-items: center;
   gap: 6px;
   color: var(--muted-2);
-  font-size: 10px;
+  font-size: 11.5px;
   line-height: 1.5;
 }
 
 .modal-note {
   margin-top: 12px;
   color: var(--muted-2);
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.55;
 }
 
@@ -339,13 +339,13 @@
 }
 
 .loader-option strong {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 750;
 }
 
 .loader-option small {
   color: var(--muted-2);
-  font-size: 8.5px;
+  font-size: 10px;
 }
 
 /* Version picker */
@@ -384,7 +384,7 @@
   align-items: center;
   gap: 8px;
   color: var(--muted-2);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .select-chevron {
@@ -400,7 +400,7 @@
 
 .mc-version {
   font-family: var(--font-display);
-  font-size: 14px;
+  font-size: 15.5px;
   font-weight: 600;
 }
 
@@ -434,7 +434,7 @@
   outline: 0;
   background: none;
   color: var(--text);
-  font-size: 11.5px;
+  font-size: 13.5px;
 }
 
 .version-search input::placeholder {
@@ -482,7 +482,7 @@
 .version-empty {
   padding: 18px;
   color: var(--muted-2);
-  font-size: 11px;
+  font-size: 13px;
   text-align: center;
 }
 
@@ -546,14 +546,14 @@
 
 .toast-copy strong {
   color: var(--text);
-  font-size: 11.5px;
+  font-size: 13.5px;
   font-weight: 750;
 }
 
 .toast-copy span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.45;
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -625,7 +625,7 @@
   border-radius: 4px;
   background: var(--hover);
   color: var(--muted);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 700;
 }
 
@@ -663,7 +663,7 @@
 
 .task-tray-minimized-copy {
   color: var(--text-soft);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 650;
   white-space: nowrap;
 }
@@ -718,7 +718,7 @@
 .task-item-copy strong {
   overflow: hidden;
   color: var(--text-soft);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -727,7 +727,7 @@
 .task-item-copy span {
   overflow: hidden;
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -735,7 +735,7 @@
 .task-stage {
   flex: 0 0 auto;
   color: var(--muted-2);
-  font-size: 8.5px;
+  font-size: 10px;
   font-weight: 650;
   text-transform: uppercase;
 }
@@ -812,7 +812,7 @@
   gap: 7px;
   color: var(--text-soft);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11.5px;
   font-weight: 700;
   letter-spacing: 0.06em;
 }
@@ -827,7 +827,7 @@
   gap: 6px;
   margin-left: auto;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10.5px;
   font-weight: 650;
 }
 
@@ -852,7 +852,7 @@
 .console-meta strong {
   overflow: hidden;
   color: var(--text);
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -860,7 +860,7 @@
 
 .console-meta span {
   color: var(--muted);
-  font-size: 9.5px;
+  font-size: 11px;
 }
 
 .console-actions {
@@ -879,7 +879,7 @@
   gap: 8px;
   color: var(--text-soft);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.65;
   word-break: break-word;
 }
@@ -902,7 +902,7 @@
   gap: 9px;
   height: 100%;
   color: var(--muted-2);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .console-foot {
@@ -918,7 +918,7 @@
 
 .console-hint {
   color: var(--muted-2);
-  font-size: 8.5px;
+  font-size: 10px;
 }
 
 /* Shared danger / checkbox */
@@ -950,13 +950,13 @@
 }
 
 .danger-callout strong {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 750;
 }
 
 .danger-callout p {
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
@@ -983,13 +983,13 @@
 
 .checkbox-row strong {
   color: var(--text-soft);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
 }
 
 .checkbox-row small {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11.5px;
 }
 
 @media (max-width: 1160px) {
@@ -1009,8 +1009,174 @@
 .launch-fun {
   max-width: 330px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   line-height: 1.55;
   text-align: center;
   animation: boot-fun-in 0.45s var(--ease-out);
+}
+
+
+/* ---- Expandable background task log ---- */
+.task-item {
+  overflow: hidden;
+  padding: 0;
+}
+
+.task-item-summary {
+  padding: 10px 11px;
+  cursor: pointer;
+  outline: none;
+}
+
+.task-item-summary:focus-visible {
+  box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb), 0.45);
+}
+
+.task-item-summary:hover {
+  background: var(--hover);
+}
+
+.task-item.is-open {
+  border-color: rgba(var(--accent-rgb), 0.35);
+}
+
+.task-log {
+  border-top: 1px solid var(--line);
+  background: var(--input-bg);
+}
+
+.task-log-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  color: var(--muted-2);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.task-log-head > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.task-log-close {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.task-log-close:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.task-log-body {
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 0 10px 9px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.task-log-line {
+  display: grid;
+  grid-template-columns: 52px 68px minmax(0, 1fr);
+  gap: 6px;
+  padding: 2px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.025);
+}
+
+.task-log-time { color: var(--muted-2); }
+.task-log-stage { color: var(--accent); opacity: 0.8; }
+.task-log-message { color: var(--muted); overflow-wrap: anywhere; }
+.task-log-line.is-error .task-log-message { color: var(--red); }
+
+.task-log-empty {
+  padding: 8px 0;
+  color: var(--muted-2);
+  font-family: var(--font-body);
+  font-size: 11px;
+}
+
+.task-log-empty.is-error { color: var(--red); }
+
+.task-item.is-canceled { border-color: rgba(183, 121, 31, 0.3); }
+.task-item.is-canceled .task-state-icon { color: var(--gold); }
+.task-item.is-canceled .task-progress-bar { background: var(--gold); }
+
+.task-cancel {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.task-cancel:hover {
+  border-color: rgba(217, 63, 58, 0.35);
+  color: var(--red);
+}
+
+.task-log-line.is-canceled .task-log-message { color: var(--gold); }
+
+/* ---- Exit confirmation ---- */
+.exit-dialog {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.exit-dialog-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.10);
+  color: var(--accent);
+}
+
+.exit-dialog-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.exit-dialog-copy strong {
+  color: var(--text-soft);
+  font-size: 12px;
+}
+
+.exit-dialog-copy p {
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.exit-dialog-copy .exit-dialog-warning {
+  color: var(--orange);
+}
+
+.exit-remember {
+  margin-top: 12px;
 }

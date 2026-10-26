@@ -154,6 +154,7 @@ func (m *Manager) Install(ctx context.Context, feature int, progress ProgressFun
 		Dest:   archivePath,
 		SHA256: pkg.SHA256,
 		Size:   pkg.Size,
+		Verify: pkg.SHA256 != "",
 		Progress: func(done, total int64) {
 			if progress != nil {
 				progress("download", fmt.Sprintf("正在下载 Temurin Java %d…", feature), done, total)

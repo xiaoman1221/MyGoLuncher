@@ -1,18 +1,40 @@
 import { useState } from 'react';
-import { FolderOpen, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { FolderOpen, LoaderCircle, Pencil, Plus, RefreshCw, Settings2, Trash2, Wrench } from 'lucide-react';
 import { useApp } from '../lib/app-context';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { ModUpdatesModal } from '../components/ModUpdatesModal';
+import { ResourceSettingsModal } from '../components/ResourceSettingsModal';
 import { cn, loaderLabel, loaderTone } from '../lib/format';
+import { api } from '../lib/api';
 
 export function InstanceSettingsPage() {
   const {
-    instances, settings, openCreate, openEdit, askDelete, openInstanceFolder, refreshInstances, t,
+    instances, settings, openCreate, openEdit, askDelete, openInstanceFolder, refreshInstances,
+    hasFeature, openLicense, pushToast, t,
   } = useApp();
   const isolated = settings?.versionIsolation !== false;
   const [updatesId, setUpdatesId] = useState<string | null>(null);
+  const [resourcesId, setResourcesId] = useState<string | null>(null);
+  const [repairingId, setRepairingId] = useState<string | null>(null);
   const updateInstance = instances.find((instance) => instance.id === updatesId) ?? null;
+
+  const repairVersion = async (instanceId: string) => {
+    if (!hasFeature('versions')) {
+      openLicense();
+      return;
+    }
+    setRepairingId(instanceId);
+    try {
+      await api.repairVersion(instanceId);
+      pushToast('success', t('instanceSettings.repairDone'));
+      refreshInstances();
+    } catch (reason) {
+      pushToast('error', t('instanceSettings.repairFailed'), (reason as Error).message);
+    } finally {
+      setRepairingId(null);
+    }
+  };
 
   return (
     <div className="page instance-settings-page">
@@ -62,6 +84,28 @@ export function InstanceSettingsPage() {
                 <code className="version-settings-dir" title={instance.gameDir}>{instance.gameDir}</code>
               </div>
               <div className="version-settings-actions">
+                {(instance.loader || 'vanilla').toLowerCase() !== 'vanilla' && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm version-resource-button"
+                    title={t('instanceSettings.resourcesHint')}
+                    onClick={() => setResourcesId(instance.id)}
+                  >
+                    <Settings2 size={14} /> {t('instanceSettings.resources')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={instance.running || repairingId === instance.id}
+                  title={instance.running ? t('instanceSettings.repairRunning') : t('instanceSettings.repairHint')}
+                  onClick={() => void repairVersion(instance.id)}
+                >
+                  {repairingId === instance.id
+                    ? <LoaderCircle size={14} className="spin" />
+                    : <Wrench size={14} />}
+                  {repairingId === instance.id ? t('instanceSettings.repairing') : t('instanceSettings.repair')}
+                </button>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => setUpdatesId(instance.id)}>
                   <RefreshCw size={14} /> {t('modUpdates.check')}
                 </button>
@@ -87,6 +131,12 @@ export function InstanceSettingsPage() {
           onUpdated={refreshInstances}
         />
       )}
+
+      <ResourceSettingsModal
+        id={resourcesId}
+        open={Boolean(resourcesId)}
+        onClose={() => setResourcesId(null)}
+      />
     </div>
   );
 }

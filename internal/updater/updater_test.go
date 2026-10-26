@@ -129,3 +129,75 @@ func TestCompareVersions(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckAndApplyWebUpdateFromAPI(t *testing.T) {
+	payload := testZip(t)
+	sum := sha256.Sum256(payload)
+	var server *httptest.Server
+	manifest := Manifest{
+		Version: "1.1.0",
+		Force:   true,
+		Web: &Artifact{
+			Version: "1.1.0", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(payload)),
+		},
+	}
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/update":
+			if r.Header.Get("X-API-Key") != "test-product-key" {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"code":"invalid_api_key"}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(manifest)
+		case "/web.zip":
+			_, _ = w.Write(payload)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	manifest.Web.URL = server.URL + "/web.zip"
+
+	oldURL, oldKey, oldManifest := APIBaseURL, APIKey, ManifestURL
+	ConfigureAPI(server.URL, "test-product-key")
+	ManifestURL = ""
+	defer func() {
+		APIBaseURL, APIKey, ManifestURL = oldURL, oldKey, oldManifest
+	}()
+
+	info, err := Check(context.Background(), "1.0.0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Configured || !info.Available || !info.HasWeb || !info.Force {
+		t.Fatalf("unexpected API update info: %#v", info)
+	}
+	root := t.TempDir()
+	if _, err := ApplyWeb(context.Background(), root); err != nil {
+		t.Fatal(err)
+	}
+	if version := CurrentWebVersion(root); version != "1.1.0" {
+		t.Fatalf("version = %q", version)
+	}
+}
+
+func TestAPINoUpdateIsNotAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"code":"update_not_available"}`))
+	}))
+	defer server.Close()
+	oldURL, oldKey, oldManifest := APIBaseURL, APIKey, ManifestURL
+	ConfigureAPI(server.URL, "test-product-key")
+	ManifestURL = ""
+	defer func() { APIBaseURL, APIKey, ManifestURL = oldURL, oldKey, oldManifest }()
+
+	info, err := Check(context.Background(), "1.0.0", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Configured || info.Available {
+		t.Fatalf("unexpected no-update info: %#v", info)
+	}
+}

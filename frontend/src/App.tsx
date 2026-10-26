@@ -39,6 +39,7 @@ import { AccountModal } from './components/AccountModal';
 import { LaunchOverlay } from './components/LaunchOverlay';
 import { LicenseGate } from './components/LicenseGate';
 import { ElevationGate } from './components/ElevationGate';
+import { ExitConfirmModal } from './components/ExitConfirmModal';
 import { PaidFeaturePage } from './components/PaidFeaturePage';
 import { HomePage } from './pages/HomePage';
 import { VersionsPage } from './pages/VersionsPage';
@@ -48,6 +49,7 @@ import { ModpacksPage } from './pages/ModpacksPage';
 import { ServersPage } from './pages/ServersPage';
 import { LanPage } from './pages/LanPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AboutPage } from './pages/AboutPage';
 
 const THEME_KEY = 'mygoluncher-theme';
 const SELECTED_KEY = 'mygoluncher-selected';
@@ -75,6 +77,7 @@ export default function App() {
   const [launchingId, setLaunchingId] = useState<string | null>(null);
   const [launchPhase, setLaunchPhase] = useState<'preparing' | 'waiting'>('preparing');
   const [licenseOpen, setLicenseOpen] = useState(false);
+  const [exitOpen, setExitOpen] = useState(false);
   const licenseActive = ['active', 'grace', 'trial'].includes(bootstrap?.license?.state ?? '');
   const elevationBlocked = Boolean(bootstrap?.elevated && !bootstrap.elevationConfirmed);
 
@@ -293,7 +296,7 @@ export default function App() {
   }, [Boolean(bootstrap), Boolean(bootError)]);
 
   useEffect(() => {
-    if (!bootstrap || bootError || elevationBlocked) return () => {};
+    if (!bootstrap || bootError) return () => {};
     const disposers = [
       onEvent<null>('instances:changed', () => { void refreshInstances(); }),
       onEvent<AccountState>('accounts:changed', (state) => {
@@ -317,6 +320,7 @@ export default function App() {
       onEvent<LanSnapshot>('lan:changed', (snapshot) => {
         setLanPeerCount(snapshot.peers.length);
       }),
+      onEvent<null>('app:close-request', () => setExitOpen(true)),
       onEvent<LaunchState>('launch:state', (state) => {
         void refreshInstances();
         if (state.running) {
@@ -454,7 +458,7 @@ export default function App() {
         >
           <RefreshCw size={15} /> {t('common.retry')}
         </button>
-        <span className="boot-legal">MyGoLuncher · v1.0.0</span>
+        <span className="boot-legal">MyGoLuncher · v1.0.1</span>
       </div>
     );
   }
@@ -468,6 +472,7 @@ export default function App() {
     servers: hasFeature('server') ? <ServersPage /> : <PaidFeaturePage feature="server" />,
     lan: hasFeature('lan') ? <LanPage /> : <PaidFeaturePage feature="lan" />,
     settings: <SettingsPage />,
+    about: <AboutPage />,
   };
 
   return (
@@ -525,6 +530,8 @@ export default function App() {
       )}
         </>
       )}
+
+      <ExitConfirmModal open={exitOpen} onClose={() => setExitOpen(false)} />
     </AppContext.Provider>
   );
 }

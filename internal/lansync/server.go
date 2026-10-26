@@ -48,9 +48,13 @@ func StartServer(ctx context.Context, instanceDir string, info InstanceInfo, dir
 		full string
 		size int64
 	}
+	full := len(dirs) == 1 && dirs[0] == DirAll
 	var candidates []candidate
 	for _, dir := range dirs {
 		base := filepath.Join(instanceDir, dir)
+		if full && dir == DirAll {
+			base = instanceDir
+		}
 		if stat, err := os.Stat(base); err != nil || !stat.IsDir() {
 			continue
 		}
@@ -62,6 +66,9 @@ func StartServer(ctx context.Context, instanceDir string, info InstanceInfo, dir
 				return ctx.Err()
 			}
 			if entry.IsDir() {
+				if full && filePath != base && skipFullDir(entry.Name()) {
+					return filepath.SkipDir
+				}
 				return nil
 			}
 			if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() || skipSyncName(entry.Name()) {
@@ -95,6 +102,7 @@ func StartServer(ctx context.Context, instanceDir string, info InstanceInfo, dir
 	manifest := Manifest{
 		Instance:  info,
 		Dirs:      append([]string(nil), dirs...),
+		Full:      full,
 		Files:     make([]FileEntry, 0, len(candidates)),
 		CreatedAt: nowString(),
 	}

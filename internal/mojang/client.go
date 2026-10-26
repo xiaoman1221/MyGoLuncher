@@ -215,9 +215,26 @@ func (c *Client) IsInstalled(id string) bool {
 	return err == nil
 }
 
-// IsProfileInstalled reports whether a loader profile was installed.
+// MarkProfileInstalled records that a loader profile finished installing.
+func (c *Client) MarkProfileInstalled(id string) error {
+	v, err := c.LocalVersion(id)
+	if err != nil {
+		return err
+	}
+	return util.WriteJSON(filepath.Join(c.paths.Versions, id, ".installed.json"), installedMarker{
+		VersionID: id, JavaMajor: v.JavaMajor(), InstalledAt: time.Now(), Loader: true,
+	})
+}
+
+// IsProfileInstalled reports whether a loader profile was installed and its
+// version JSON is still readable. A leftover marker without a usable profile
+// must trigger a reinstall instead of being trusted.
 func (c *Client) IsProfileInstalled(id string) bool {
-	return c.IsInstalled(id)
+	if !c.IsInstalled(id) {
+		return false
+	}
+	profile, err := c.LocalVersion(id)
+	return err == nil && strings.TrimSpace(profile.MainClass) != ""
 }
 
 // ClientJar returns the path to a version's client jar.
@@ -241,9 +258,23 @@ type installedMarker struct {
 // Install downloads a complete vanilla version. Enabled mirrors are speed
 // tested using a real asset before bulk downloads begin.
 func (c *Client) Install(ctx context.Context, id string, workers int, progress ProgressFunc) error {
-	if c.IsInstalled(id) && util.NonEmptyFile(c.ClientJar(id)) {
+	return c.install(ctx, id, workers, progress, false)
+}
+
+// Repair verifies every vanilla version file against its checksum and
+// re-downloads missing or corrupted files. Existing valid files are kept.
+func (c *Client) Repair(ctx context.Context, id string, workers int, progress ProgressFunc) error {
+	return c.install(ctx, id, workers, progress, true)
+}
+
+func (c *Client) install(ctx context.Context, id string, workers int, progress ProgressFunc, repair bool) error {
+	if !repair && c.IsInstalled(id) && util.NonEmptyFile(c.ClientJar(id)) {
 		report(progress, "done", "版本已安装", 1, 1)
 		return nil
+	}
+	markerPath := filepath.Join(c.paths.Versions, id, ".installed.json")
+	if repair {
+		_ = os.Remove(markerPath)
 	}
 	v, err := c.EnsureVersion(ctx, id)
 	if err != nil {
@@ -268,7 +299,7 @@ func (c *Client) Install(ctx context.Context, id string, workers int, progress P
 		indexPath = filepath.Join(c.paths.Assets, "indexes", assetID+".json")
 		urls := mirror.CandidateURLs(c.sourceList(), mirror.ResourceAssetIndex, v.AssetIndex.URL, assetID)
 		if err := httpx.DownloadAny(ctx, urls, httpx.File{
-			Dest: indexPath, SHA1: v.AssetIndex.SHA1, Size: v.AssetIndex.Size,
+			Dest: indexPath, SHA1: v.AssetIndex.SHA1, Size: v.AssetIndex.Size, Verify: repair,
 		}); err != nil {
 			return fmt.Errorf("下载资源索引失败: %w", err)
 		}
@@ -286,7 +317,7 @@ func (c *Client) Install(ctx context.Context, id string, workers int, progress P
 		report(progress, "client", "正在下载游戏本体…", 0, 1)
 		dest := c.ClientJar(id)
 		urls := mirror.CandidateURLs(ranked, mirror.ResourceClient, client.URL, id)
-		if err := httpx.DownloadAny(ctx, urls, httpx.File{Dest: dest, SHA1: client.SHA1, Size: client.Size}); err != nil {
+		if err := httpx.DownloadAny(ctx, urls, httpx.File{Dest: dest, SHA1: client.SHA1, Size: client.Size, Verify: repair}); err != nil {
 			return fmt.Errorf("下载游戏本体失败: %w", err)
 		}
 		report(progress, "client", "游戏本体下载完成", 1, 1)
@@ -296,7 +327,7 @@ func (c *Client) Install(ctx context.Context, id string, workers int, progress P
 
 	// Libraries and natives.
 	report(progress, "libraries", "正在解析运行库…", 0, 1)
-	files, natives, err := c.libraryDownloads(v, ranked)
+	files, natives, err := c.libraryDownloads(v, ranked, repair)
 	if err != nil {
 		return err
 	}
@@ -323,7 +354,7 @@ func (c *Client) Install(ctx context.Context, id string, workers int, progress P
 
 	if indexPath != "" {
 		report(progress, "assets", "正在同步游戏资源…", 0, 1)
-		if err := c.downloadAssets(ctx, indexPath, workers, ranked, progress); err != nil {
+		if err := c.downloadAssets(ctx, indexPath, workers, ranked, progress, repair); err != nil {
 			return err
 		}
 	}
@@ -334,7 +365,7 @@ func (c *Client) Install(ctx context.Context, id string, workers int, progress P
 		f := v.Logging.Client.File
 		dest := filepath.Join(c.paths.Assets, "log_configs", f.ID)
 		urls := mirror.CandidateURLs(ranked, mirror.ResourceLogging, f.URL, id)
-		if err := httpx.DownloadAny(ctx, urls, httpx.File{Dest: dest, SHA1: f.SHA1, Size: f.Size}); err != nil {
+		if err := httpx.DownloadAny(ctx, urls, httpx.File{Dest: dest, SHA1: f.SHA1, Size: f.Size, Verify: repair}); err != nil {
 			return fmt.Errorf("下载日志配置失败: %w", err)
 		}
 	}
@@ -444,7 +475,7 @@ func (c *Client) InstallProfileWithSources(ctx context.Context, profile Version,
 		return err
 	}
 	report(progress, "loader", "正在解析加载器运行库…", 0, 1)
-	files, natives, err := c.libraryDownloads(profile, sources)
+	files, natives, err := c.libraryDownloads(profile, sources, true)
 	if err != nil {
 		return err
 	}
@@ -480,7 +511,54 @@ type nativeTask struct {
 	excludes []string
 }
 
-func (c *Client) libraryDownloads(v Version, sources []mirror.Source) ([]fileTask, []nativeTask, error) {
+// RepairProfile verifies a locally installed loader/game profile and
+// re-downloads its libraries and natives. The vanilla parent should be repaired
+// separately with Repair.
+func (c *Client) RepairProfile(ctx context.Context, id string, workers int, progress ProgressFunc) error {
+	if strings.TrimSpace(id) == "" {
+		return errors.New("版本 ID 不能为空")
+	}
+	profile, err := c.Merged(id)
+	if err != nil {
+		return fmt.Errorf("读取版本档案失败: %w", err)
+	}
+	if workers < 1 {
+		workers = 8
+	}
+	if workers > 24 {
+		workers = 24
+	}
+	dir := filepath.Join(c.paths.Versions, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	_ = os.Remove(filepath.Join(dir, ".installed.json"))
+	report(progress, "libraries", "正在校验版本运行库…", 0, 1)
+	files, natives, err := c.libraryDownloads(profile, c.sourceList(), true)
+	if err != nil {
+		return err
+	}
+	if err := c.downloadFiles(ctx, files, workers, func(done int) {
+		report(progress, "libraries", fmt.Sprintf("运行库 %d/%d", done, len(files)), done, len(files))
+	}); err != nil {
+		return err
+	}
+	for _, native := range natives {
+		if err := ExtractNativeJar(native.jarPath, c.NativeDir(id), native.excludes); err != nil {
+			return fmt.Errorf("补充本地库失败: %w", err)
+		}
+	}
+	marker := installedMarker{
+		VersionID: id, JavaMajor: profile.JavaMajor(), InstalledAt: time.Now(), Loader: true,
+	}
+	if err := util.WriteJSON(filepath.Join(dir, ".installed.json"), marker); err != nil {
+		return err
+	}
+	report(progress, "done", "版本运行库校验完成", 1, 1)
+	return nil
+}
+
+func (c *Client) libraryDownloads(v Version, sources []mirror.Source, verify bool) ([]fileTask, []nativeTask, error) {
 	seen := map[string]bool{}
 	var files []fileTask
 	var natives []nativeTask
@@ -491,7 +569,7 @@ func (c *Client) libraryDownloads(v Version, sources []mirror.Source) ([]fileTas
 		seen[dest] = true
 		urls := mirror.CandidateURLs(sources, mirror.ResourceLibrary, url, v.ID)
 		files = append(files, fileTask{
-			file: httpx.File{URL: url, Dest: dest, SHA1: sha1, Size: size},
+			file: httpx.File{URL: url, Dest: dest, SHA1: sha1, Size: size, Verify: verify},
 			urls: urls,
 		})
 	}
@@ -619,7 +697,7 @@ func (c *Client) downloadFiles(ctx context.Context, files []fileTask, workers in
 	return ctx.Err()
 }
 
-func (c *Client) downloadAssets(ctx context.Context, indexPath string, workers int, sources []mirror.Source, progress ProgressFunc) error {
+func (c *Client) downloadAssets(ctx context.Context, indexPath string, workers int, sources []mirror.Source, progress ProgressFunc, verify bool) error {
 	var catalog AssetCatalog
 	if err := util.ReadJSON(indexPath, &catalog); err != nil {
 		return fmt.Errorf("解析资源索引失败: %w", err)
@@ -662,7 +740,7 @@ func (c *Client) downloadAssets(ctx context.Context, indexPath string, workers i
 				dest := filepath.Join(c.paths.Assets, "objects", ref.hash[:2], ref.hash)
 				url := ObjectURL + ref.hash[:2] + "/" + ref.hash
 				urls := mirror.CandidateURLs(sources, mirror.ResourceAsset, url, "")
-				err := httpx.DownloadAny(ctx, urls, httpx.File{Dest: dest, SHA1: ref.hash, Size: ref.size})
+				err := httpx.DownloadAny(ctx, urls, httpx.File{Dest: dest, SHA1: ref.hash, Size: ref.size, Verify: verify})
 				if err != nil {
 					mu.Lock()
 					if firstErr == nil {

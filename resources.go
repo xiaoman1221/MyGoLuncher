@@ -619,7 +619,7 @@ func (a *App) InstallResource(instanceID, source, projectID, versionID, mirrorID
 	var path string
 	if resourceType == resourceTypeMod {
 		cacheDir := filepath.Join(a.paths.Cache, "resources")
-		tempPath, downloadErr := client.DownloadFileAny(a.context(), file, cacheDir, rewriter)
+		tempPath, downloadErr := client.DownloadFileAny(t.context(), file, cacheDir, rewriter)
 		if downloadErr != nil {
 			return InstallProjectResult{}, downloadErr
 		}
@@ -630,7 +630,7 @@ func (a *App) InstallResource(instanceID, source, projectID, versionID, mirrorID
 		}
 		path, err = installDownloadedFile(tempPath, dir)
 	} else {
-		path, err = client.DownloadFileAny(a.context(), file, dir, rewriter)
+		path, err = client.DownloadFileAny(t.context(), file, dir, rewriter)
 	}
 	if err != nil {
 		return InstallProjectResult{}, err
@@ -642,7 +642,7 @@ func (a *App) InstallResource(instanceID, source, projectID, versionID, mirrorID
 	}
 	if resourceType == resourceTypeMod {
 		t.update("dependencies", "正在检查前置模组…", 0, 0)
-		deps, depErr := client.InstallDependencies(a.context(), file, gameVersion, loaderName, dir, 6, func(message string) {
+		deps, depErr := client.InstallDependencies(t.context(), file, gameVersion, loaderName, dir, 6, func(message string) {
 			t.update("dependencies", message, 0, 0)
 		})
 		if deps == nil {
@@ -698,11 +698,11 @@ func (a *App) InstallResourceModpack(source, projectID, versionID, mirrorID stri
 	defer func() { t.finish(err) }()
 	t.update("download", "正在下载 CurseForge 整合包…", 0, 0)
 	sourceMirror := a.resourceSource(mirrorID)
-	path, err := client.DownloadFileAny(a.context(), file, cacheDir, resourceRewriter(sourceMirror))
+	path, err := client.DownloadFileAny(t.context(), file, cacheDir, resourceRewriter(sourceMirror))
 	if err != nil {
 		return ModpackImportResponse{}, err
 	}
-	return a.importModpack(a.context(), path, t, sourceMirror)
+	return a.importModpack(t.context(), path, t, sourceMirror)
 }
 
 // OpenResourceURL is kept for frontend links and validates the scheme.

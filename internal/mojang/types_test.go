@@ -172,3 +172,17 @@ func TestNativeArtifactSelection(t *testing.T) {
 		t.Fatal("library should be detected as native")
 	}
 }
+
+func TestFlexTimeParsesFabricOffset(t *testing.T) {
+	var version Version
+	raw := []byte(`{"id":"fabric","releaseTime":"2026-10-25T08:59:15+0000","time":"2026-10-25T08:59:15+0000"}`)
+	if err := json.Unmarshal(raw, &version); err != nil {
+		t.Fatal(err)
+	}
+	if version.ReleaseTime.IsZero() || version.Time.IsZero() {
+		t.Fatalf("timestamps were not parsed: %#v", version)
+	}
+	if got := version.ReleaseTime.UTC().Format("2006-01-02 15:04:05"); got != "2026-10-25 08:59:15" {
+		t.Fatalf("release time = %q", got)
+	}
+}

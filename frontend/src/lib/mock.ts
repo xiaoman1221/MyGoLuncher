@@ -74,6 +74,7 @@ const initialSettings: Settings = {
   downloadWorkers: 8,
   showGameConsole: true,
   showLauncherOnLaunch: false,
+  closeBehavior: 'ask',
   hitokotoApiUrl: 'https://hitokotogo.yhdzz.cn/v2',
   languageAuto: true,
   language: 'zh-CN',
@@ -83,7 +84,7 @@ const initialSettings: Settings = {
   aiSearchBaseUrl: '',
   aiSearchApiKey: '',
   aiSearchModel: 'deepseek-chat',
-  schemaVersion: 3,
+  schemaVersion: 4,
   microsoftClientID: '',
   customMirrors: [],
   resourceMirror: 'official',
@@ -779,7 +780,7 @@ function bootstrap(): Bootstrap {
     settings: clone(settings),
     instances: clone(instances),
     paths,
-    version: '1.0.0',
+    version: '1.0.2',
     initError: '',
     running: instances.filter((i) => i.running).map((i) => i.id),
     accounts: clone(accounts),
@@ -844,7 +845,7 @@ function makeResource(
     downloads,
     categories,
     gameVersions,
-    latestVersion: '1.0.0',
+    latestVersion: '1.0.2',
     color: 0,
     dateModified: nowMinus(1440),
   };
@@ -976,7 +977,7 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       } satisfies LicenseStatus as T;
     case 'CheckForUpdates':
       return {
-        configured: false, currentVersion: '1.0.0', mandatory: false, available: false,
+        configured: false, currentVersion: '1.0.2', mandatory: false, available: false,
         hasWeb: false, hasApp: false,
       } satisfies UpdateInfo as T;
     case 'ApplyWebUpdate':
@@ -1225,9 +1226,13 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
     case 'GetInstanceLog':
       return clone(logs.get(String(args[0])) ?? []) as T;
     case 'OpenInstanceFolder':
+    case 'OpenInstanceSubfolder':
     case 'OpenDataFolder':
     case 'OpenConfigFolder':
     case 'OpenURL':
+    case 'RequestClose':
+    case 'QuitApp':
+    case 'MinimizeWindow':
       return undefined as T;
     case 'SearchProjects': {
       const req = args[0] as SearchRequest;
@@ -1723,6 +1728,21 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
         running: target.running, blocking: false, warnings: [],
       } satisfies LanSyncPreview as T;
     }
+    case 'PreviewLanVersion': {
+      const peer = lanSnapshot.peers.find((item) => item.id === String(args[0]));
+      return {
+        peer: {
+          id: peer?.instanceId ?? 'remote', name: peer?.instance ?? 'Remote Pack',
+          mcVersion: peer?.mcVersion ?? '1.21.1', loader: peer?.loader ?? 'fabric',
+          loaderVersion: peer?.loaderVersion ?? '0.16.10', launchVersionId: '',
+        },
+        files: 38, bytes: 240_000_000, dirs: ['*'], digest: 'mock-full-digest', warnings: [],
+      } as T;
+    }
+    case 'InstallLanVersion':
+      if (!String(args[1] ?? '')) throw new Error('请先确认要安装的共享版本');
+      await progressTask('安装版本共享', ['正在读取共享清单…', '正在复制版本文件…', '正在安装运行库…', '安装完成'], 2400);
+      return { sync: { downloaded: 38, skipped: 0, bytes: 240_000_000 }, instance: clone(instances[0]) } as T;
     case 'SyncFromLanPeer':
       if (!String(args[2] ?? '')) throw new Error('请先确认局域网版本差异');
       await progressTask('局域网同步', ['正在读取共享清单…', '正在校验本地文件…', '正在下载模组与光影…', '同步完成'], 1800);

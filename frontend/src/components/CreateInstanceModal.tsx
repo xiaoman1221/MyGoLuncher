@@ -4,7 +4,7 @@ import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import type { MessageKey } from '../lib/i18n';
 import { cn } from '../lib/format';
-import type { VersionView } from '../lib/types';
+import type { LoaderVersionInfo, VersionView } from '../lib/types';
 import { Modal } from './Modal';
 import { VersionPicker } from './VersionPicker';
 
@@ -30,6 +30,9 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
   const [name, setName] = useState('');
   const [loader, setLoader] = useState('vanilla');
   const [loaderVersion, setLoaderVersion] = useState('');
+  const [loaderVersions, setLoaderVersions] = useState<LoaderVersionInfo[]>([]);
+  const [loadingLoaderVersions, setLoadingLoaderVersions] = useState(false);
+  const [loaderVersionError, setLoaderVersionError] = useState('');
   const [memory, setMemory] = useState(4096);
   const [autoMemory, setAutoMemory] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -61,6 +64,33 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
     return () => { alive = false; };
   }, [open, settings?.defaultMemoryMB, bootstrap?.autoMemoryMB]);
 
+
+  useEffect(() => {
+    if (!open || loader === 'vanilla' || !mcVersion) {
+      setLoaderVersions([]);
+      setLoadingLoaderVersions(false);
+      setLoaderVersionError('');
+      setLoaderVersion('');
+      return;
+    }
+    let alive = true;
+    setLoaderVersions([]);
+    setLoaderVersion('');
+    setLoaderVersionError('');
+    setLoadingLoaderVersions(true);
+    api.getLoaderVersions(loader, mcVersion)
+      .then((rows) => {
+        if (!alive) return;
+        setLoaderVersions(rows);
+      })
+      .catch((error: Error) => {
+        if (alive) setLoaderVersionError(error.message);
+      })
+      .finally(() => {
+        if (alive) setLoadingLoaderVersions(false);
+      });
+    return () => { alive = false; };
+  }, [open, loader, mcVersion]);
   const selectedVersion = useMemo(
     () => versions.find((version) => version.id === mcVersion),
     [versions, mcVersion],
@@ -178,16 +208,28 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
         {isModded && (
           <label className="field field-span-2">
             <span className="field-label">{t('create.loaderVersion')} <small>{t('create.loaderVersionHint')}</small></span>
-            <input
+            <select
               className="text-input mono"
               value={loaderVersion}
+              disabled={loadingLoaderVersions || !mcVersion}
               onChange={(event) => setLoaderVersion(event.target.value)}
-              placeholder={loader === 'fabric'
-                ? t('create.loaderPlaceholder.fabric')
-                : loader === 'quilt'
-                  ? t('create.loaderPlaceholder.quilt')
-                  : t('create.loaderPlaceholder.other')}
-            />
+            >
+              <option value="">
+                {loadingLoaderVersions
+                  ? t('create.loaderVersionsLoading')
+                  : t('create.loaderVersionAuto')}
+              </option>
+              {loaderVersions.map((version) => (
+                <option key={version.version} value={version.version}>
+                  {version.version}
+                  {version.recommended ? ` · ${t('create.loaderVersionRecommended')}` : ''}
+                  {!version.stable ? ` · ${t('create.loaderVersionBeta')}` : ''}
+                </option>
+              ))}
+            </select>
+            {loaderVersionError && (
+              <span className="field-error"><TriangleAlert size={13} /> {t('create.loaderVersionsError')}: {loaderVersionError}</span>
+            )}
           </label>
         )}
 

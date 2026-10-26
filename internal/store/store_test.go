@@ -409,6 +409,22 @@ func TestSaveSettingsValidation(t *testing.T) {
 	if saved.DownloadWorkers != 8 {
 		t.Fatalf("download workers not normalized: %d", saved.DownloadWorkers)
 	}
+	settings.CloseBehavior = "unexpected"
+	saved, err = st.SaveSettings(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.CloseBehavior != "ask" {
+		t.Fatalf("invalid close behavior not normalized: %q", saved.CloseBehavior)
+	}
+	settings.CloseBehavior = "exit"
+	saved, err = st.SaveSettings(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.CloseBehavior != "exit" {
+		t.Fatalf("close behavior not saved: %q", saved.CloseBehavior)
+	}
 }
 
 func TestAutomaticMemoryMigration(t *testing.T) {
@@ -427,8 +443,11 @@ func TestAutomaticMemoryMigration(t *testing.T) {
 	if got := st.Settings().DefaultMemoryMB; got != 0 {
 		t.Fatalf("old 4 GB default should migrate to automatic, got %d", got)
 	}
-	if st.Settings().SchemaVersion != 3 {
+	if st.Settings().SchemaVersion != 4 {
 		t.Fatalf("schema version = %d", st.Settings().SchemaVersion)
+	}
+	if st.Settings().CloseBehavior != "ask" {
+		t.Fatalf("close behavior = %q", st.Settings().CloseBehavior)
 	}
 	if !st.Settings().VersionIsolation {
 		t.Fatal("version isolation should default to enabled")

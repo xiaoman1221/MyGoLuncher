@@ -54,6 +54,20 @@ func productAPIKey() (string, error) {
 	return config.APIKey, nil
 }
 
+// UpdateCredentials returns the LicensingGo base URL and product API key used
+// for OTA checks. ServerURL is honored as a staging override.
+func UpdateCredentials() (baseURL, apiKey string, err error) {
+	config, err := loadProductConfig()
+	if err != nil {
+		return "", "", err
+	}
+	baseURL = strings.TrimRight(strings.TrimSpace(ServerURL), "/")
+	if baseURL == "" {
+		baseURL = strings.TrimRight(config.Server, "/")
+	}
+	return baseURL, config.APIKey, nil
+}
+
 // ProductInfo returns the configured product name and identifier without
 // exposing the API key.
 func ProductInfo() (name, slug string) {

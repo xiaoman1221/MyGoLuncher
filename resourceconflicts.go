@@ -78,21 +78,40 @@ func curseForgeIncompatibilities(file curseforge.File) []string {
 }
 
 // installDownloadedFile moves a verified cache download into its final mods or
-// resource-pack directory, replacing a file with the same name.
+// resource-pack directory. An existing file is moved aside first so a failed
+// rename/copy does not destroy the previous mod.
 func installDownloadedFile(tempPath, targetDir string) (string, error) {
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return "", err
 	}
 	dest := filepath.Join(targetDir, filepath.Base(tempPath))
-	if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
-		return "", err
+	backup := ""
+	if _, err := os.Stat(dest); err == nil {
+		backup = dest + ".old"
+		for index := 1; ; index++ {
+			if _, statErr := os.Stat(backup); os.IsNotExist(statErr) {
+				break
+			}
+			backup = fmt.Sprintf("%s.old.%d", dest, index)
+		}
+		if err := os.Rename(dest, backup); err != nil {
+			return "", fmt.Errorf("无法备份旧文件 %s: %w", filepath.Base(dest), err)
+		}
 	}
-	if err := os.Rename(tempPath, dest); err == nil {
-		return dest, nil
+	if err := os.Rename(tempPath, dest); err != nil {
+		if copyErr := util.CopyFile(tempPath, dest); copyErr != nil {
+			_ = os.Remove(dest)
+			if backup != "" {
+				if restoreErr := os.Rename(backup, dest); restoreErr != nil {
+					return "", fmt.Errorf("写入新文件失败: %w；旧文件保留在 %s，请手动恢复", copyErr, backup)
+				}
+			}
+			return "", copyErr
+		}
+		_ = os.Remove(tempPath)
 	}
-	if err := util.CopyFile(tempPath, dest); err != nil {
-		return "", err
+	if backup != "" {
+		_ = os.Remove(backup)
 	}
-	_ = os.Remove(tempPath)
 	return dest, nil
 }

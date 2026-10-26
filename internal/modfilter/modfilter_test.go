@@ -58,6 +58,16 @@ func TestIsClientOnly(t *testing.T) {
 			client:  true,
 		},
 		{
+			name:    "manifest side",
+			entries: map[string]string{"META-INF/MANIFEST.MF": "Manifest-Version: 1.0\r\nModSide: CLIENT\r\n"},
+			client:  true,
+		},
+		{
+			name:    "fabric bom client",
+			entries: map[string]string{"fabric.mod.json": "\ufeff{\"environment\":\"client\"}"},
+			client:  true,
+		},
+		{
 			name:    "unknown",
 			entries: map[string]string{"README.txt": "no metadata"},
 			client:  false,

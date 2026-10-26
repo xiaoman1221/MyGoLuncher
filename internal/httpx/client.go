@@ -257,7 +257,36 @@ func downloadAttempt(ctx context.Context, f File) error {
 	if expectedSize > 0 && done != expectedSize {
 		return fmt.Errorf("文件大小不符（期望 %d，实际 %d）", expectedSize, done)
 	}
-	return os.Rename(tmpName, f.Dest)
+	return replaceFile(tmpName, f.Dest)
+}
+
+// replaceFile atomically moves a freshly downloaded file into place. Windows
+// does not allow os.Rename to replace an existing file, so the old file is
+// moved aside first and restored if the replacement fails.
+func replaceFile(tempPath, dest string) error {
+	backup := ""
+	if _, err := os.Stat(dest); err == nil {
+		backup = dest + ".download-backup"
+		for index := 1; ; index++ {
+			if _, statErr := os.Stat(backup); os.IsNotExist(statErr) {
+				break
+			}
+			backup = fmt.Sprintf("%s.download-backup.%d", dest, index)
+		}
+		if err := os.Rename(dest, backup); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(tempPath, dest); err != nil {
+		if backup != "" {
+			_ = os.Rename(backup, dest)
+		}
+		return err
+	}
+	if backup != "" {
+		_ = os.Remove(backup)
+	}
+	return nil
 }
 
 func withDefaultTimeout(ctx context.Context) (context.Context, context.CancelFunc) {

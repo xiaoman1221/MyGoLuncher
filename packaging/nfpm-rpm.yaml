@@ -1,0 +1,30 @@
+name: mygoluncher
+arch: amd64
+platform: linux
+version: __VERSION__
+release: "1"
+section: games
+priority: optional
+maintainer: xiaoman1221 <im@manjiuqi.com>
+description: |
+  MyGoLuncher Minecraft launcher.
+  A cross-platform Minecraft launcher built with Go and Wails.
+vendor: MyGoLuncher
+homepage: https://github.com/xiaoman1221/MyMinecraftGoLuncher
+license: AGPL-3.0
+depends:
+  - gtk3
+  - webkit2gtk4.0
+contents:
+  - src: build/bin/MyMinecraftGoLuncher
+    dst: /usr/bin/mygoluncher
+    file_info:
+      mode: 0755
+  - src: build/linux/mygoluncher.desktop
+    dst: /usr/share/applications/mygoluncher.desktop
+  - src: build/appicon.png
+    dst: /usr/share/icons/hicolor/1024x1024/apps/mygoluncher.png
+  - src: README.md
+    dst: /usr/share/doc/mygoluncher/README.md
+  - src: LICENSE
+    dst: /usr/share/doc/mygoluncher/LICENSE

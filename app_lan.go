@@ -61,7 +61,7 @@ func (a *App) startLanBackground() {
 		instanceID = instances[0].ID
 	}
 	_ = a.lanSvc.Start(a.context(), lan.Config{
-		Broadcast: true,
+		Broadcast: false,
 		Identity:  a.applyLanShareIdentity(a.lanIdentity(instanceID)),
 		OnChange:  a.handleLANChange,
 	})
@@ -127,7 +127,7 @@ func (a *App) ScanLanSubnets() (lan.Snapshot, error) {
 		return lan.Snapshot{}, errors.New("局域网发现尚未初始化")
 	}
 	task := a.newTask("扫描局域网服务器")
-	err := a.lanSvc.ScanSubnets(a.context(), func(done, total int) {
+	err := a.lanSvc.ScanSubnets(task.context(), func(done, total int) {
 		task.update("scan", fmt.Sprintf("已扫描 %d / %d", done, total), int64(done), int64(total))
 	})
 	task.finish(err)

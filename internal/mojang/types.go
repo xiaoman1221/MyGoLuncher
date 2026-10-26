@@ -19,15 +19,64 @@ type Manifest struct {
 	Versions []VersionEntry `json:"versions"`
 }
 
+// FlexTime accepts the RFC3339 timestamps used by Mojang as well as the
+// "+0000" form used by Fabric and Quilt loader profiles.
+type FlexTime struct {
+	time.Time
+}
+
+func (t *FlexTime) UnmarshalJSON(data []byte) error {
+	raw := strings.TrimSpace(string(data))
+	if raw == "" || raw == "null" {
+		t.Time = time.Time{}
+		return nil
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		t.Time = time.Time{}
+		return nil
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		"2006-01-02T15:04:05-0700",
+		"2006-01-02T15:04:05.000-0700",
+		"2006-01-02T15:04:05",
+	}
+	for _, layout := range layouts {
+		parsed, err := time.Parse(layout, value)
+		if err == nil {
+			t.Time = parsed
+			return nil
+		}
+	}
+	return fmt.Errorf("无法解析时间 %q", value)
+}
+
+func (t FlexTime) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.Time)
+}
+
+func (t FlexTime) IsZero() bool {
+	return t.Time.IsZero()
+}
+
+func (t FlexTime) After(other FlexTime) bool {
+	return t.Time.After(other.Time)
+}
+
 // VersionEntry is one manifest row.
 type VersionEntry struct {
-	ID              string    `json:"id"`
-	Type            string    `json:"type"`
-	URL             string    `json:"url"`
-	Time            time.Time `json:"time"`
-	ReleaseTime     time.Time `json:"releaseTime"`
-	SHA1            string    `json:"sha1"`
-	ComplianceLevel int       `json:"complianceLevel"`
+	ID              string   `json:"id"`
+	Type            string   `json:"type"`
+	URL             string   `json:"url"`
+	Time            FlexTime `json:"time"`
+	ReleaseTime     FlexTime `json:"releaseTime"`
+	SHA1            string   `json:"sha1"`
+	ComplianceLevel int      `json:"complianceLevel"`
 }
 
 // Version is the metadata needed to install or launch a version. It is also
@@ -46,8 +95,8 @@ type Version struct {
 	Libraries          []Library           `json:"libraries"`
 	JavaVersion        *JavaVersion        `json:"javaVersion"`
 	Logging            Logging             `json:"logging"`
-	ReleaseTime        time.Time           `json:"releaseTime"`
-	Time               time.Time           `json:"time"`
+	ReleaseTime        FlexTime            `json:"releaseTime"`
+	Time               FlexTime            `json:"time"`
 	ComplianceLevel    int                 `json:"complianceLevel"`
 }
 

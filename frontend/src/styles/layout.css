@@ -88,7 +88,7 @@
 
 .brand-title {
   font-family: var(--font-display);
-  font-size: 19px;
+  font-size: 20.5px;
   font-weight: 700;
   letter-spacing: 0.09em;
   line-height: 1;
@@ -96,10 +96,11 @@
 
 .brand-sub {
   color: var(--muted-2);
-  font-size: 7.5px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.17em;
+  letter-spacing: 0.12em;
   line-height: 1.4;
+  white-space: nowrap;
 }
 
 .sidebar-nav {
@@ -120,7 +121,7 @@
   border: 1px solid transparent;
   border-radius: 10px;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 14.5px;
   font-weight: 600;
   text-align: left;
   transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
@@ -162,7 +163,7 @@
   border: 1px solid var(--line);
   border-radius: 5px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10.5px;
   font-weight: 700;
 }
 
@@ -189,13 +190,13 @@
 }
 
 .sidebar-live strong {
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
 }
 
 .sidebar-live small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10.5px;
 }
 
 .sidebar-live svg {
@@ -215,7 +216,7 @@
   padding: 8px 11px;
   border-radius: 8px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 600;
   text-align: left;
   transition: color 0.18s ease, background 0.18s ease;
@@ -256,7 +257,7 @@
 .profile-copy strong {
   overflow: hidden;
   color: var(--text-soft);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -264,7 +265,7 @@
 
 .profile-copy span {
   color: var(--muted-2);
-  font-size: 9px;
+  font-size: 10.5px;
 }
 
 .profile-status {
@@ -286,7 +287,7 @@
   gap: 7px;
   padding: 11px 4px 2px;
   color: var(--muted-2);
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 650;
   letter-spacing: 0.07em;
 }
@@ -333,20 +334,20 @@
 .topbar-root {
   color: var(--muted-2);
   font-family: var(--font-display);
-  font-size: 9px;
+  font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0.18em;
 }
 
 .topbar-slash {
   color: var(--muted-2);
-  font-size: 10px;
+  font-size: 11.5px;
   opacity: 0.5;
 }
 
 .topbar-page {
   color: var(--text-soft);
-  font-size: 11.5px;
+  font-size: 13.5px;
   font-weight: 650;
 }
 
@@ -362,7 +363,7 @@
   border-radius: 5px;
   background: rgba(183, 121, 31, 0.08);
   color: var(--gold);
-  font-size: 8.5px;
+  font-size: 10px;
   font-weight: 750;
   letter-spacing: 0.05em;
 }
@@ -372,7 +373,7 @@
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11.5px;
   font-weight: 600;
 }
 
@@ -394,7 +395,7 @@
   border-radius: 8px;
   background: rgba(var(--accent-rgb), 0.07);
   color: var(--text-soft);
-  font-size: 10px;
+  font-size: 11.5px;
   font-weight: 650;
 }
 
@@ -416,7 +417,7 @@
   border-radius: 9px;
   background: var(--panel);
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 650;
 }
 
@@ -490,7 +491,7 @@
 .page-header p {
   max-width: 700px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.65;
 }
 

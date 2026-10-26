@@ -283,7 +283,7 @@ func (a *App) RollbackServer(id, backupID string) (err error) {
 	task := a.newTask("回滚服务器 · " + profile.Name)
 	defer func() { task.finish(err) }()
 	task.update("status", "正在检查服务器状态…", 0, 0)
-	statusCtx, cancel := context.WithTimeout(a.context(), 15*time.Second)
+	statusCtx, cancel := context.WithTimeout(task.context(), 15*time.Second)
 	status, statusErr := client.Status(statusCtx, profile.DaemonID, profile.InstanceUUID)
 	cancel()
 	if statusErr != nil {
@@ -294,7 +294,7 @@ func (a *App) RollbackServer(id, backupID string) (err error) {
 	}
 	if !a.store.Settings().ServerBackupDisabled {
 		task.update("backup", "正在保存当前状态…", 0, 0)
-		backupCtx, cancelBackup := context.WithTimeout(a.context(), 5*time.Minute)
+		backupCtx, cancelBackup := context.WithTimeout(task.context(), 5*time.Minute)
 		safety, safetyErr := client.CreateBackup(backupCtx, profile.DaemonID, profile.InstanceUUID,
 			profile.RemoteRoot, profile.ID, profile.SyncDirs, "before-rollback", nil)
 		cancelBackup()
@@ -307,7 +307,7 @@ func (a *App) RollbackServer(id, backupID string) (err error) {
 			return addErr
 		}
 	}
-	restoreCtx, cancelRestore := context.WithTimeout(a.context(), 10*time.Minute)
+	restoreCtx, cancelRestore := context.WithTimeout(task.context(), 10*time.Minute)
 	defer cancelRestore()
 	if err := client.RestoreBackup(restoreCtx, profile.DaemonID, profile.InstanceUUID,
 		profile.RemoteRoot, profile.ID, backup, func(stage, message string, current, total int64) {
@@ -391,7 +391,7 @@ func (a *App) syncServerProfile(id string, files []string) (mcsm.SyncResult, err
 	task := a.newTask("同步到服务器 · " + profile.Name)
 	if !a.store.Settings().ServerBackupDisabled {
 		task.update("backup", "正在创建回滚快照…", 0, 0)
-		backupCtx, cancel := context.WithTimeout(a.context(), 5*time.Minute)
+		backupCtx, cancel := context.WithTimeout(task.context(), 5*time.Minute)
 		backup, backupErr := client.CreateBackup(backupCtx, profile.DaemonID, profile.InstanceUUID,
 			profile.RemoteRoot, profile.ID, profile.SyncDirs, "sync", func(stage, message string, current, total int64) {
 				task.update(stage, message, current, total)
@@ -408,7 +408,7 @@ func (a *App) syncServerProfile(id string, files []string) (mcsm.SyncResult, err
 		}
 		a.pruneServerBackups(client, profile, removed)
 	}
-	result, err := client.Sync(a.context(), profile.DaemonID, profile.InstanceUUID, mcsm.SyncOptions{
+	result, err := client.Sync(task.context(), profile.DaemonID, profile.InstanceUUID, mcsm.SyncOptions{
 		LocalDir:     a.instanceDir(instance),
 		RemoteRoot:   profile.RemoteRoot,
 		Dirs:         profile.SyncDirs,

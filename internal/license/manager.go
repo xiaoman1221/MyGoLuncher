@@ -72,7 +72,7 @@ func NewManager(secrets secretstore.Store, version string) (*Manager, error) {
 		secrets = secretstore.NewMemory()
 	}
 	if strings.TrimSpace(version) == "" {
-		version = "1.0.0"
+		version = "1.0.2"
 	}
 	AppVersion = version
 	machine := MachineCode(Collect())
