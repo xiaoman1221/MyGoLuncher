@@ -156,6 +156,18 @@ macOS P12：
 base64 -i MyGoLuncher-selfsigned.p12 -o macos-cert.b64
 ```
 
+如果 macOS 导入时报：
+
+```text
+MAC verification failed during PKCS12 import (wrong password?)
+```
+
+说明 `MACOS_CERTIFICATE_PASSWORD` 与 P12 实际密码不一致，或 P12 加密格式不被 macOS 接受。请重新导出 P12，确保密码没有多余换行，必要时使用旧格式：
+
+```bash
+openssl pkcs12 -export -legacy   -in certificate.pem   -inkey private-key.pem   -out MyGoLuncher-legacy.p12
+```
+
 Linux GPG：
 
 ```bash

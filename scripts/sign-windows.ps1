@@ -22,7 +22,12 @@ $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurs
 if (-not $signtool) { throw "找不到 Windows SDK signtool.exe" }
 
 Write-Host "签名: $Exe"
-& $signtool.FullName sign /fd SHA256 /f $PfxPath /p $env:MGL_SIGN_PFX_PASSWORD /tr $TimestampUrl /td SHA256 $Exe
+$signArgs = @("sign", "/fd", "SHA256", "/f", $PfxPath, "/p", $env:MGL_SIGN_PFX_PASSWORD)
+if (-not [string]::IsNullOrWhiteSpace($TimestampUrl)) {
+  $signArgs += @("/tr", $TimestampUrl, "/td", "SHA256")
+}
+$signArgs += $Exe
+& $signtool.FullName @signArgs
 if ($LASTEXITCODE -ne 0) { throw "signtool sign 失败，退出码 $LASTEXITCODE" }
 
 & $signtool.FullName verify /pa /v $Exe
