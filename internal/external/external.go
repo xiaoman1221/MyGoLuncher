@@ -141,6 +141,26 @@ func dirExists(path string) bool {
 	return err == nil && info.IsDir()
 }
 
+func childDirFold(parent, name string) string {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return ""
+	}
+	fallback := ""
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		if entry.Name() == name {
+			return filepath.Join(parent, entry.Name())
+		}
+		if fallback == "" && strings.EqualFold(entry.Name(), name) {
+			fallback = filepath.Join(parent, entry.Name())
+		}
+	}
+	return fallback
+}
+
 // samePath compares cleaned paths case-insensitively on Windows.
 func samePath(left, right string) bool {
 	left = filepath.Clean(left)
@@ -233,7 +253,10 @@ func Scan(rawPath string) (ScanResult, error) {
 	// A folder containing Prism/MultiMC, Modrinth, CurseForge, ATLauncher,
 	// GDLauncher or FTB instances.
 	for _, container := range []string{"instances", "profiles"} {
-		instancesDir := filepath.Join(path, container)
+		instancesDir := childDirFold(path, container)
+		if instancesDir == "" {
+			continue
+		}
 		entries, readErr := os.ReadDir(instancesDir)
 		if readErr != nil {
 			continue
