@@ -1118,30 +1118,10 @@ select.text-input option {
 }
 
 
-/* ---- Content protection: no text/image selection or copying ---- */
-html,
-body,
-#app {
-  -webkit-user-select: none !important;
-  -ms-user-select: none !important;
-  user-select: none !important;
-  -webkit-touch-callout: none !important;
-}
-
-*,
-*::before,
-*::after {
-  -webkit-user-drag: none !important;
-}
-
-input,
-textarea,
-select,
-[contenteditable="true"],
-[contenteditable="plaintext-only"] {
-  -webkit-user-select: none !important;
-  -ms-user-select: none !important;
-  user-select: none !important;
+/* ---- Text selection and native editing ---- */
+::selection {
+  background: rgba(var(--accent-rgb), 0.28);
+  color: var(--text);
 }
 
 img,
@@ -1150,9 +1130,4 @@ canvas,
 video {
   -webkit-user-drag: none !important;
   user-select: none !important;
-}
-
-::selection {
-  background: transparent !important;
-  color: inherit !important;
 }
