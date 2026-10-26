@@ -38,6 +38,7 @@ type Peer struct {
 	SyncPort      int      `json:"syncPort,omitempty"`
 	SyncDirs      []string `json:"syncDirs,omitempty"`
 	CanSync       bool     `json:"canSync"`
+	CanChat       bool     `json:"canChat"`
 	LastSeen      string   `json:"lastSeen"`
 }
 
@@ -65,6 +66,8 @@ type Identity struct {
 	SyncPort      int
 	SyncToken     string
 	SyncDirs      []string
+	ToolPort      int
+	ToolToken     string
 }
 
 // SyncTarget is the backend-only connection information for a peer that
@@ -79,6 +82,15 @@ type SyncTarget struct {
 	Loader        string
 	LoaderVersion string
 	Dirs          []string
+}
+
+// ToolTarget is the backend-only connection information for a peer's LAN
+// toolbox server.
+type ToolTarget struct {
+	Address string
+	Port    int
+	Token   string
+	Name    string
 }
 
 // Config controls one discovery session.
@@ -96,5 +108,7 @@ type worldEntry struct {
 type peerEntry struct {
 	Peer
 	syncToken string
+	toolPort  int
+	toolToken string
 	lastSeen  time.Time
 }

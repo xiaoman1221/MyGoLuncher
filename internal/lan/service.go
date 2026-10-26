@@ -151,6 +151,29 @@ func (s *Service) SetIdentity(identity Identity) {
 	s.notify()
 }
 
+// SelfID is this launcher's stable presence identifier.
+func (s *Service) SelfID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peerID
+}
+
+// ToolTarget returns the connection details for a peer's LAN toolbox.
+func (s *Service) ToolTarget(peerID string) (ToolTarget, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.peers[peerID]
+	if !ok || !entry.CanChat || entry.toolPort <= 0 || entry.toolToken == "" {
+		return ToolTarget{}, false
+	}
+	return ToolTarget{
+		Address: entry.Address,
+		Port:    entry.toolPort,
+		Token:   entry.toolToken,
+		Name:    entry.Name,
+	}, true
+}
+
 // SyncTarget returns the connection details for a peer that shares content.
 func (s *Service) SyncTarget(peerID string) (SyncTarget, bool) {
 	s.mu.Lock()
@@ -366,6 +389,9 @@ func (s *Service) readPeerLoop(conn *net.UDPConn) {
 		entry.SyncDirs = append([]string(nil), packet.SyncDirs...)
 		entry.syncToken = packet.SyncToken
 		entry.CanSync = packet.SyncPort > 0 && packet.SyncToken != ""
+		entry.toolPort = packet.ToolPort
+		entry.toolToken = packet.ToolToken
+		entry.CanChat = packet.ToolPort > 0 && packet.ToolToken != ""
 		entry.Address = source.IP.String()
 		entry.lastSeen = now
 		s.mu.Unlock()

@@ -41,7 +41,7 @@ func (a *App) applyLanShareIdentity(identity lan.Identity) lan.Identity {
 	if a.lanShare.server == nil || a.lanShare.instanceID == "" {
 		return identity
 	}
-	shared := a.lanIdentity(a.lanShare.instanceID)
+	shared := a.lanIdentityWithTools(a.lanShare.instanceID)
 	shared.SyncPort = a.lanShare.server.Port()
 	shared.SyncToken = a.lanShare.server.Token()
 	shared.SyncDirs = append([]string(nil), a.lanShare.dirs...)
@@ -107,7 +107,7 @@ func (a *App) StartLanShare(instanceID string, dirs []string) (lan.Snapshot, err
 	task.finish(err)
 	if err != nil {
 		if a.lanSvc != nil {
-			a.lanSvc.SetIdentity(a.lanIdentity(a.defaultLanInstanceID()))
+			a.lanSvc.SetIdentity(a.applyLanShareIdentity(a.lanIdentityWithTools(a.defaultLanInstanceID())))
 		}
 		return lan.Snapshot{}, err
 	}
@@ -118,7 +118,7 @@ func (a *App) StartLanShare(instanceID string, dirs []string) (lan.Snapshot, err
 	a.lanShare.dirs = append([]string(nil), dirs...)
 	a.lanShare.mu.Unlock()
 
-	identity := a.lanIdentity(instanceID)
+	identity := a.lanIdentityWithTools(instanceID)
 	identity.SyncPort = server.Port()
 	identity.SyncToken = server.Token()
 	identity.SyncDirs = append([]string(nil), dirs...)
@@ -146,7 +146,7 @@ func (a *App) StopLanShare() (lan.Snapshot, error) {
 		server.Stop()
 	}
 	if a.lanSvc != nil {
-		a.lanSvc.SetIdentity(a.lanIdentity(a.defaultLanInstanceID()))
+		a.lanSvc.SetIdentity(a.applyLanShareIdentity(a.lanIdentityWithTools(a.defaultLanInstanceID())))
 		return a.lanSvc.Snapshot(), nil
 	}
 	return lan.Snapshot{}, nil

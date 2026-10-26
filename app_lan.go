@@ -41,11 +41,15 @@ func (a *App) syncLanEntitlement() {
 		return
 	}
 	if a.hasFeature(licensepkg.FeatureLAN) {
+		_ = a.ensureLanTools()
 		if !a.lanSvc.Snapshot().Running {
 			a.startLanBackground()
+		} else {
+			a.refreshLanIdentity()
 		}
 		return
 	}
+	a.stopLanTools()
 	a.lanSvc.Stop()
 }
 
@@ -62,7 +66,7 @@ func (a *App) startLanBackground() {
 	}
 	_ = a.lanSvc.Start(a.context(), lan.Config{
 		Broadcast: false,
-		Identity:  a.applyLanShareIdentity(a.lanIdentity(instanceID)),
+		Identity:  a.applyLanShareIdentity(a.lanIdentityWithTools(instanceID)),
 		OnChange:  a.handleLANChange,
 	})
 }
@@ -79,9 +83,10 @@ func (a *App) StartLanDiscovery(instanceID string, broadcast bool) (lan.Snapshot
 	if a.lanSvc == nil {
 		return lan.Snapshot{}, errors.New("局域网发现尚未初始化")
 	}
+	_ = a.ensureLanTools()
 	err := a.lanSvc.Start(a.context(), lan.Config{
 		Broadcast: broadcast,
-		Identity:  a.applyLanShareIdentity(a.lanIdentity(instanceID)),
+		Identity:  a.applyLanShareIdentity(a.lanIdentityWithTools(instanceID)),
 		OnChange:  a.handleLANChange,
 	})
 	if err != nil {

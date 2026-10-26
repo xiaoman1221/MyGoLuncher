@@ -22,6 +22,7 @@ import (
 	"MyMinecraftGoLuncher/internal/httpx"
 	"MyMinecraftGoLuncher/internal/java"
 	"MyMinecraftGoLuncher/internal/lan"
+	"MyMinecraftGoLuncher/internal/lantools"
 	"MyMinecraftGoLuncher/internal/launcher"
 	"MyMinecraftGoLuncher/internal/launcherprofiles"
 	licensepkg "MyMinecraftGoLuncher/internal/license"
@@ -67,6 +68,9 @@ type App struct {
 
 	lanShare  lanShareState
 	lanSyncMu sync.Mutex
+
+	lanToolMu sync.Mutex
+	lanTool   *lantools.Server
 
 	orcaMu      sync.Mutex
 	orcaCancel  context.CancelFunc
@@ -303,6 +307,7 @@ func (a *App) shutdown(ctx context.Context) {
 		a.lanShare.dirs = nil
 	}
 	a.lanShare.mu.Unlock()
+	a.stopLanTools()
 	if a.lanSvc != nil {
 		a.lanSvc.Stop()
 	}

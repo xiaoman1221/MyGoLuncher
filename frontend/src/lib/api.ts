@@ -18,9 +18,12 @@ import type {
   JavaPackage,
   JavaReleaseInfo,
   JavaRuntime,
+  LanFileInfo,
   LanSnapshot,
   LanSyncPreview,
   LanSyncResult,
+  LanToolSendResult,
+  LanToolState,
   LanVersionInstallResult,
   LanVersionPreview,
   LicenseStatus,
@@ -221,4 +224,14 @@ export const api = {
   setLanBroadcast: (enabled: boolean) => call<LanSnapshot>('SetLanBroadcast', enabled),
   getLanSnapshot: () => call<LanSnapshot>('GetLanSnapshot'),
   scanLanSubnets: () => call<LanSnapshot>('ScanLanSubnets'),
+  getLanTools: () => call<LanToolState>('GetLanTools'),
+  sendLanChat: (peerId: string, text: string) =>
+    call<LanToolSendResult>('SendLanChat', peerId, text),
+  sendLanFile: (peerId: string, path: string) =>
+    call<LanToolSendResult>('SendLanFile', peerId, path),
+  sendLanVoice: (peerId: string, data: string, mime: string, durationMs: number) =>
+    call<LanToolSendResult>('SendLanVoice', peerId, data, mime, durationMs),
+  pickLanFile: () => call<LanFileInfo>('PickLanFile'),
+  getLanVoice: (id: string) => call<string>('GetLanVoice', id),
+  openLanInbox: () => call<void>('OpenLanInbox'),
 };

@@ -16,6 +16,7 @@ import type {
   JavaRuntime,
   LanSnapshot,
   LanSyncPreview,
+  LanToolState,
   LicenseStatus,
   LaunchState,
   UpdateInfo,
@@ -239,6 +240,14 @@ let serverStatuses: ServerStatus[] = [{
   nickname: '生存服',
 }];
 
+let lanToolsState: LanToolState = {
+  selfId: 'mock-self',
+  selfName: 'Steve',
+  port: 45680,
+  inbox: 'D:/Games/MyGoLuncher/MGL/lan-inbox',
+  messages: [],
+};
+
 let lanSnapshot: LanSnapshot = {
   running: true,
   broadcast: true,
@@ -283,6 +292,7 @@ let lanSnapshot: LanSnapshot = {
     syncPort: 45678,
     syncDirs: ['mods', 'shaderpacks', 'resourcepacks'],
     canSync: true,
+    canChat: true,
     lastSeen: new Date().toISOString(),
   }, {
     id: 'peer-builder',
@@ -296,6 +306,7 @@ let lanSnapshot: LanSnapshot = {
     syncPort: 45679,
     syncDirs: ['mods', 'config'],
     canSync: true,
+    canChat: true,
     lastSeen: nowMinus(1),
   }],
   warnings: [],
@@ -1751,6 +1762,44 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       lanSnapshot = { ...lanSnapshot, broadcast: Boolean(args[0]) };
       emit('lan:changed', clone(lanSnapshot));
       return clone(lanSnapshot) as T;
+    case 'GetLanTools':
+      return clone(lanToolsState) as T;
+    case 'SendLanChat': {
+      const text = String(args[1] ?? '').trim();
+      if (!text) throw new Error('聊天内容为空');
+      const message = {
+        id: 'mock-chat-' + Date.now(), kind: 'chat' as const, fromId: 'mock-self', fromName: 'Steve',
+        text, createdAt: new Date().toISOString(), incoming: false,
+      };
+      lanToolsState = { ...lanToolsState, messages: [...lanToolsState.messages, message].slice(-200) };
+      return { message: clone(message), count: 1 } as T;
+    }
+    case 'PickLanFile':
+      return { path: 'D:/Games/MyGoLuncher/MGL/example.jar', name: 'example.jar', size: 1024 * 1024 } as T;
+    case 'SendLanFile': {
+      const path = String(args[1] ?? '');
+      if (!path) throw new Error('没有选择文件');
+      const message = {
+        id: 'mock-file-' + Date.now(), kind: 'file' as const, fromId: 'mock-self', fromName: 'Steve',
+        fileName: path.split('/').pop() ?? 'file', size: 1024 * 1024, path,
+        createdAt: new Date().toISOString(), incoming: false,
+      };
+      lanToolsState = { ...lanToolsState, messages: [...lanToolsState.messages, message].slice(-200) };
+      return { message: clone(message), count: 1 } as T;
+    }
+    case 'SendLanVoice': {
+      const message = {
+        id: 'mock-voice-' + Date.now(), kind: 'voice' as const, fromId: 'mock-self', fromName: 'Steve',
+        size: 1024, mimeType: String(args[2] ?? 'audio/webm'), durationMs: Number(args[3] ?? 0),
+        createdAt: new Date().toISOString(), incoming: false,
+      };
+      lanToolsState = { ...lanToolsState, messages: [...lanToolsState.messages, message].slice(-200) };
+      return { message: clone(message), count: 1 } as T;
+    }
+    case 'GetLanVoice':
+      return '' as T;
+    case 'OpenLanInbox':
+      return undefined as T;
     case 'GetLanSnapshot':
       return clone(lanSnapshot) as T;
     case 'ScanLanSubnets':

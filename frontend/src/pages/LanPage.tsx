@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Download,
   LoaderCircle,
+  MessageCircle,
   Play,
   RadioTower,
   RefreshCw,
@@ -19,6 +20,7 @@ import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { LanSyncModal } from '../components/LanSyncModal';
 import { LanVersionInstallModal } from '../components/LanVersionInstallModal';
+import { LanToolsModal } from '../components/LanToolsModal';
 import { cn } from '../lib/format';
 import type { MessageKey } from '../lib/i18n';
 import type {
@@ -76,6 +78,7 @@ export function LanPage() {
   const [shareBusy, setShareBusy] = useState(false);
   const [syncPeer, setSyncPeer] = useState<LanPeer | null>(null);
   const [installPeer, setInstallPeer] = useState<LanPeer | null>(null);
+  const [toolsOpen, setToolsOpen] = useState(false);
   const startedRef = useRef(false);
   const sharingRef = useRef(false);
   sharingRef.current = snapshot.sharing;
@@ -255,6 +258,9 @@ export function LanPage() {
         description={t('lan.description')}
         actions={
           <div className="header-actions">
+            <button type="button" className="btn btn-ghost" onClick={() => setToolsOpen(true)} disabled={starting}>
+              <MessageCircle size={15} /> {t('lan.toolsTitle')}
+            </button>
             <label className="lan-broadcast-toggle">
               <span>{t('lan.broadcast')}</span>
               <input
@@ -523,6 +529,13 @@ export function LanPage() {
         <LanVersionInstallModal
           peer={installPeer}
           onClose={() => setInstallPeer(null)}
+        />
+      )}
+
+      {toolsOpen && (
+        <LanToolsModal
+          peers={snapshot.peers}
+          onClose={() => setToolsOpen(false)}
         />
       )}
     </div>

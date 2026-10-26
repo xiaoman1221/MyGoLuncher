@@ -32,6 +32,7 @@ func TestPresenceRoundTrip(t *testing.T) {
 		InstanceID: "instance-1", Loader: "fabric", LoaderVersion: "0.16",
 		SyncPort: 45678, SyncToken: "secret-token",
 		SyncDirs: []string{"mods", "shaderpacks"},
+		ToolPort: 45679, ToolToken: "tool-token",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -44,8 +45,9 @@ func TestPresenceRoundTrip(t *testing.T) {
 		t.Fatalf("packet = %#v", packet)
 	}
 	if packet.InstanceID != "instance-1" || packet.Loader != "fabric" || packet.LoaderVersion != "0.16" ||
-		packet.SyncPort != 45678 || packet.SyncToken != "secret-token" || len(packet.SyncDirs) != 2 {
-		t.Fatalf("sync fields = %#v", packet)
+		packet.SyncPort != 45678 || packet.SyncToken != "secret-token" || len(packet.SyncDirs) != 2 ||
+		packet.ToolPort != 45679 || packet.ToolToken != "tool-token" {
+		t.Fatalf("sync/tool fields = %#v", packet)
 	}
 	if _, err := decodePresence(raw, "self"); err == nil {
 		t.Fatal("self packet should be ignored")
@@ -71,6 +73,23 @@ func TestSyncTarget(t *testing.T) {
 	service.peers["peer"].CanSync = false
 	if _, ok := service.SyncTarget("peer"); ok {
 		t.Fatal("peer without sharing should not be a sync target")
+	}
+}
+
+func TestToolTarget(t *testing.T) {
+	service := New()
+	service.peers["peer"] = &peerEntry{
+		Peer:      Peer{ID: "peer", Address: "10.0.0.5", Name: "Alex", CanChat: true},
+		toolPort:  45679,
+		toolToken: "tool-token",
+	}
+	target, ok := service.ToolTarget("peer")
+	if !ok || target.Address != "10.0.0.5" || target.Port != 45679 || target.Token != "tool-token" || target.Name != "Alex" {
+		t.Fatalf("target = %#v, %v", target, ok)
+	}
+	service.peers["peer"].CanChat = false
+	if _, ok := service.ToolTarget("peer"); ok {
+		t.Fatal("peer without LAN tools should not be a tool target")
 	}
 }
 

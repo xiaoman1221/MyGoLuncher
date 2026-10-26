@@ -647,7 +647,45 @@ export interface LanPeer {
   syncPort?: number;
   syncDirs?: string[];
   canSync: boolean;
+  canChat: boolean;
   lastSeen: string;
+}
+
+export type LanToolKind = 'chat' | 'voice' | 'file';
+
+export interface LanToolMessage {
+  id: string;
+  kind: LanToolKind;
+  fromId: string;
+  fromName: string;
+  text?: string;
+  fileName?: string;
+  size?: number;
+  mimeType?: string;
+  durationMs?: number;
+  path?: string;
+  createdAt: string;
+  incoming: boolean;
+}
+
+export interface LanToolState {
+  selfId: string;
+  selfName: string;
+  port: number;
+  inbox: string;
+  messages: LanToolMessage[];
+}
+
+export interface LanToolSendResult {
+  message: LanToolMessage;
+  count: number;
+  warning?: string;
+}
+
+export interface LanFileInfo {
+  path: string;
+  name: string;
+  size: number;
 }
 
 export interface LanSnapshot {

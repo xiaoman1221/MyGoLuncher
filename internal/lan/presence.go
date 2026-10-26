@@ -30,6 +30,8 @@ type presencePacket struct {
 	SyncPort      int      `json:"syncPort,omitempty"`
 	SyncToken     string   `json:"syncToken,omitempty"`
 	SyncDirs      []string `json:"syncDirs,omitempty"`
+	ToolPort      int      `json:"toolPort,omitempty"`
+	ToolToken     string   `json:"toolToken,omitempty"`
 	Time          int64    `json:"ts"`
 }
 
@@ -47,6 +49,8 @@ func encodePresence(selfID string, identity Identity) ([]byte, error) {
 		SyncPort:      identity.SyncPort,
 		SyncToken:     strings.TrimSpace(identity.SyncToken),
 		SyncDirs:      cleanDirs(identity.SyncDirs),
+		ToolPort:      identity.ToolPort,
+		ToolToken:     strings.TrimSpace(identity.ToolToken),
 		Time:          time.Now().Unix(),
 	}
 	if packet.Name == "" {
@@ -92,6 +96,13 @@ func decodePresence(data []byte, selfID string) (presencePacket, error) {
 		packet.SyncToken = ""
 	}
 	packet.SyncDirs = cleanDirs(packet.SyncDirs)
+	if packet.ToolPort < 0 || packet.ToolPort > 65535 {
+		packet.ToolPort = 0
+	}
+	packet.ToolToken = strings.TrimSpace(packet.ToolToken)
+	if len(packet.ToolToken) > 128 {
+		packet.ToolToken = ""
+	}
 	return packet, nil
 }
 
