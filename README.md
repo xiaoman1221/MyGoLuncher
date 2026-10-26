@@ -15,7 +15,7 @@
 ## 功能
 
 - **添加本地版本**：扫描本机官方启动器、HMCL、PCL2、Prism Launcher / MultiMC、Modrinth App、CurseForge、ATLauncher、GDLauncher 与 FTB App，也可以手动选择 `.minecraft`、`versions`、`instances` / `profiles` 目录或单个版本/实例文件夹。支持一次勾选多个版本批量导入；「自定义导入」可手动填写版本名称、Minecraft 版本、加载器与可选的来源目录，并支持递归搜索指定目录下的 `.minecraft` / `versions` 文件夹、自动识别版本并填入信息。缺少版本 JSON 的版本文件夹会从名称推断版本并给出警告；导入时复制存档、模组、资源包、`kubejs`、`scripts`、`datapacks` 与配置，并准备游戏运行环境。
-- **下载官方版本（付费功能 `versions`）**：从 Mojang 元数据获取正式版、快照和远古版本，下载客户端、运行库、本地库与资源文件。已安装版本的启动、设置修改、模组/资源安装不受此限制。
+- **下载官方版本**：从 Mojang 元数据获取正式版、快照和远古版本，下载客户端、运行库、本地库与资源文件。下载 Minecraft 游戏版本和修复版本文件不收费，也不依赖激活。
 - **多下载源**：官方源、BMCLAPI、清华 Adoptium 与自定义镜像，安装前按当前网络测速并自动回退，所有文件仍做哈希校验。游戏本体、Fabric/Quilt/Forge/NeoForge 的元数据与安装器、以及 Adoptium Java 归档都会优先尝试镜像；自定义 proxy 镜像也会参与 Java API/归档测速。整合包与资源下载另支持 MCIM 等 Modrinth / CurseForge 镜像，可在设置中配置默认源，也可在导入/安装时临时切换。
 - **版本设置**：在左侧「版本设置」中统一管理已安装版本，可修改名称、内存与 Java，查看游戏目录；支持「修复版本」，校验并补充缺失或损坏的游戏本体、运行库、资源与加载器文件。首页选中某个版本后，启动按钮旁也会直接显示「修复版本」。安装了模组加载器的版本会额外显示「资源设置」：查看模组、资源包、光影数量，直接打开对应目录，并快速调整该版本内存。
 - **版本隔离**：可在设置中开启或关闭。开启时每个版本在 `.minecraft/versions/<版本名>/` 中拥有独立的 `mods/`、`shaderpacks/`、`resourcepacks/`、`saves/` 与日志目录；关闭后所有版本共用 `.minecraft`。版本文件夹同时包含可被其他启动器识别的 `<版本名>.json` 和 `<版本名>.jar`。
@@ -153,11 +153,11 @@ cd frontend && npm run build
 
 本项目采用 **AGPL-3.0**，并提供商业授权。客户端源码公开，商业服务端和官方发布密钥保持闭源。详见 [docs/OPEN_CORE.md](docs/OPEN_CORE.md)。
 
-- **免费功能**：启动已安装的游戏、已安装版本管理、Java 管理、基础模组/资源安装、本地备份。
-- **付费功能**：游戏版本下载（`versions`）、服务器管理（`server`）、局域网联机（`lan`）、AI 搜索（`ai`）、云同步/备份（`cloud`）、整合包 CDN（`cdn`）、服务器托管（`hosting`）、优先支持（`priority`）。
-- 已安装版本的启动、设置修改、模组/资源安装、存档编辑不受 `versions` 限制；下载新的 Minecraft 游戏版本，以及修复/补充版本文件需要 `versions` 授权。
+- **免费功能**：启动已安装的游戏、下载 Minecraft 游戏版本、修复/补充版本文件、已安装版本管理、Java 管理、基础模组/资源安装、本地备份。
+- **付费功能**：服务器管理（`server`）、局域网联机（`lan`）、AI 搜索（`ai`）、云同步/备份（`cloud`）、整合包 CDN（`cdn`）、服务器托管（`hosting`）、优先支持（`priority`）。
+- 下载新的 Minecraft 游戏版本和修复版本文件不需要 `versions` 授权；版本下载器不再调用 `requireFeature`。
 - 免费功能不再需要激活；只有付费 API 调用 `requireFeature`。客户端检查只是 UI 辅助，真正的权益校验在服务端。
-- LicensingGo 激活码的 `features` 数组必须包含 `versions`、`server`、`lan`、`ai` 等对应值，付费功能才会解锁；`*` / `pro` 可作为全量权益。
+- LicensingGo 激活码的 `features` 数组包含 `server`、`lan`、`ai` 等对应值即可解锁付费功能；旧授权中的 `versions` 字段会被忽略。`*` / `pro` 可作为全量权益。
 - 社区构建不包含产品 API Key 和授权服务地址，付费入口显示 PRO 提示；官方构建通过私有 CI secret 注入产品配置。
 - 官方构建的代码签名证书、产品 API Key / 授权服务器地址不进入公开仓库；旧式静态 OTA 清单的 Ed25519 私钥仅用于兼容模式，也不进入仓库。
 

@@ -13,7 +13,7 @@ func TestEntitledFeatures(t *testing.T) {
 		feature  string
 		want     bool
 	}{
-		{"exact", "active", []string{"server", "lan", "versions"}, "versions", true},
+		{"exact", "active", []string{"server", "lan", "ai"}, "ai", true},
 		{"missing", "active", []string{"server"}, "ai", false},
 		{"wildcard", "active", []string{"*"}, "cloud", true},
 		{"pro", "grace", []string{"pro"}, "hosting", true},

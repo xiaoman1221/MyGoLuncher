@@ -11,7 +11,7 @@ import { api } from '../lib/api';
 export function InstanceSettingsPage() {
   const {
     instances, settings, openCreate, openEdit, askDelete, openInstanceFolder, refreshInstances,
-    hasFeature, openLicense, pushToast, t,
+    pushToast, t,
   } = useApp();
   const isolated = settings?.versionIsolation !== false;
   const [updatesId, setUpdatesId] = useState<string | null>(null);
@@ -20,10 +20,6 @@ export function InstanceSettingsPage() {
   const updateInstance = instances.find((instance) => instance.id === updatesId) ?? null;
 
   const repairVersion = async (instanceId: string) => {
-    if (!hasFeature('versions')) {
-      openLicense();
-      return;
-    }
     setRepairingId(instanceId);
     try {
       await api.repairVersion(instanceId);

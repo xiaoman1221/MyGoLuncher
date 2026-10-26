@@ -8,7 +8,6 @@ import "strings"
 const (
 	FeatureServer   = "server"   // MCSM server management
 	FeatureLAN      = "lan"      // LAN multiplayer/share/sync
-	FeatureVersions = "versions" // downloading new Minecraft versions
 	FeatureAI       = "ai"       // AI-assisted resource search
 	FeatureCloud    = "cloud"    // cloud sync/backup (server-side)
 	FeatureCDN      = "cdn"      // premium modpack CDN
@@ -19,7 +18,6 @@ const (
 var featureLabels = map[string]string{
 	FeatureServer:   "服务器管理",
 	FeatureLAN:      "局域网联机",
-	FeatureVersions: "游戏版本下载",
 	FeatureAI:       "AI 搜索",
 	FeatureCloud:    "云同步与云备份",
 	FeatureCDN:      "整合包 CDN",

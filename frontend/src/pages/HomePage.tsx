@@ -27,7 +27,7 @@ export function HomePage() {
   const {
     instances, selectedInstance, selectedId, selectInstance, settings, selectedAccount,
     navigate, openCreate, openEdit, askDelete, launch, stop, openConsole, openInstanceFolder,
-    t, locale, launchingId, hasFeature, openLicense, pushToast, refreshInstances,
+    t, locale, launchingId, pushToast, refreshInstances,
   } = useApp();
   const [repairingId, setRepairingId] = useState<string | null>(null);
   const [hitokoto, setHitokoto] = useState<Hitokoto | null>(null);
@@ -68,10 +68,6 @@ export function HomePage() {
   }, [loadHitokoto]);
 
   const repairVersion = async (instanceId: string) => {
-    if (!hasFeature('versions')) {
-      openLicense();
-      return;
-    }
     setRepairingId(instanceId);
     try {
       await api.repairVersion(instanceId);

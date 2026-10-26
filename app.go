@@ -1232,9 +1232,6 @@ func (a *App) InstallVersion(id string) (err error) {
 	if err := a.ready(); err != nil {
 		return err
 	}
-	if err := a.requireFeature(licensepkg.FeatureVersions); err != nil {
-		return err
-	}
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return errors.New("版本 ID 不能为空")
@@ -1253,9 +1250,6 @@ func (a *App) InstallVersion(id string) (err error) {
 // missing or corrupted client, library, asset and loader files.
 func (a *App) RepairVersion(instanceID string) (err error) {
 	if err := a.ready(); err != nil {
-		return err
-	}
-	if err := a.requireFeature(licensepkg.FeatureVersions); err != nil {
 		return err
 	}
 	inst, ok := a.store.Instance(strings.TrimSpace(instanceID))
@@ -1345,9 +1339,6 @@ func (a *App) CreateInstance(req CreateInstanceRequest) (view InstanceView, err 
 		return InstanceView{}, fmt.Errorf("无效的 Minecraft 版本: %w", err)
 	}
 	if !a.mojang.IsInstalled(req.MCVersion) {
-		if err := a.requireFeature(licensepkg.FeatureVersions); err != nil {
-			return InstanceView{}, err
-		}
 	}
 	loaderType := loader.Normalize(req.Loader)
 	if loaderType == "" {
@@ -1397,11 +1388,6 @@ func (a *App) installInstanceRuntime(ctx context.Context, inst *store.Instance, 
 	defer a.installMu.Unlock()
 	workers := a.store.Settings().DownloadWorkers
 	t.update("game", "正在准备游戏文件…", 0, 0)
-	if !a.mojang.IsInstalled(inst.MCVersion) {
-		if err := a.requireFeature(licensepkg.FeatureVersions); err != nil {
-			return err
-		}
-	}
 	if err := a.mojang.Install(ctx, inst.MCVersion, workers, t.mojangProgress("game")); err != nil {
 		return fmt.Errorf("安装游戏版本失败: %w", err)
 	}

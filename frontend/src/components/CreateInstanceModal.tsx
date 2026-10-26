@@ -21,7 +21,6 @@ const memorySteps = [2048, 4096, 6144, 8192, 12288, 16384];
 export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const {
     settings, bootstrap, pushToast, refreshInstances, selectInstance, navigate, t,
-    hasFeature, openLicense,
   } = useApp();
   const [versions, setVersions] = useState<VersionView[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
@@ -98,15 +97,10 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
 
   const requiredJava = selectedVersion?.javaMajor ?? 21;
   const isModded = loader !== 'vanilla';
-  const needsVersionLicense = Boolean(selectedVersion && !selectedVersion.installed && !hasFeature('versions'));
 
   const submit = () => {
     if (!mcVersion) {
       pushToast('error', t('create.selectVersion'));
-      return;
-    }
-    if (needsVersionLicense) {
-      openLicense();
       return;
     }
     setSubmitting(true);
@@ -145,7 +139,7 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
             <button type="button" className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
             <button type="button" className="btn btn-primary" disabled={submitting || loadingVersions || !mcVersion} onClick={submit}>
               <Rocket size={16} />
-              {submitting ? t('create.creating') : needsVersionLicense ? t('versions.downloadLockedShort') : t('create.createInstall')}
+              {submitting ? t('create.creating') : t('create.createInstall')}
             </button>
           </div>
         </>
@@ -173,15 +167,6 @@ export function CreateInstanceModal({ open, onClose }: { open: boolean; onClose:
           />
           {versionError && (
             <span className="field-error"><TriangleAlert size={13} /> {versionError}</span>
-          )}
-          {needsVersionLicense && (
-            <div className="inline-banner banner-warning">
-              <TriangleAlert size={15} />
-              <div><strong>{t('versions.downloadLocked')}</strong><span>{t('versions.downloadLockedHint')}</span></div>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={openLicense}>
-                {t('paid.activate')}
-              </button>
-            </div>
           )}
         </div>
 
