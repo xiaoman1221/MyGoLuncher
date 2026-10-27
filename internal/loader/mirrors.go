@@ -30,6 +30,30 @@ func (i *Installer) sourceList() []mirror.Source {
 	return append([]mirror.Source(nil), i.sources...)
 }
 
+// preferLoaderMirrors moves BMCLAPI sources ahead of the official host for
+// loader metadata, installer artifacts and Maven libraries. Speed probing can
+// prefer a reachable official CDN, but loader Maven downloads in mainland
+// China are much more reliable through the domestic mirror.
+func preferLoaderMirrors(sources []mirror.Source) []mirror.Source {
+	if len(sources) < 2 {
+		return sources
+	}
+	preferred := make([]mirror.Source, 0, len(sources))
+	rest := make([]mirror.Source, 0, len(sources))
+	for _, source := range sources {
+		switch source.Kind {
+		case mirror.KindBMCLAPI, mirror.KindCustomBMCLAPI:
+			preferred = append(preferred, source)
+		default:
+			rest = append(rest, source)
+		}
+	}
+	if len(preferred) == 0 {
+		return sources
+	}
+	return append(preferred, rest...)
+}
+
 func (i *Installer) rankedSources(ctx context.Context, loaderType, mcVersion string) []mirror.Source {
 	loaderType = Normalize(loaderType)
 	key := loaderType + ":" + mcVersion

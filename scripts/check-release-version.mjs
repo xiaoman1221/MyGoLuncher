@@ -14,7 +14,7 @@ if (pkg.version !== expected) failures.push(`frontend/package.json version=${pkg
 const lock = JSON.parse(readFileSync('frontend/package-lock.json', 'utf8'));
 if (lock.version !== expected) failures.push(`frontend/package-lock.json version=${lock.version}`);
 if (lock?.packages?.['']?.version !== expected) failures.push(`frontend/package-lock.json packages[""].version=${lock?.packages?.['']?.version}`);
-const appGo = readFileSync('app.go', 'utf8');
+const appGo = readFileSync('internal/app/app.go', 'utf8');
 const appVersion = appGo.match(/const appVersion = "([^"]+)"/)?.[1];
 if (appVersion !== expected) failures.push(`app.go appVersion=${appVersion}`);
 const clientGo = readFileSync('internal/license/client.go', 'utf8');

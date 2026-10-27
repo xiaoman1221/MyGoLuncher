@@ -7,6 +7,18 @@ import (
 	"MyMinecraftGoLuncher/internal/mirror"
 )
 
+func TestPreferLoaderMirrorsMovesBMCLFirst(t *testing.T) {
+	sources := []mirror.Source{mirror.Official(), mirror.BMCLAPI()}
+	ordered := preferLoaderMirrors(sources)
+	if len(ordered) != 2 || ordered[0].Kind != mirror.KindBMCLAPI || ordered[1].Kind != mirror.KindOfficial {
+		t.Fatalf("ordered = %#v", ordered)
+	}
+	onlyOfficial := preferLoaderMirrors([]mirror.Source{mirror.Official()})
+	if len(onlyOfficial) != 1 || onlyOfficial[0].Kind != mirror.KindOfficial {
+		t.Fatalf("official only = %#v", onlyOfficial)
+	}
+}
+
 func TestLoaderCandidatesUseBMCLAPIMirror(t *testing.T) {
 	sources := []mirror.Source{mirror.BMCLAPI()}
 	urls := loaderCandidates(sources, mirror.ResourceLoaderMeta, FabricMeta+"/versions/loader/1.21.1", "1.21.1")

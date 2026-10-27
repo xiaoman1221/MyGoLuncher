@@ -20,8 +20,6 @@ import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import { PageHeader } from '../components/PageHeader';
 import { DownloadMirrorSettings, ResourceMirrorSettings } from '../components/MirrorSettings';
-import { UpdatePanel } from '../components/UpdatePanel';
-import { LicensePanel } from '../components/LicensePanel';
 import type { Settings } from '../lib/types';
 import {
   accountKindKey,
@@ -544,9 +542,6 @@ export function SettingsPage() {
         </div>
       </section>
 
-      <LicensePanel />
-
-      <UpdatePanel />
 
       <section className="panel">
         <div className="panel-head">

@@ -21,6 +21,7 @@ import type {
   JavaReleaseInfo,
   JavaRuntime,
   LanFileInfo,
+  LanSignalBatch,
   LanSnapshot,
   LanSyncPreview,
   LanSyncResult,
@@ -58,6 +59,9 @@ import type {
 
 type WailsWindow = Window & {
   go?: {
+    app?: {
+      App?: Record<string, (...args: unknown[]) => Promise<unknown>>;
+    };
     main?: {
       App?: Record<string, (...args: unknown[]) => Promise<unknown>>;
     };
@@ -68,13 +72,14 @@ type WailsWindow = Window & {
 };
 
 const host = window as WailsWindow;
+const desktopApp = host.go?.app?.App ?? host.go?.main?.App;
 
-export const isDesktop = Boolean(host.go?.main?.App?.Bootstrap);
+export const isDesktop = Boolean(desktopApp?.Bootstrap);
 export const isDemo = !isDesktop;
 
 async function call<T>(method: string, ...args: unknown[]): Promise<T> {
   if (isDesktop) {
-    const fn = host.go?.main?.App?.[method];
+    const fn = desktopApp?.[method];
     if (!fn) throw new Error(`客户端绑定缺失: ${method}`);
     return fn(...args) as Promise<T>;
   }
@@ -130,7 +135,11 @@ export const api = {
   getTaskLog: (taskId: string) => call<TaskLog>('GetTaskLog', taskId),
   cancelTask: (taskId: string) => call<void>('CancelTask', taskId),
   getLicenseStatus: () => call<LicenseStatus>('GetLicenseStatus'),
-  activateLicense: (code: string) => call<LicenseStatus>('ActivateLicense', code),
+  activateLicense: (code: string, email: string, customer: string) =>
+    call<LicenseStatus>('ActivateLicense', code, email, customer),
+  requestEmailUnbind: (email: string) => call<string>('RequestEmailUnbind', email),
+  confirmEmailUnbind: (email: string, verificationCode: string) =>
+    call<LicenseStatus>('ConfirmEmailUnbind', email, verificationCode),
   startTrial: () => call<LicenseStatus>('StartTrial'),
   validateLicense: () => call<LicenseStatus>('ValidateLicense'),
   unbindLicense: () => call<LicenseStatus>('UnbindLicense'),
@@ -230,13 +239,14 @@ export const api = {
   getLanSnapshot: () => call<LanSnapshot>('GetLanSnapshot'),
   scanLanSubnets: () => call<LanSnapshot>('ScanLanSubnets'),
   getLanTools: () => call<LanToolState>('GetLanTools'),
-  sendLanChat: (peerId: string, text: string) =>
-    call<LanToolSendResult>('SendLanChat', peerId, text),
-  sendLanFile: (peerId: string, path: string) =>
-    call<LanToolSendResult>('SendLanFile', peerId, path),
-  sendLanVoice: (peerId: string, data: string, mime: string, durationMs: number) =>
-    call<LanToolSendResult>('SendLanVoice', peerId, data, mime, durationMs),
+  sendLanChat: (peerIds: string[], chatId: string, chatName: string, members: string[], text: string) =>
+    call<LanToolSendResult>('SendLanChat', peerIds, chatId, chatName, members, text),
+  sendLanFile: (peerIds: string[], chatId: string, chatName: string, members: string[], path: string) =>
+    call<LanToolSendResult>('SendLanFile', peerIds, chatId, chatName, members, path),
+  downloadLanFile: (messageId: string) => call<LanToolState['messages'][number]>('DownloadLanFile', messageId),
+  sendLanSignal: (peerId: string, session: string, kind: 'offer' | 'answer' | 'ice', payload: string) =>
+    call<void>('SendLanSignal', peerId, session, kind, payload),
+  pollLanSignals: (after: number) => call<LanSignalBatch>('PollLanSignals', after),
   pickLanFile: () => call<LanFileInfo>('PickLanFile'),
-  getLanVoice: (id: string) => call<string>('GetLanVoice', id),
   openLanInbox: () => call<void>('OpenLanInbox'),
 };

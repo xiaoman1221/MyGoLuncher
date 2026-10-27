@@ -93,7 +93,7 @@ export function Sidebar() {
       </button>
 
       <button type="button" className="sidebar-foot" onClick={() => navigate('about')} title={t('common.about')}>
-        <span>v{bootstrap?.version ?? '1.0.2'}</span>
+        <span>v{bootstrap?.version ?? '1.0.3'}</span>
         <span className="foot-dot" />
         <span title={t('fun.mygoSlogan')}>MYGO</span>
       </button>

@@ -117,7 +117,7 @@ export function LanSyncModal({ peer, instances, selectedId, onClose }: LanSyncMo
             type="button"
             className="btn btn-primary"
             onClick={() => void start()}
-            disabled={syncing || loadingPreview || !preview || preview.blocking || preview.running || (changeCount === 0 && !preview.loaderVersionMismatch)}
+            disabled={syncing || loadingPreview || !preview || preview.blocking || preview.running || (changeCount === 0 && !preview.loaderVersionMismatch && !preview.runtimeMissing)}
           >
             {syncing ? <LoaderCircle size={15} className="spin" /> : <Download size={15} />}
             {syncing

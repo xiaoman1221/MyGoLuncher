@@ -24,6 +24,9 @@ const (
 type Credentials struct {
 	Code          string     `json:"code"`
 	MachineCode   string     `json:"machine_code"`
+	Email         string     `json:"email,omitempty"`
+	Customer      string     `json:"customer,omitempty"`
+	DeviceID      string     `json:"device_id,omitempty"`
 	UnbindKey     string     `json:"unbind_key,omitempty"`
 	ActivatedAt   time.Time  `json:"activated_at"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
@@ -38,6 +41,9 @@ type Status struct {
 	Activated      bool     `json:"activated"`
 	Code           string   `json:"code,omitempty"`
 	MachineCode    string   `json:"machineCode"`
+	Email          string   `json:"email,omitempty"`
+	Customer       string   `json:"customer,omitempty"`
+	CanSelfUnbind  bool     `json:"canSelfUnbind"`
 	ExpiresAt      string   `json:"expiresAt,omitempty"`
 	Features       []string `json:"features"`
 	LastChecked    string   `json:"lastChecked,omitempty"`
@@ -72,7 +78,7 @@ func NewManager(secrets secretstore.Store, version string) (*Manager, error) {
 		secrets = secretstore.NewMemory()
 	}
 	if strings.TrimSpace(version) == "" {
-		version = "1.0.2"
+		version = "1.0.3"
 	}
 	AppVersion = version
 	machine := MachineCode(Collect())
@@ -155,15 +161,23 @@ func (m *Manager) Active() bool {
 }
 
 // Activate binds this machine and persists the returned unbind key.
-func (m *Manager) Activate(ctx context.Context, code string) (Status, error) {
+func (m *Manager) Activate(ctx context.Context, code, email, customer string) (Status, error) {
 	if m == nil || m.client == nil {
 		return m.Status(), errors.New("授权服务未配置")
 	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	code = strings.ToUpper(strings.TrimSpace(code))
+	email = strings.ToLower(strings.TrimSpace(email))
+	customer = strings.TrimSpace(customer)
 	if code == "" {
 		return m.Status(), errors.New("请输入激活码")
+	}
+	if email == "" || !strings.Contains(email, "@") {
+		return m.Status(), errors.New("请输入激活码绑定的邮箱")
+	}
+	if customer == "" {
+		return m.Status(), errors.New("请输入激活码绑定的客户名称")
 	}
 	if status := m.Status(); status.State == "machine_changed" {
 		return status, errors.New("机器码已变化，请先在原机器解绑，或联系管理员释放名额")
@@ -175,7 +189,7 @@ func (m *Manager) Activate(ctx context.Context, code string) (Status, error) {
 	host, _ := osHostname()
 	result, err := m.client.Activate(ctx, ActivateRequest{
 		Code: code, MachineCode: machine, MachineName: host,
-		OS: runtime.GOOS, Extra: map[string]any{"app_version": AppVersion},
+		OS: runtime.GOOS, Email: email, Customer: customer, Extra: map[string]any{"app_version": AppVersion},
 	})
 	if err != nil {
 		return m.Status(), err
@@ -190,12 +204,12 @@ func (m *Manager) Activate(ctx context.Context, code string) (Status, error) {
 		// Idempotent activation does not return a second unbind key.
 		result.UnbindKey = previous.UnbindKey
 	}
-	if strings.TrimSpace(result.UnbindKey) == "" {
-		return m.Status(), errors.New("授权服务没有返回解绑密钥，无法安全保存本地授权")
-	}
 	creds := Credentials{
 		Code:          code,
 		MachineCode:   machine,
+		Email:         email,
+		Customer:      customer,
+		DeviceID:      result.DeviceID,
 		UnbindKey:     result.UnbindKey,
 		ActivatedAt:   m.now().UTC(),
 		ExpiresAt:     result.ExpiresAt,
@@ -239,7 +253,8 @@ func (m *Manager) Validate(ctx context.Context) (Status, error) {
 	if creds.ExpiresAt != nil && !creds.ExpiresAt.After(now) {
 		m.setStatus(Status{
 			State: "expired", Activated: true, Code: maskCode(creds.Code),
-			MachineCode: m.Status().MachineCode, ExpiresAt: formatTime(creds.ExpiresAt),
+			MachineCode: m.Status().MachineCode, Email: creds.Email, Customer: creds.Customer,
+			CanSelfUnbind: strings.TrimSpace(creds.UnbindKey) != "", ExpiresAt: formatTime(creds.ExpiresAt),
 			Features: cleanFeatures(creds.Features), Message: "激活码已过期，请续费",
 			LastChecked: now.Format(time.RFC3339), GraceDays: offlineGraceDays,
 		})
@@ -253,7 +268,8 @@ func (m *Manager) Validate(ctx context.Context) (Status, error) {
 			until := creds.LastValidated.Add(gracePeriod)
 			m.setStatus(Status{
 				State: "grace", Activated: true, Code: maskCode(creds.Code),
-				MachineCode: machine, ExpiresAt: formatTime(creds.ExpiresAt),
+				MachineCode: machine, Email: creds.Email, Customer: creds.Customer,
+				CanSelfUnbind: strings.TrimSpace(creds.UnbindKey) != "", ExpiresAt: formatTime(creds.ExpiresAt),
 				Features: cleanFeatures(creds.Features), Message: "授权校验失败，正在宽限期运行",
 				LastChecked: now.Format(time.RFC3339), GraceUntil: formatTime(&until), GraceDays: offlineGraceDays,
 			})
@@ -261,8 +277,10 @@ func (m *Manager) Validate(ctx context.Context) (Status, error) {
 		}
 		m.setStatus(Status{
 			State: "error", Activated: true, Code: maskCode(creds.Code),
-			MachineCode: machine, Message: "无法校验授权：" + err.Error(),
-			LastChecked: now.Format(time.RFC3339), GraceDays: offlineGraceDays,
+			MachineCode: machine, Email: creds.Email, Customer: creds.Customer,
+			CanSelfUnbind: strings.TrimSpace(creds.UnbindKey) != "",
+			Message:       "无法校验授权：" + err.Error(),
+			LastChecked:   now.Format(time.RFC3339), GraceDays: offlineGraceDays,
 			Features: cleanFeatures(creds.Features),
 		})
 		return m.Status(), err
@@ -276,7 +294,8 @@ func (m *Manager) Validate(ctx context.Context) (Status, error) {
 		}
 		m.setStatus(Status{
 			State: state, Activated: true, Code: maskCode(creds.Code),
-			MachineCode: machine, ExpiresAt: formatTime(creds.ExpiresAt),
+			MachineCode: machine, Email: creds.Email, Customer: creds.Customer,
+			CanSelfUnbind: strings.TrimSpace(creds.UnbindKey) != "", ExpiresAt: formatTime(creds.ExpiresAt),
 			Features: cleanFeatures(creds.Features),
 			Message:  firstNonEmpty(result.Message, "授权已失效"), LastChecked: now.Format(time.RFC3339),
 			GraceDays: offlineGraceDays,
@@ -324,11 +343,87 @@ func (m *Manager) Unbind(ctx context.Context) (Status, error) {
 	m.creds = Credentials{}
 	m.status = Status{
 		State: "inactive", MachineCode: m.status.MachineCode, Features: []string{},
+		Email: creds.Email, Customer: creds.Customer,
 		Message: "本机已解绑，可以输入新的激活码", LastChecked: m.now().UTC().Format(time.RFC3339),
 		GraceDays: offlineGraceDays,
 	}
 	m.mu.Unlock()
 	return m.Status(), nil
+}
+
+// RequestEmailUnbind sends a verification code to the email bound to the
+// activation code. It is the fallback when the local unbind key is missing.
+func (m *Manager) RequestEmailUnbind(ctx context.Context, email string) (string, error) {
+	if m == nil || m.client == nil {
+		return "", errors.New("授权服务未配置")
+	}
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	m.mu.RLock()
+	creds := m.creds
+	m.mu.RUnlock()
+	if strings.TrimSpace(creds.Code) == "" || strings.TrimSpace(creds.MachineCode) == "" {
+		return "", errors.New("本机尚未激活")
+	}
+	email = normalizeEmail(email)
+	if email == "" {
+		email = normalizeEmail(creds.Email)
+	}
+	if email == "" {
+		return "", errors.New("请填写激活码绑定的邮箱")
+	}
+	result, err := m.client.RequestEmailUnbind(ctx, creds.Code, email, creds.MachineCode)
+	if err != nil {
+		return "", err
+	}
+	return firstNonEmpty(result.Message, "如果信息匹配，验证码已发送到绑定邮箱"), nil
+}
+
+// ConfirmEmailUnbind releases the seat with the emailed verification code and
+// removes the local activation record on success.
+func (m *Manager) ConfirmEmailUnbind(ctx context.Context, email, verificationCode string) (Status, error) {
+	if m == nil || m.client == nil {
+		return m.Status(), errors.New("授权服务未配置")
+	}
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	m.mu.RLock()
+	creds := m.creds
+	m.mu.RUnlock()
+	if strings.TrimSpace(creds.Code) == "" || strings.TrimSpace(creds.MachineCode) == "" {
+		return m.Status(), errors.New("本机尚未激活")
+	}
+	email = normalizeEmail(email)
+	if email == "" {
+		email = normalizeEmail(creds.Email)
+	}
+	if email == "" {
+		return m.Status(), errors.New("请填写激活码绑定的邮箱")
+	}
+	result, err := m.client.ConfirmEmailUnbind(ctx, creds.Code, email, creds.MachineCode, verificationCode)
+	if err != nil {
+		return m.Status(), err
+	}
+	if !result.Valid {
+		return m.Status(), errors.New(firstNonEmpty(result.Message, "解绑失败"))
+	}
+	if err := m.secrets.Delete(secretName); err != nil {
+		return m.Status(), err
+	}
+	m.mu.Lock()
+	m.creds = Credentials{}
+	m.status = Status{
+		State: "inactive", MachineCode: m.status.MachineCode, Features: []string{},
+		Email: email, Customer: creds.Customer,
+		Message: "本机已解绑，可以输入新的激活码", LastChecked: m.now().UTC().Format(time.RFC3339),
+		GraceDays: offlineGraceDays,
+	}
+	m.mu.Unlock()
+	return m.Status(), nil
+}
+
+func normalizeEmail(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func (m *Manager) save(creds Credentials) error {
@@ -348,8 +443,10 @@ func (m *Manager) setStatus(status Status) {
 func (m *Manager) statusFor(creds Credentials) Status {
 	status := Status{
 		State: "active", Activated: true, Code: maskCode(creds.Code),
-		MachineCode: MachineCode(Collect()), ExpiresAt: formatTime(creds.ExpiresAt),
-		Features: cleanFeatures(creds.Features), GraceDays: offlineGraceDays,
+		MachineCode: MachineCode(Collect()), Email: creds.Email, Customer: creds.Customer,
+		CanSelfUnbind: strings.TrimSpace(creds.UnbindKey) != "",
+		ExpiresAt:     formatTime(creds.ExpiresAt),
+		Features:      cleanFeatures(creds.Features), GraceDays: offlineGraceDays,
 	}
 	if !creds.LastValidated.IsZero() {
 		status.LastChecked = creds.LastValidated.UTC().Format(time.RFC3339)

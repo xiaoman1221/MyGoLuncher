@@ -11,6 +11,7 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
+	apppkg "MyMinecraftGoLuncher/internal/app"
 	"MyMinecraftGoLuncher/internal/store"
 )
 
@@ -49,7 +50,7 @@ func webRoot() fs.FS {
 }
 
 func main() {
-	app := NewApp()
+	application := apppkg.NewApp()
 	err := wails.Run(&options.App{
 		Title:            "MyGoLuncher",
 		Width:            1440,
@@ -64,11 +65,11 @@ func main() {
 		Windows: &windows.Options{
 			Theme: windows.SystemDefault,
 		},
-		OnStartup:     app.startup,
-		OnBeforeClose: app.beforeClose,
-		OnShutdown:    app.shutdown,
+		OnStartup:     application.Startup,
+		OnBeforeClose: application.BeforeClose,
+		OnShutdown:    application.Shutdown,
 		Bind: []interface{}{
-			app,
+			application,
 		},
 	})
 	if err != nil {

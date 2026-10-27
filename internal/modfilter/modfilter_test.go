@@ -29,6 +29,16 @@ func TestIsClientOnly(t *testing.T) {
 			client:  false,
 		},
 		{
+			name:    "fabric client entrypoints only",
+			entries: map[string]string{"fabric.mod.json": `{"id":"sodium","entrypoints":{"client":["net.example.Client"]}}`},
+			client:  true,
+		},
+		{
+			name:    "fabric common entrypoints",
+			entries: map[string]string{"fabric.mod.json": `{"id":"lithium","entrypoints":{"main":["net.example.Main"],"client":["net.example.Client"]}}`},
+			client:  false,
+		},
+		{
 			name:    "quilt client",
 			entries: map[string]string{"quilt.mod.json": `{"minecraft":{"environment":"client"}}`},
 			client:  true,
@@ -48,6 +58,13 @@ func TestIsClientOnly(t *testing.T) {
 			client: true,
 		},
 		{
+			name: "neoforge side client",
+			entries: map[string]string{
+				"META-INF/neoforge.mods.toml": "modLoader='javafml'\nside=\"CLIENT\"\n",
+			},
+			client: true,
+		},
+		{
 			name:    "forge normal",
 			entries: map[string]string{"META-INF/mods.toml": `displayTest="MATCH_VERSION"`},
 			client:  false,
@@ -60,6 +77,11 @@ func TestIsClientOnly(t *testing.T) {
 		{
 			name:    "manifest side",
 			entries: map[string]string{"META-INF/MANIFEST.MF": "Manifest-Version: 1.0\r\nModSide: CLIENT\r\n"},
+			client:  true,
+		},
+		{
+			name:    "forge manifest side",
+			entries: map[string]string{"META-INF/MANIFEST.MF": "Manifest-Version: 1.0\r\nFMLSide: CLIENT\r\n"},
 			client:  true,
 		},
 		{

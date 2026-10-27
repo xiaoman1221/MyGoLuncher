@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Gift, KeyRound, LoaderCircle, RefreshCw, ShieldCheck, TriangleAlert, Unlink, X } from 'lucide-react';
+import { Gift, KeyRound, LoaderCircle, Mail, RefreshCw, Send, ShieldCheck, TriangleAlert, Unlink, X } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import type { LicenseStatus } from '../lib/types';
@@ -14,11 +14,22 @@ interface LicenseGateProps {
 export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) {
   const { t, theme, language } = useApp();
   const [code, setCode] = useState('');
+  const [email, setEmail] = useState(status.email ?? '');
+  const [customer, setCustomer] = useState(status.customer ?? '');
+  const [verificationCode, setVerificationCode] = useState('');
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
+  const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [current, setCurrent] = useState(status);
 
-  useEffect(() => setCurrent(status), [status]);
+  useEffect(() => {
+    setCurrent(status);
+    setEmail((value) => value || status.email || '');
+    setCustomer((value) => value || status.customer || '');
+    if (status.activated && !status.trial && status.canSelfUnbind === false) setEmailOpen(true);
+  }, [status]);
 
   const stateLabel = (value: LicenseStatus) => {
     switch (value.state) {
@@ -37,6 +48,7 @@ export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) 
   const run = async (action: string, work: () => Promise<LicenseStatus>) => {
     setBusy(action);
     setError('');
+    setNotice('');
     try {
       const next = await work();
       setCurrent(next);
@@ -54,19 +66,85 @@ export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) 
   };
 
   const activate = () => {
-    if (!code.trim()) {
+    const trimmedCode = code.trim();
+    const trimmedEmail = email.trim();
+    const trimmedCustomer = customer.trim();
+    if (!trimmedCode) {
       setError(t('license.missingCode'));
       return;
     }
-    void run('activate', () => api.activateLicense(code.trim()));
+    if (!trimmedEmail) {
+      setError(t('license.missingEmail'));
+      return;
+    }
+    if (!trimmedCustomer) {
+      setError(t('license.missingCustomer'));
+      return;
+    }
+    void run('activate', () => api.activateLicense(trimmedCode, trimmedEmail, trimmedCustomer));
   };
 
   const validate = () => void run('validate', () => api.validateLicense());
   const startTrial = () => void run('trial', () => api.startTrial());
 
   const unbind = () => {
+    if (!current.canSelfUnbind) {
+      setEmailOpen(true);
+      setError(t('license.selfUnbindUnavailable'));
+      return;
+    }
     if (!window.confirm(t('license.unbindConfirm'))) return;
     void run('unbind', () => api.unbindLicense());
+  };
+
+  const requestEmailUnbind = async () => {
+    const value = email.trim();
+    if (!value) {
+      setError(t('license.missingEmail'));
+      return;
+    }
+    setBusy('emailRequest');
+    setError('');
+    setNotice('');
+    try {
+      await api.requestEmailUnbind(value);
+      setEmailSent(true);
+      setVerificationCode('');
+      setNotice(t('license.emailUnbindSent'));
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const confirmEmailUnbind = async () => {
+    const value = email.trim();
+    if (!value) {
+      setError(t('license.missingEmail'));
+      return;
+    }
+    if (!/^\d{6}$/.test(verificationCode.trim())) {
+      setError(t('license.verificationHint'));
+      return;
+    }
+    setBusy('emailConfirm');
+    setError('');
+    setNotice('');
+    try {
+      const next = await api.confirmEmailUnbind(value, verificationCode.trim());
+      setCurrent(next);
+      setEmailSent(false);
+      setVerificationCode('');
+      setEmailOpen(false);
+      setNotice(t('license.emailUnbindSuccess'));
+      await onActivated();
+      onClose?.();
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(null);
+    }
   };
 
   const trialRemaining = current.trialRemaining ?? 3;
@@ -107,6 +185,7 @@ export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) 
           <code>{current.machineCode || '—'}</code>
           <small>{t('license.machineHint')}</small>
         </div>
+        {current.email && <p className="license-message">{t('license.activatedEmail', { email: current.email })}</p>}
 
         <label className="field">
           <span className="field-label"><KeyRound size={14} /> {t('license.codeLabel')}</span>
@@ -126,6 +205,34 @@ export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) 
           <span className="field-hint">{t('license.codeHint')}</span>
         </label>
 
+        <div className="license-identity">
+          <label className="field">
+            <span className="field-label"><Mail size={14} /> {t('license.emailLabel')}</span>
+            <input
+              className="text-input"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder={t('license.emailPlaceholder')}
+              autoComplete="email"
+              disabled={Boolean(busy)}
+            />
+            <span className="field-hint">{t('license.emailHint')}</span>
+          </label>
+          <label className="field">
+            <span className="field-label">{t('license.customerLabel')}</span>
+            <input
+              className="text-input"
+              value={customer}
+              onChange={(event) => setCustomer(event.target.value)}
+              placeholder={t('license.customerPlaceholder')}
+              autoComplete="organization"
+              disabled={Boolean(busy)}
+            />
+            <span className="field-hint">{t('license.customerHint')}</span>
+          </label>
+        </div>
+
         {!current.configured && (
           <div className="inline-banner banner-warning">
             <TriangleAlert size={16} />
@@ -139,6 +246,7 @@ export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) 
             <div><strong>{t('license.failed')}</strong><span>{error}</span></div>
           </div>
         )}
+        {notice && <p className="license-message license-message-success">{notice}</p>}
 
         {current.message && !error && current.state !== 'inactive' && (
           <p className="license-message">{current.message}</p>
@@ -162,6 +270,47 @@ export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) 
           <p className="license-message">{t('license.features', { features: current.features.join(' · ') })}</p>
         )}
 
+        {emailOpen && (
+          <section className="license-email-unbind">
+            <div className="license-email-head">
+              <Mail size={15} />
+              <div>
+                <strong>{t('license.emailUnbindTitle')}</strong>
+                <span>{t('license.emailUnbindBody')}</span>
+              </div>
+            </div>
+            <div className="license-email-actions">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => void requestEmailUnbind()} disabled={Boolean(busy) || !current.activated}>
+                {busy === 'emailRequest' ? <LoaderCircle size={14} className="spin" /> : <Send size={14} />}
+                {busy === 'emailRequest' ? t('license.emailUnbindSending') : t('license.emailUnbindRequest')}
+              </button>
+              {emailSent && <span className="field-hint">{t('license.emailUnbindSent')}</span>}
+            </div>
+            {emailSent && (
+              <>
+                <label className="field">
+                  <span className="field-label">{t('license.verificationLabel')}</span>
+                  <input
+                    className="text-input mono"
+                    value={verificationCode}
+                    onChange={(event) => setVerificationCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder={t('license.verificationPlaceholder')}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    disabled={Boolean(busy)}
+                  />
+                  <span className="field-hint">{t('license.verificationHint')}</span>
+                </label>
+                <button type="button" className="btn btn-danger btn-sm" onClick={() => void confirmEmailUnbind()} disabled={Boolean(busy) || verificationCode.length !== 6}>
+                  {busy === 'emailConfirm' ? <LoaderCircle size={14} className="spin" /> : <Unlink size={14} />}
+                  {busy === 'emailConfirm' ? t('license.emailUnbindConfirming') : t('license.emailUnbindConfirm')}
+                </button>
+              </>
+            )}
+          </section>
+        )}
+
         <div className="license-actions">
           {canStartTrial && (
             <button type="button" className="btn btn-ghost" onClick={startTrial} disabled={Boolean(busy)}>
@@ -177,9 +326,14 @@ export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) 
             {busy === 'validate' ? <LoaderCircle size={15} className="spin" /> : <RefreshCw size={15} />}
             {busy === 'validate' ? t('license.validating') : t('license.validate')}
           </button>
-          {current.activated && !current.trial && (
+          {current.activated && !current.trial && current.canSelfUnbind && (
             <button type="button" className="btn btn-ghost btn-danger-ghost" onClick={unbind} disabled={Boolean(busy) || !current.configured}>
               <Unlink size={15} /> {t('license.unbind')}
+            </button>
+          )}
+          {current.activated && !current.trial && !emailOpen && (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setEmailOpen(true)} disabled={Boolean(busy)}>
+              <Mail size={14} /> {t('license.emailUnbind')}
             </button>
           )}
         </div>

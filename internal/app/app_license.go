@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -23,13 +23,16 @@ func (a *App) GetLicenseStatus() licensepkg.Status {
 
 // ActivateLicense validates an activation code against LicensingGo and stores
 // the binding in the OS secret store. The activation code is not written to MGL.
-func (a *App) ActivateLicense(code string) (licensepkg.Status, error) {
+func (a *App) ActivateLicense(code, email, customer string) (licensepkg.Status, error) {
 	if err := a.baseReady(); err != nil {
 		return a.GetLicenseStatus(), err
 	}
 	ctx, cancel := context.WithTimeout(a.context(), 30*time.Second)
 	defer cancel()
-	status, err := a.license.Activate(ctx, code)
+	status, err := a.license.Activate(ctx, code, email, customer)
+	if err != nil {
+		err = licensepkg.DescribeError(err)
+	}
 	a.emitLicenseChanged(status)
 	a.syncLanEntitlement()
 	return status, err
@@ -60,6 +63,9 @@ func (a *App) ValidateLicense() (licensepkg.Status, error) {
 	ctx, cancel := context.WithTimeout(a.context(), 25*time.Second)
 	defer cancel()
 	status, err := a.license.Validate(ctx)
+	if err != nil {
+		err = licensepkg.DescribeError(err)
+	}
 	a.emitLicenseChanged(status)
 	a.syncLanEntitlement()
 	return status, err
@@ -73,6 +79,41 @@ func (a *App) UnbindLicense() (licensepkg.Status, error) {
 	ctx, cancel := context.WithTimeout(a.context(), 30*time.Second)
 	defer cancel()
 	status, err := a.license.Unbind(ctx)
+	if err != nil {
+		err = licensepkg.DescribeError(err)
+	}
+	a.emitLicenseChanged(status)
+	a.syncLanEntitlement()
+	return status, err
+}
+
+// RequestEmailUnbind sends a verification code to the email bound to the
+// activation code. It is used when the local unbind key is unavailable.
+func (a *App) RequestEmailUnbind(email string) (string, error) {
+	if err := a.baseReady(); err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(a.context(), 30*time.Second)
+	defer cancel()
+	message, err := a.license.RequestEmailUnbind(ctx, email)
+	if err != nil {
+		return "", licensepkg.DescribeError(err)
+	}
+	return message, nil
+}
+
+// ConfirmEmailUnbind releases this machine after email verification and
+// removes the local activation record.
+func (a *App) ConfirmEmailUnbind(email, verificationCode string) (licensepkg.Status, error) {
+	if err := a.baseReady(); err != nil {
+		return a.GetLicenseStatus(), err
+	}
+	ctx, cancel := context.WithTimeout(a.context(), 30*time.Second)
+	defer cancel()
+	status, err := a.license.ConfirmEmailUnbind(ctx, email, verificationCode)
+	if err != nil {
+		err = licensepkg.DescribeError(err)
+	}
 	a.emitLicenseChanged(status)
 	a.syncLanEntitlement()
 	return status, err

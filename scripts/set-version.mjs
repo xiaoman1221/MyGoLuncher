@@ -25,7 +25,7 @@ updateJSON('frontend/package-lock.json', (value) => {
   value.version = version;
   if (value.packages?.['']) value.packages[''].version = version;
 });
-replaceOne('app.go', /const appVersion = "[^"]+"/, `const appVersion = "${version}"`);
+replaceOne('internal/app/app.go', /const appVersion = "[^"]+"/, `const appVersion = "${version}"`);
 replaceOne('internal/license/client.go', /var AppVersion = "[^"]+"/, `var AppVersion = "${version}"`);
 replaceOne('internal/license/manager.go', /version = "[^"]+"/, `version = "${version}"`);
 replaceOne('internal/launcher/launcher.go', /"launcher_version":\s+"[^"]+"/, `"launcher_version":      "${version}"`);

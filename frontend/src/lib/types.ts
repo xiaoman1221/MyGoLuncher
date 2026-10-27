@@ -124,6 +124,9 @@ export interface LicenseStatus {
   activated: boolean;
   code?: string;
   machineCode: string;
+  email?: string;
+  customer?: string;
+  canSelfUnbind?: boolean;
   expiresAt?: string;
   features: string[];
   lastChecked?: string;
@@ -677,13 +680,40 @@ export interface LanToolMessage {
   fromId: string;
   fromName: string;
   text?: string;
+  chatId?: string;
+  chatName?: string;
+  members?: string[];
   fileName?: string;
+  fileId?: string;
   size?: number;
   mimeType?: string;
   durationMs?: number;
+  progress?: number;
+  downloaded?: boolean;
   path?: string;
   createdAt: string;
   incoming: boolean;
+}
+
+export interface LanSignal {
+  seq: number;
+  fromId: string;
+  fromName: string;
+  session: string;
+  kind: "offer" | "answer" | "ice";
+  payload: string;
+  createdAt: string;
+}
+
+export interface LanSignalBatch {
+  signals: LanSignal[];
+  lastSeq: number;
+}
+
+export interface LanChatGroup {
+  id: string;
+  name: string;
+  peerIds: string[];
 }
 
 export interface LanToolState {
@@ -756,6 +786,7 @@ export interface LanSyncPreview {
   versionMismatch: boolean;
   loaderMismatch: boolean;
   loaderVersionMismatch: boolean;
+  runtimeMissing: boolean;
   running: boolean;
   blocking: boolean;
   blockingReason?: string;

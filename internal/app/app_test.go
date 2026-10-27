@@ -1,9 +1,10 @@
-package main
+package app
 
 import (
 	"path/filepath"
 	"testing"
 
+	"MyMinecraftGoLuncher/internal/launcher"
 	"MyMinecraftGoLuncher/internal/store"
 )
 
@@ -22,6 +23,27 @@ func TestContainsVersionTokenBoundaries(t *testing.T) {
 		if got := containsVersionToken(test.text, test.version); got != test.want {
 			t.Fatalf("containsVersionToken(%q, %q) = %v, want %v", test.text, test.version, got, test.want)
 		}
+	}
+}
+
+func TestEnsureNoRunningGames(t *testing.T) {
+	paths := store.PathsFor(t.TempDir())
+	st, err := store.Open(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := &App{paths: paths, store: st, procs: map[string]*launcher.Process{"demo": nil}}
+	if err := app.ensureNoRunningGames(); err == nil {
+		t.Fatal("expected a running-game error")
+	}
+	app.procs = map[string]*launcher.Process{}
+	app.launching = map[string]bool{"starting": true}
+	if err := app.ensureNoRunningGames(); err == nil {
+		t.Fatal("expected a starting-game error")
+	}
+	app.launching = map[string]bool{}
+	if err := app.ensureNoRunningGames(); err != nil {
+		t.Fatalf("unexpected error with no games: %v", err)
 	}
 }
 

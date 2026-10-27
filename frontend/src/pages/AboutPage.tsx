@@ -13,6 +13,8 @@ import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import { PageHeader } from '../components/PageHeader';
 import { LogoMark } from '../components/LogoMark';
+import { UpdatePanel } from '../components/UpdatePanel';
+import { LicensePanel } from '../components/LicensePanel';
 
 const repository = 'https://github.com/xiaoman1221/MyMinecraftGoLuncher';
 const issues = repository + '/issues';
@@ -20,7 +22,7 @@ const licenseURL = 'https://www.gnu.org/licenses/agpl-3.0.html';
 
 export function AboutPage() {
   const { bootstrap, t, openDataFolder, pushToast } = useApp();
-  const version = bootstrap?.version || '1.0.2';
+  const version = bootstrap?.version || '1.0.3';
   const official = Boolean(bootstrap?.license.configured);
 
   const openLink = async (url: string) => {
@@ -63,6 +65,11 @@ export function AboutPage() {
             <small>{t('about.buildChannel')}</small>
           </div>
         </section>
+
+        <div className="about-license-stack about-wide">
+          <LicensePanel />
+          <UpdatePanel />
+        </div>
 
         <section className="panel about-panel">
           <div className="panel-head">

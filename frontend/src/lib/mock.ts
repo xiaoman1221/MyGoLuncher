@@ -798,7 +798,8 @@ function clone<T>(value: T): T {
 function bootstrap(): Bootstrap {
   return {
     license: {
-      state: 'active', configured: true, activated: true, machineCode: 'MOCK-DEMO-MACHINE', features: ['launch'],
+      state: 'active', configured: true, activated: true, machineCode: 'MOCK-DEMO-MACHINE',
+      email: 'buyer@example.com', customer: 'Demo Customer', canSelfUnbind: true, features: ['launch'],
       message: '演示模式已授权', graceDays: 7,
     },
     elevated: false,
@@ -806,7 +807,7 @@ function bootstrap(): Bootstrap {
     settings: clone(settings),
     instances: clone(instances),
     paths,
-    version: '1.0.2',
+    version: '1.0.3',
     initError: '',
     running: instances.filter((i) => i.running).map((i) => i.id),
     accounts: clone(accounts),
@@ -871,7 +872,7 @@ function makeResource(
     downloads,
     categories,
     gameVersions,
-    latestVersion: '1.0.2',
+    latestVersion: '1.0.3',
     color: 0,
     dateModified: nowMinus(1440),
   };
@@ -992,7 +993,17 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
     case 'ActivateLicense':
       return {
         state: 'active', configured: true, activated: true, code: 'DEMO-****-CODE', machineCode: 'MOCK-DEMO-MACHINE',
+        email: String(args[1] ?? 'buyer@example.com'), customer: String(args[2] ?? 'Acme Inc'),
+        canSelfUnbind: true,
         features: ['launch'], message: '演示模式已授权', graceDays: 7,
+      } satisfies LicenseStatus as T;
+    case 'RequestEmailUnbind':
+      return '如果信息匹配，验证码已发送到绑定邮箱' as T;
+    case 'ConfirmEmailUnbind':
+      return {
+        state: 'inactive', configured: true, activated: false, machineCode: 'MOCK-DEMO-MACHINE',
+        email: String(args[0] ?? ''), features: [], canSelfUnbind: false,
+        message: '演示模式已解绑', graceDays: 7,
       } satisfies LicenseStatus as T;
     case 'ValidateLicense':
       return { ...bootstrap().license } as T;
@@ -1003,7 +1014,7 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       } satisfies LicenseStatus as T;
     case 'CheckForUpdates':
       return {
-        configured: false, currentVersion: '1.0.2', mandatory: false, available: false,
+        configured: false, currentVersion: '1.0.3', mandatory: false, available: false,
         hasWeb: false, hasApp: false,
       } satisfies UpdateInfo as T;
     case 'ApplyWebUpdate':
@@ -1766,7 +1777,7 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
           extras: [], digest,
         },
         digest, versionMismatch: false, loaderMismatch: false, loaderVersionMismatch: false,
-        running: target.running, blocking: false, warnings: [],
+        runtimeMissing: false, running: target.running, blocking: false, warnings: [],
       } satisfies LanSyncPreview as T;
     }
     case 'PreviewLanVersion': {
@@ -1795,11 +1806,13 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
     case 'GetLanTools':
       return clone(lanToolsState) as T;
     case 'SendLanChat': {
-      const text = String(args[1] ?? '').trim();
+      const text = String(args[4] ?? '').trim();
       if (!text) throw new Error('聊天内容为空');
       const message = {
         id: 'mock-chat-' + Date.now(), kind: 'chat' as const, fromId: 'mock-self', fromName: 'Steve',
-        text, createdAt: new Date().toISOString(), incoming: false,
+        text, chatId: String(args[1] ?? 'all'), chatName: String(args[2] ?? '局域网所有人'),
+        members: Array.isArray(args[3]) ? args[3].map(String) : ['mock-self'],
+        createdAt: new Date().toISOString(), incoming: false,
       };
       lanToolsState = { ...lanToolsState, messages: [...lanToolsState.messages, message].slice(-200) };
       return { message: clone(message), count: 1 } as T;
@@ -1807,27 +1820,29 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
     case 'PickLanFile':
       return { path: 'D:/Games/MyGoLuncher/MGL/example.jar', name: 'example.jar', size: 1024 * 1024 } as T;
     case 'SendLanFile': {
-      const path = String(args[1] ?? '');
+      const path = String(args[4] ?? '');
       if (!path) throw new Error('没有选择文件');
       const message = {
         id: 'mock-file-' + Date.now(), kind: 'file' as const, fromId: 'mock-self', fromName: 'Steve',
         fileName: path.split('/').pop() ?? 'file', size: 1024 * 1024, path,
-        createdAt: new Date().toISOString(), incoming: false,
+        chatId: String(args[1] ?? 'all'), chatName: String(args[2] ?? '局域网所有人'),
+        fileId: 'mock-file-share', createdAt: new Date().toISOString(), incoming: false,
       };
       lanToolsState = { ...lanToolsState, messages: [...lanToolsState.messages, message].slice(-200) };
       return { message: clone(message), count: 1 } as T;
     }
-    case 'SendLanVoice': {
-      const message = {
-        id: 'mock-voice-' + Date.now(), kind: 'voice' as const, fromId: 'mock-self', fromName: 'Steve',
-        size: 1024, mimeType: String(args[2] ?? 'audio/webm'), durationMs: Number(args[3] ?? 0),
-        createdAt: new Date().toISOString(), incoming: false,
-      };
-      lanToolsState = { ...lanToolsState, messages: [...lanToolsState.messages, message].slice(-200) };
-      return { message: clone(message), count: 1 } as T;
+    case 'DownloadLanFile': {
+      const id = String(args[0] ?? '');
+      const existing = lanToolsState.messages.find((item) => item.id === id);
+      if (!existing) throw new Error('文件消息不存在');
+      const message = { ...existing, downloaded: true, progress: 100, path: 'D:/Games/MyGoLuncher/MGL/lan-inbox/download.bin' };
+      lanToolsState = { ...lanToolsState, messages: lanToolsState.messages.map((item) => item.id === id ? message : item) };
+      return clone(message) as T;
     }
-    case 'GetLanVoice':
-      return '' as T;
+    case 'SendLanSignal':
+      return undefined as T;
+    case 'PollLanSignals':
+      return { signals: [], lastSeq: Number(args[0] ?? 0) } as T;
     case 'OpenLanInbox':
       return undefined as T;
     case 'GetLanSnapshot':

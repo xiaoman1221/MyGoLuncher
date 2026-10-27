@@ -4,11 +4,20 @@ import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import type { UpdateInfo } from '../lib/types';
 
-export function UpdatePanel() {
-  const { t, pushToast } = useApp();
+export function UpdatePanel({ className = '' }: { className?: string }) {
+  const { bootstrap, t, pushToast } = useApp();
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
+
+  const runningGames = (bootstrap?.instances ?? []).filter((instance) => instance.running).length;
+  const canUpdate = () => {
+    if (runningGames > 0) {
+      pushToast('error', t('settings.updateGameRunning'));
+      return false;
+    }
+    return true;
+  };
 
   const run = async (action: string, task: () => Promise<string | void>) => {
     setBusy(action);
@@ -36,11 +45,12 @@ export function UpdatePanel() {
       return;
     }
     if (next.hasApp) {
-      if (!window.confirm(t('settings.updateAppConfirm'))) return;
+      if (!canUpdate() || !window.confirm(t('settings.updateAppConfirm'))) return;
       await api.applyAppUpdate();
       return;
     }
     if (next.hasWeb) {
+      if (!canUpdate()) return;
       await api.applyWebUpdate();
       pushToast('success', t('settings.updateWebApplied'));
       return;
@@ -48,13 +58,16 @@ export function UpdatePanel() {
     pushToast('info', t('settings.updateUpToDate'));
   });
 
-  const applyWeb = () => void run('web', async () => {
-    await api.applyWebUpdate();
-    pushToast('success', t('settings.updateWebApplied'));
-  });
+  const applyWeb = () => {
+    if (!canUpdate()) return;
+    void run('web', async () => {
+      await api.applyWebUpdate();
+      pushToast('success', t('settings.updateWebApplied'));
+    });
+  };
 
   const applyApp = () => {
-    if (!window.confirm(t('settings.updateAppConfirm'))) return;
+    if (!canUpdate() || !window.confirm(t('settings.updateAppConfirm'))) return;
     void run('app', async () => {
       await api.applyAppUpdate();
     });
@@ -68,16 +81,22 @@ export function UpdatePanel() {
   };
 
   return (
-    <section className="panel">
+    <section className={className ? 'panel ' + className : 'panel'}>
       <div className="panel-head">
         <h2>{t('settings.updateTitle')}</h2>
         <p>{t('settings.updateBody')}</p>
       </div>
 
       <div className="settings-fields">
+        {runningGames > 0 && (
+          <div className="inline-banner banner-warning">
+            <TriangleAlert size={16} />
+            <div><strong>{t('settings.updateGameRunning')}</strong><span>{t('settings.updateGameRunningBody')}</span></div>
+          </div>
+        )}
         <div className="update-row">
           <div>
-            <strong>{t('settings.updateCurrent', { version: info?.currentVersion ?? '1.0.2' })}</strong>
+            <strong>{t('settings.updateCurrent', { version: info?.currentVersion ?? '1.0.3' })}</strong>
             {info?.configured && info.available && (
               <span className="field-hint">
                 {t('settings.updateAvailable', { version: info.version ?? info.appVersion ?? info.webVersion ?? '' })}

@@ -17,7 +17,8 @@ const maxMetadataSize = 2 << 20
 var (
 	forgeDisplayTest   = regexp.MustCompile(`(?mi)^\s*displayTest\s*=\s*["'](IGNORE_SERVER_VERSION|IGNORE_ALL_VERSION)["']`)
 	forgeSideOnly      = regexp.MustCompile(`(?mi)^\s*clientSideOnly\s*=\s*true`)
-	manifestSideOnly   = regexp.MustCompile(`(?mi)^\s*(?:modSide|side)\s*:\s*CLIENT\s*$`)
+	forgeClientSide    = regexp.MustCompile(`(?mi)^\s*side\s*=\s*["']CLIENT["']`)
+	manifestSideOnly   = regexp.MustCompile(`(?mi)^\s*(?:modSide|fmlSide|side)\s*:\s*CLIENT\s*$`)
 	manifestClientOnly = regexp.MustCompile(`(?mi)^\s*clientSideOnly\s*:\s*true\s*$`)
 	mcmodSideOnly      = regexp.MustCompile(`(?i)"clientSideOnly"\s*:\s*true`)
 )
@@ -36,25 +37,41 @@ func IsClientOnly(jarPath string) (bool, string) {
 		files[strings.ToLower(filepathToSlash(file.Name))] = file
 	}
 
-	// Fabric: "environment": "client".
+	// Fabric: "environment": "client", or a client-only entrypoint list.
 	if file := files["fabric.mod.json"]; file != nil {
 		var meta struct {
-			Environment string `json:"environment"`
+			Environment string                     `json:"environment"`
+			Entrypoints map[string]json.RawMessage `json:"entrypoints"`
 		}
-		if readJSON(file, &meta) == nil && strings.EqualFold(strings.TrimSpace(meta.Environment), "client") {
-			return true, "fabric.mod.json environment=client"
+		if readJSON(file, &meta) == nil {
+			if strings.EqualFold(strings.TrimSpace(meta.Environment), "client") {
+				return true, "fabric.mod.json environment=client"
+			}
+			if strings.TrimSpace(meta.Environment) == "" && hasEntrypoint(meta.Entrypoints, "client") &&
+				!hasEntrypoint(meta.Entrypoints, "main") && !hasEntrypoint(meta.Entrypoints, "server") {
+				return true, "fabric.mod.json has only client entrypoints"
+			}
 		}
 	}
 
-	// Quilt: minecraft.environment = "client".
+	// Quilt: minecraft.environment = "client", or a client-only entrypoint list.
 	if file := files["quilt.mod.json"]; file != nil {
 		var meta struct {
 			Minecraft struct {
 				Environment string `json:"environment"`
 			} `json:"minecraft"`
+			QuiltLoader struct {
+				Entrypoints map[string]json.RawMessage `json:"entrypoints"`
+			} `json:"quilt_loader"`
 		}
-		if readJSON(file, &meta) == nil && strings.EqualFold(strings.TrimSpace(meta.Minecraft.Environment), "client") {
-			return true, "quilt.mod.json environment=client"
+		if readJSON(file, &meta) == nil {
+			if strings.EqualFold(strings.TrimSpace(meta.Minecraft.Environment), "client") {
+				return true, "quilt.mod.json environment=client"
+			}
+			if strings.TrimSpace(meta.Minecraft.Environment) == "" && hasEntrypoint(meta.QuiltLoader.Entrypoints, "client") &&
+				!hasEntrypoint(meta.QuiltLoader.Entrypoints, "main") && !hasEntrypoint(meta.QuiltLoader.Entrypoints, "server") {
+				return true, "quilt.mod.json has only client entrypoints"
+			}
 		}
 	}
 
@@ -69,6 +86,9 @@ func IsClientOnly(jarPath string) (bool, string) {
 			}
 			if forgeSideOnly.Match(data) {
 				return true, name + " clientSideOnly=true"
+			}
+			if forgeClientSide.Match(data) {
+				return true, name + " side=CLIENT"
 			}
 		}
 	}
@@ -87,6 +107,15 @@ func IsClientOnly(jarPath string) (bool, string) {
 		}
 	}
 	return false, ""
+}
+
+func hasEntrypoint(entrypoints map[string]json.RawMessage, name string) bool {
+	value, ok := entrypoints[name]
+	if !ok {
+		return false
+	}
+	trimmed := strings.TrimSpace(string(value))
+	return trimmed != "" && trimmed != "null" && trimmed != "[]" && trimmed != "{}"
 }
 
 func filepathToSlash(value string) string {

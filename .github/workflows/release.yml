@@ -10,7 +10,7 @@ on:
       version:
         description: 'Release version without the v prefix (must match every source version field)'
         required: true
-        default: '1.0.2'
+        default: '1.0.3'
       publish:
         description: 'Create or update the GitHub Release after all builds succeed'
         type: boolean

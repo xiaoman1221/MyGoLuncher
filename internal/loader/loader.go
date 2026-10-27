@@ -71,13 +71,13 @@ func LatestVersion(ctx context.Context, loaderType, mcVersion string) (string, e
 // LatestVersion resolves the newest stable loader through the ranked mirror
 // sources for the current loader.
 func (i *Installer) LatestVersion(ctx context.Context, loaderType, mcVersion string) (string, error) {
-	return latestVersionWithSources(ctx, i.rankedSources(ctx, loaderType, mcVersion), loaderType, mcVersion)
+	return latestVersionWithSources(ctx, preferLoaderMirrors(i.rankedSources(ctx, loaderType, mcVersion)), loaderType, mcVersion)
 }
 
 // LatestVersionWithSources resolves a loader version through explicit mirror
 // sources. It is exported for server-pack/runtime exports.
 func LatestVersionWithSources(ctx context.Context, sources []mirror.Source, loaderType, mcVersion string) (string, error) {
-	return latestVersionWithSources(ctx, sources, loaderType, mcVersion)
+	return latestVersionWithSources(ctx, preferLoaderMirrors(sources), loaderType, mcVersion)
 }
 
 func latestVersionWithSources(ctx context.Context, sources []mirror.Source, loaderType, mcVersion string) (string, error) {
@@ -236,7 +236,7 @@ func (i *Installer) Ensure(ctx context.Context, mcVersion, loaderType, loaderVer
 			return "", fmt.Errorf("安装原版游戏失败: %w", err)
 		}
 	}
-	sources := i.rankedSources(ctx, loaderType, mcVersion)
+	sources := preferLoaderMirrors(i.rankedSources(ctx, loaderType, mcVersion))
 	if loaderVersion == "" {
 		var err error
 		loaderVersion, err = latestVersionWithSources(ctx, sources, loaderType, mcVersion)

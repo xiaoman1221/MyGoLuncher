@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -41,7 +41,7 @@ import (
 	"MyMinecraftGoLuncher/internal/tray"
 )
 
-const appVersion = "1.0.2"
+const appVersion = "1.0.3"
 
 // App binds backend services to the Wails frontend.
 type App struct {
@@ -89,6 +89,7 @@ type App struct {
 
 	procMu     sync.Mutex
 	procs      map[string]*launcher.Process
+	launching  map[string]bool
 	logs       map[string]*logRing
 	gameJob    *sysutil.Job
 	trayIcon   *tray.Tray
@@ -122,7 +123,7 @@ func (r *logRing) snapshot() []string {
 // NewApp constructs the application and loads persisted state.
 func NewApp() *App {
 	a := &App{
-		procs: map[string]*launcher.Process{}, logs: map[string]*logRing{},
+		procs: map[string]*launcher.Process{}, launching: map[string]bool{}, logs: map[string]*logRing{},
 		elevated: securitypkg.IsElevated(),
 		gameJob:  sysutil.NewKillOnCloseJob(),
 	}
@@ -174,7 +175,7 @@ func NewApp() *App {
 	return a
 }
 
-func (a *App) startup(ctx context.Context) {
+func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 	a.configureUpdates()
 	if err := securitypkg.Guard(); err != nil {
@@ -275,7 +276,7 @@ func (a *App) closeBehavior() string {
 
 // beforeClose intercepts the native window close button / Alt+F4. Returning
 // true keeps the window open while the frontend asks what to do.
-func (a *App) beforeClose(ctx context.Context) bool {
+func (a *App) BeforeClose(ctx context.Context) bool {
 	if a.allowClose.Load() || !a.uiReady.Load() {
 		return false
 	}
@@ -291,7 +292,7 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	}
 }
 
-func (a *App) shutdown(ctx context.Context) {
+func (a *App) Shutdown(ctx context.Context) {
 	// Stop games first: closing the launcher must not leave a Minecraft JVM
 	// running if later shutdown steps block or take too long.
 	a.stopAllGames()
@@ -1617,7 +1618,20 @@ func (a *App) launchInstance(id, language string, server *launcher.ServerAddress
 		a.procMu.Unlock()
 		return errors.New("该版本正在运行")
 	}
+	if a.launching[id] {
+		a.procMu.Unlock()
+		return errors.New("该版本正在启动")
+	}
+	if a.launching == nil {
+		a.launching = map[string]bool{}
+	}
+	a.launching[id] = true
 	a.procMu.Unlock()
+	defer func() {
+		a.procMu.Lock()
+		delete(a.launching, id)
+		a.procMu.Unlock()
+	}()
 
 	inst = a.resolveLaunchVersion(inst)
 	if err := a.ensureLoaderReady(inst); err != nil {

@@ -1,24 +1,28 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Download,
   FileUp,
   FolderOpen,
   LoaderCircle,
   MessageCircle,
   Mic,
+  MicOff,
   Paperclip,
-  Play,
+  PhoneOff,
+  Plus,
   Send,
-  Square,
   Users,
-  Volume2,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import { onEvent } from '../lib/events';
+import { useLanVoice } from '../lib/use-lan-voice';
 import { Modal } from './Modal';
-import type { LanFileInfo, LanPeer, LanToolMessage, LanToolState } from '../lib/types';
+import type { LanChatGroup, LanFileInfo, LanPeer, LanToolMessage, LanToolState } from '../lib/types';
 
 type TabKey = 'chat' | 'voice' | 'file';
+const GROUP_KEY = 'mygoluncher-lan-groups';
+const MAX_VOICE_PEERS = 8;
 
 interface LanToolsModalProps {
   peers: LanPeer[];
@@ -28,7 +32,7 @@ interface LanToolsModalProps {
 function formatBytes(value = 0): string {
   if (value >= 1024 * 1024) return (value / (1024 * 1024)).toFixed(1) + ' MB';
   if (value >= 1024) return (value / 1024).toFixed(0) + ' KB';
-  return String(value) + ' B';
+  return value + ' B';
 }
 
 function formatClock(value: string, locale: string): string {
@@ -36,51 +40,54 @@ function formatClock(value: string, locale: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString(locale);
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const chunk = 0x8000;
-  for (let index = 0; index < bytes.length; index += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
-  }
-  return btoa(binary);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
 function appendMessage(messages: LanToolMessage[], message: LanToolMessage): LanToolMessage[] {
-  const next = messages.filter((item) => item.id !== message.id);
-  next.push(message);
-  return next.slice(-200);
+  return [...messages.filter((item) => item.id !== message.id), message].slice(-200);
+}
+
+function readGroups(): LanChatGroup[] {
+  try {
+    const raw = localStorage.getItem(GROUP_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item) => item && typeof item.id === 'string' && typeof item.name === 'string' && Array.isArray(item.peerIds))
+      .map((item) => ({ id: item.id, name: item.name, peerIds: item.peerIds.map(String) }));
+  } catch {
+    return [];
+  }
+}
+
+function RemoteAudio({ stream }: { stream: MediaStream }) {
+  const ref = useRef<HTMLAudioElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.srcObject = stream;
+    return () => { if (ref.current) ref.current.srcObject = null; };
+  }, [stream]);
+  return <audio ref={ref} autoPlay playsInline className="lan-voice-audio" />;
 }
 
 export function LanToolsModal({ peers, onClose }: LanToolsModalProps) {
   const { pushToast, t, locale } = useApp();
   const [tab, setTab] = useState<TabKey>('chat');
   const [state, setState] = useState<LanToolState | null>(null);
-  const [target, setTarget] = useState('');
+  const [activeKey, setActiveKey] = useState('all');
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [file, setFile] = useState<LanFileInfo | null>(null);
-  const [recording, setRecording] = useState(false);
-  const [recordSeconds, setRecordSeconds] = useState(0);
-  const [playing, setPlaying] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState('');
+  const [groups, setGroups] = useState<LanChatGroup[]>(readGroups);
+  const [groupOpen, setGroupOpen] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [groupPeers, setGroupPeers] = useState<string[]>([]);
   const historyRef = useRef<HTMLDivElement>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
-  const timerRef = useRef<number | null>(null);
-  const startedRef = useRef(0);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrls = useRef(new Map<string, string>());
 
   const chatPeers = useMemo(() => peers.filter((peer) => peer.canChat), [peers]);
+  const selfId = state?.selfId ?? '';
   const messages = state?.messages ?? [];
-  const canSend = chatPeers.length > 0;
+  const voice = useLanVoice({ selfId, onError: (message) => pushToast('error', t('lan.toolsVoiceFailed'), message) });
+
+  useEffect(() => {
+    localStorage.setItem(GROUP_KEY, JSON.stringify(groups));
+  }, [groups]);
 
   useEffect(() => {
     let alive = true;
@@ -92,44 +99,111 @@ export function LanToolsModal({ peers, onClose }: LanToolsModalProps) {
 
   useEffect(() => {
     const unsubscribe = onEvent<LanToolMessage>('lan:tool', (message) => {
-      setState((current) => current
-        ? { ...current, messages: appendMessage(current.messages, message) }
-        : current);
+      setState((current) => current ? { ...current, messages: appendMessage(current.messages ?? [], message) } : current);
+      if (message.chatId?.startsWith('group:') && message.chatName) {
+        const groupId = message.chatId.slice('group:'.length);
+        setGroups((current) => current.some((item) => item.id === groupId) ? current : [...current, {
+          id: groupId,
+          name: message.chatName || t('lan.toolsGroupFallback'),
+          peerIds: (message.members ?? [message.fromId]).filter((id) => id && id !== selfId),
+        }]);
+      }
+    });
+    return unsubscribe;
+  }, [selfId, t]);
+
+  useEffect(() => {
+    const unsubscribe = onEvent<LanToolMessage>('lan:tool:update', (message) => {
+      setState((current) => current ? { ...current, messages: appendMessage(current.messages ?? [], message) } : current);
     });
     return unsubscribe;
   }, []);
 
   useEffect(() => {
-    if (target && !chatPeers.some((peer) => peer.id === target)) setTarget('');
-  }, [chatPeers, target]);
+    if (!state) return;
+    setGroups((current) => {
+      let next = current;
+      for (const message of state.messages ?? []) {
+        if (!message.chatId?.startsWith('group:') || !message.chatName) continue;
+        const groupId = message.chatId.slice('group:'.length);
+        if (next.some((item) => item.id === groupId)) continue;
+        next = [...next, {
+          id: groupId,
+          name: message.chatName,
+          peerIds: (message.members ?? [message.fromId]).filter((id) => id && id !== state.selfId),
+        }];
+      }
+      return next;
+    });
+  }, [state]);
 
   useEffect(() => {
-    if (tab === 'chat') {
-      historyRef.current?.scrollTo({ top: historyRef.current.scrollHeight, behavior: 'smooth' });
-    }
+    if (tab === 'chat') historyRef.current?.scrollTo({ top: historyRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages.length, tab]);
 
-  useEffect(() => () => {
-    if (timerRef.current !== null) window.clearInterval(timerRef.current);
-    recorderRef.current?.state !== 'inactive' && recorderRef.current?.stop();
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    audioRef.current?.pause();
-    audioUrls.current.forEach((url) => URL.revokeObjectURL(url));
-  }, []);
+  const activeGroup = activeKey.startsWith('group:') ? groups.find((item) => 'group:' + item.id === activeKey) : undefined;
+  const activePeer = activeKey.startsWith('dm:') ? chatPeers.find((peer) => 'dm:' + peer.id === activeKey) : undefined;
+  const activeChat = useMemo(() => {
+    if (activeGroup) {
+      const ids = activeGroup.peerIds.filter((id) => chatPeers.some((peer) => peer.id === id));
+      return {
+        key: 'group:' + activeGroup.id,
+        chatId: 'group:' + activeGroup.id,
+        name: activeGroup.name,
+        peerIds: ids,
+        members: [selfId, ...ids].filter(Boolean),
+      };
+    }
+    if (activePeer) {
+      const ids = [selfId, activePeer.id].sort();
+      return {
+        key: 'dm:' + activePeer.id,
+        chatId: 'dm:' + ids.join(':'),
+        name: activePeer.name,
+        peerIds: [activePeer.id],
+        members: ids.filter(Boolean),
+      };
+    }
+    const ids = chatPeers.map((peer) => peer.id);
+    return {
+      key: 'all',
+      chatId: 'all',
+      name: t('lan.toolsEveryone'),
+      peerIds: ids,
+      members: [selfId, ...ids].filter(Boolean),
+    };
+  }, [activeGroup, activePeer, chatPeers, selfId, t]);
 
-  const addMessage = (message: LanToolMessage) => {
-    setState((current) => current
-      ? { ...current, messages: appendMessage(current.messages, message) }
-      : current);
-  };
+  useEffect(() => {
+    const available = activeKey === 'all'
+      || (activeKey.startsWith('dm:') && chatPeers.some((peer) => 'dm:' + peer.id === activeKey))
+      || groups.some((item) => 'group:' + item.id === activeKey);
+    if (!available) setActiveKey('all');
+  }, [activeKey, groups, chatPeers]);
+
+  const canSend = activeChat.peerIds.length > 0;
+  const chatMessages = messages.filter((message) => {
+    if (message.kind !== 'chat') return false;
+    if (activeChat.chatId === 'all') return !message.chatId || message.chatId === 'all';
+    return message.chatId === activeChat.chatId;
+  });
+  const fileMessages = messages.filter((message) => {
+    if (message.kind !== 'file') return false;
+    if (activeChat.chatId === 'all') return !message.chatId || message.chatId === 'all';
+    return message.chatId === activeChat.chatId;
+  });
+  const voicePeers = activeChat.peerIds.map((id) => ({
+    id,
+    name: chatPeers.find((peer) => peer.id === id)?.name ?? t('lan.toolsPeer'),
+  }));
 
   const sendChat = async () => {
     const value = text.trim();
     if (!value || busy || !canSend) return;
     setBusy(true);
     try {
-      const result = await api.sendLanChat(target, value);
-      addMessage(result.message);
+      const result = await api.sendLanChat(activeChat.peerIds, activeChat.chatId, activeChat.name, activeChat.members, value);
+      setState((current) => current ? { ...current, messages: appendMessage(current.messages ?? [], result.message) } : current);
       setText('');
       pushToast('success', t('lan.toolsSent'), t('lan.toolsSentCount', { count: result.count }));
       if (result.warning) pushToast('info', t('lan.toolsPartial'), result.warning);
@@ -153,8 +227,8 @@ export function LanToolsModal({ peers, onClose }: LanToolsModalProps) {
     if (!file || busy || !canSend) return;
     setBusy(true);
     try {
-      const result = await api.sendLanFile(target, file.path);
-      addMessage(result.message);
+      const result = await api.sendLanFile(activeChat.peerIds, activeChat.chatId, activeChat.name, activeChat.members, file.path);
+      setState((current) => current ? { ...current, messages: appendMessage(current.messages ?? [], result.message) } : current);
       setFile(null);
       pushToast('success', t('lan.toolsSent'), t('lan.toolsSentCount', { count: result.count }));
       if (result.warning) pushToast('info', t('lan.toolsPartial'), result.warning);
@@ -165,162 +239,47 @@ export function LanToolsModal({ peers, onClose }: LanToolsModalProps) {
     }
   };
 
-  const stopRecording = () => {
-    if (timerRef.current !== null) {
-      window.clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    setRecording(false);
-    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-      recorderRef.current.stop();
-    }
-  };
-
-  const uploadVoice = async (mime: string) => {
-    const chunks = chunksRef.current;
-    if (chunks.length === 0) return;
-    const blob = new Blob(chunks, { type: mime || 'audio/webm' });
-    if (blob.size === 0) return;
-    setBusy(true);
+  const downloadFile = async (message: LanToolMessage) => {
+    setDownloading(message.id);
     try {
-      const data = bytesToBase64(new Uint8Array(await blob.arrayBuffer()));
-      const duration = startedRef.current ? Date.now() - startedRef.current : recordSeconds * 1000;
-      const result = await api.sendLanVoice(target, data, blob.type, duration);
-      addMessage(result.message);
-      pushToast('success', t('lan.toolsSent'), t('lan.toolsSentCount', { count: result.count }));
-      if (result.warning) pushToast('info', t('lan.toolsPartial'), result.warning);
+      const updated = await api.downloadLanFile(message.id);
+      setState((current) => current ? { ...current, messages: appendMessage(current.messages ?? [], updated) } : current);
+      pushToast('success', t('lan.toolsDownloaded'), message.fileName);
     } catch (error) {
-      pushToast('error', t('lan.toolsSendFailed'), (error as Error).message);
+      pushToast('error', t('lan.toolsDownloadFailed'), (error as Error).message);
     } finally {
-      setBusy(false);
+      setDownloading('');
     }
   };
 
-  const startRecording = async () => {
-    if (recording) {
-      stopRecording();
-      return;
-    }
-    if (!canSend) return;
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      pushToast('error', t('lan.toolsMicUnsupported'));
+  const startVoice = async () => {
+    if (voicePeers.length === 0) return;
+    if (voicePeers.length > MAX_VOICE_PEERS) {
+      pushToast('error', t('lan.toolsVoiceMax'), String(MAX_VOICE_PEERS));
       return;
     }
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const preferred = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
-        .find((mime) => MediaRecorder.isTypeSupported(mime));
-      const recorder = new MediaRecorder(stream, preferred ? { mimeType: preferred } : undefined);
-      chunksRef.current = [];
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
-        streamRef.current = null;
-        recorderRef.current = null;
-        if (timerRef.current !== null) {
-          window.clearInterval(timerRef.current);
-          timerRef.current = null;
-        }
-        setRecording(false);
-        void uploadVoice(recorder.mimeType || 'audio/webm');
-      };
-      recorder.start();
-      recorderRef.current = recorder;
-      startedRef.current = Date.now();
-      setRecordSeconds(0);
-      setRecording(true);
-      timerRef.current = window.setInterval(() => {
-        const elapsed = Math.floor((Date.now() - startedRef.current) / 1000);
-        setRecordSeconds(elapsed);
-        if (elapsed >= 60) stopRecording();
-      }, 500);
+      await voice.start('voice:' + activeChat.chatId, voicePeers);
+      pushToast('success', t('lan.toolsVoiceStarted'), activeChat.name);
     } catch (error) {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      pushToast('error', t('lan.toolsMicDenied'), (error as Error).message);
+      pushToast('error', t('lan.toolsVoiceFailed'), (error as Error).message);
     }
   };
 
-  const playVoice = async (message: LanToolMessage) => {
-    if (playing === message.id) {
-      audioRef.current?.pause();
-      audioRef.current = null;
-      setPlaying(null);
+  const createGroup = () => {
+    const name = groupName.trim();
+    if (!name || groupPeers.length === 0) {
+      pushToast('error', t('lan.toolsGroupInvalid'));
       return;
     }
-    try {
-      let url = audioUrls.current.get(message.id);
-      if (!url) {
-        const data = await api.getLanVoice(message.id);
-        const bytes = base64ToBytes(data);
-        const buffer = new ArrayBuffer(bytes.byteLength);
-        new Uint8Array(buffer).set(bytes);
-        const blob = new Blob([buffer], { type: message.mimeType || 'audio/webm' });
-        url = URL.createObjectURL(blob);
-        audioUrls.current.set(message.id, url);
-      }
-      audioRef.current?.pause();
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onended = () => {
-        audioRef.current = null;
-        setPlaying(null);
-      };
-      await audio.play();
-      setPlaying(message.id);
-    } catch (error) {
-      pushToast('error', t('lan.toolsPlayFailed'), (error as Error).message);
-    }
-  };
-
-  const renderMessage = (message: LanToolMessage) => {
-    const self = !message.incoming;
-    if (message.kind === 'voice') {
-      return (
-        <div className={self ? 'lan-tool-message is-self' : 'lan-tool-message'} key={message.id}>
-          <div className="lan-tool-message-meta">
-            <strong>{message.fromName}</strong>
-            <span>{formatClock(message.createdAt, locale)}</span>
-          </div>
-          <button type="button" className="lan-tool-voice" onClick={() => void playVoice(message)}>
-            {playing === message.id ? <Square size={14} /> : <Play size={14} />}
-            <Volume2 size={15} />
-            <span>{message.durationMs ? (message.durationMs / 1000).toFixed(0) + 's' : t('lan.toolsVoiceMessage')}</span>
-            <small>{formatBytes(message.size ?? 0)}</small>
-          </button>
-        </div>
-      );
-    }
-    if (message.kind === 'file') {
-      return (
-        <div className={self ? 'lan-tool-message is-self' : 'lan-tool-message'} key={message.id}>
-          <div className="lan-tool-message-meta">
-            <strong>{message.fromName}</strong>
-            <span>{formatClock(message.createdAt, locale)}</span>
-          </div>
-          <div className="lan-tool-file">
-            <Paperclip size={16} />
-            <div>
-              <strong>{message.fileName || t('lan.toolsFile')}</strong>
-              <span>{formatBytes(message.size ?? 0)}</span>
-            </div>
-            {message.incoming && <span className="chip">{t('lan.toolsReceived')}</span>}
-          </div>
-        </div>
-      );
-    }
-    return (
-      <div className={self ? 'lan-tool-message is-self' : 'lan-tool-message'} key={message.id}>
-        <div className="lan-tool-message-meta">
-          <strong>{message.fromName}</strong>
-          <span>{formatClock(message.createdAt, locale)}</span>
-        </div>
-        <p>{message.text}</p>
-      </div>
-    );
+    const id = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : String(Date.now());
+    setGroups((current) => [...current, { id, name, peerIds: groupPeers }]);
+    setActiveKey('group:' + id);
+    setGroupName('');
+    setGroupPeers([]);
+    setGroupOpen(false);
   };
 
   return (
@@ -330,57 +289,75 @@ export function LanToolsModal({ peers, onClose }: LanToolsModalProps) {
       title={t('lan.toolsTitle')}
       eyebrow="LAN TOOLS"
       description={t('lan.toolsBody')}
-      size="lg"
+      size="xl"
       footer={
         <>
           <button type="button" className="btn btn-ghost" onClick={() => void api.openLanInbox().catch((error: Error) => pushToast('error', t('lan.toolsOpenInboxFailed'), error.message))}>
             <FolderOpen size={15} /> {t('lan.toolsOpenInbox')}
           </button>
-          <button type="button" className="btn btn-primary" onClick={onClose}>
-            {t('common.close')}
-          </button>
+          <button type="button" className="btn btn-primary" onClick={onClose}>{t('common.close')}</button>
         </>
       }
     >
       <div className="lan-tools">
         <div className="lan-tools-tabs">
-          <button type="button" className={tab === 'chat' ? 'lan-tools-tab is-active' : 'lan-tools-tab'} onClick={() => setTab('chat')}>
-            <MessageCircle size={15} /> {t('lan.toolsChat')}
-          </button>
-          <button type="button" className={tab === 'voice' ? 'lan-tools-tab is-active' : 'lan-tools-tab'} onClick={() => setTab('voice')}>
-            <Mic size={15} /> {t('lan.toolsVoice')}
-          </button>
-          <button type="button" className={tab === 'file' ? 'lan-tools-tab is-active' : 'lan-tools-tab'} onClick={() => setTab('file')}>
-            <FileUp size={15} /> {t('lan.toolsFiles')}
+          <button type="button" className={tab === 'chat' ? 'lan-tools-tab is-active' : 'lan-tools-tab'} onClick={() => setTab('chat')}><MessageCircle size={15} /> {t('lan.toolsChat')}</button>
+          <button type="button" className={tab === 'voice' ? 'lan-tools-tab is-active' : 'lan-tools-tab'} onClick={() => setTab('voice')}><Mic size={15} /> {t('lan.toolsVoice')}</button>
+          <button type="button" className={tab === 'file' ? 'lan-tools-tab is-active' : 'lan-tools-tab'} onClick={() => setTab('file')}><FileUp size={15} /> {t('lan.toolsFiles')}</button>
+        </div>
+
+        <div className="lan-tools-target-row">
+          <label className="field lan-tools-target">
+            <span className="field-label"><Users size={13} /> {t('lan.toolsTarget')}</span>
+            <select className="text-input" value={activeKey} onChange={(event) => setActiveKey(event.target.value)} disabled={voice.active}>
+              <option value="all">{t('lan.toolsEveryone')}</option>
+              {chatPeers.map((peer) => <option key={peer.id} value={'dm:' + peer.id}>{t('lan.toolsPrivate')} · {peer.name}</option>)}
+              {groups.map((group) => <option key={group.id} value={'group:' + group.id}>{t('lan.toolsGroup')} · {group.name}</option>)}
+            </select>
+          </label>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={() => setGroupOpen((value) => !value)} disabled={voice.active}>
+            <Plus size={14} /> {t('lan.toolsGroupNew')}
           </button>
         </div>
 
-        <label className="field lan-tools-target">
-          <span className="field-label"><Users size={13} /> {t('lan.toolsTarget')}</span>
-          <select className="text-input" value={target} onChange={(event) => setTarget(event.target.value)} disabled={!canSend || busy || recording}>
-            <option value="">{t('lan.toolsEveryone')}</option>
-            {chatPeers.map((peer) => (
-              <option key={peer.id} value={peer.id}>{peer.name} · {peer.instance || 'Minecraft'}</option>
-            ))}
-          </select>
-        </label>
+        {groupOpen && (
+          <div className="lan-group-create">
+            <input className="text-input" value={groupName} onChange={(event) => setGroupName(event.target.value)} placeholder={t('lan.toolsGroupName')} maxLength={32} />
+            <div className="lan-group-peers">
+              {chatPeers.map((peer) => (
+                <label key={peer.id} className="chip chip-button">
+                  <input
+                    type="checkbox"
+                    checked={groupPeers.includes(peer.id)}
+                    onChange={(event) => setGroupPeers((current) => event.target.checked ? [...current, peer.id] : current.filter((id) => id !== peer.id))}
+                  />
+                  {peer.name}
+                </label>
+              ))}
+            </div>
+            <div className="lan-group-actions">
+              <button type="button" className="btn btn-ghost btn-sm" onClick={() => setGroupOpen(false)}>{t('common.cancel')}</button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={createGroup}><Plus size={14} /> {t('lan.toolsGroupCreate')}</button>
+            </div>
+          </div>
+        )}
 
         {!canSend && (
           <div className="inline-banner banner-warning">
             <Users size={16} />
-            <div>
-              <strong>{t('lan.toolsNoPeers')}</strong>
-              <span>{t('lan.toolsNoPeersBody')}</span>
-            </div>
+            <div><strong>{t('lan.toolsNoPeers')}</strong><span>{t('lan.toolsNoPeersBody')}</span></div>
           </div>
         )}
 
         {tab === 'chat' && (
           <>
             <div className="lan-tool-history" ref={historyRef}>
-              {messages.length === 0 ? (
-                <div className="lan-tool-empty">{t('lan.toolsEmpty')}</div>
-              ) : messages.map(renderMessage)}
+              {chatMessages.length === 0 ? <div className="lan-tool-empty">{t('lan.toolsEmpty')}</div> : chatMessages.map((message) => (
+                <div className={message.incoming ? 'lan-tool-message' : 'lan-tool-message is-self'} key={message.id}>
+                  <div className="lan-tool-message-meta"><strong>{message.fromName}</strong><span>{formatClock(message.createdAt, locale)}</span></div>
+                  <p>{message.text}</p>
+                </div>
+              ))}
             </div>
             <div className="lan-tool-composer">
               <input
@@ -390,10 +367,7 @@ export function LanToolsModal({ peers, onClose }: LanToolsModalProps) {
                 onChange={(event) => setText(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-                  if (event.key === 'Enter') {
-                    event.preventDefault();
-                    void sendChat();
-                  }
+                  if (event.key === 'Enter') { event.preventDefault(); void sendChat(); }
                 }}
                 disabled={busy || !canSend}
               />
@@ -406,22 +380,42 @@ export function LanToolsModal({ peers, onClose }: LanToolsModalProps) {
         )}
 
         {tab === 'voice' && (
-          <div className="lan-tool-voice-panel">
-            <div className={recording ? 'lan-tool-record is-recording' : 'lan-tool-record'}>
-              <div>
-                <strong>{recording ? t('lan.toolsRecording', { seconds: recordSeconds }) : t('lan.toolsVoice')}</strong>
-                <span>{t('lan.toolsVoiceHint')}</span>
+          <div className="lan-voice-panel">
+            {voice.active ? (
+              <>
+                <div className="lan-voice-live">
+                  <div>
+                    <span className="lan-voice-dot" />
+                    <strong>{t('lan.toolsVoiceLive')} · {activeChat.name}</strong>
+                    <small>{t('lan.toolsVoiceParticipants', { count: voice.participants.length })}</small>
+                  </div>
+                  <button type="button" className="btn btn-danger btn-sm" onClick={voice.stop}><PhoneOff size={14} /> {t('lan.toolsVoiceLeave')}</button>
+                </div>
+                <div className="lan-voice-actions">
+                  <button type="button" className={voice.muted ? 'btn btn-danger btn-sm' : 'btn btn-ghost btn-sm'} onClick={voice.toggleMute}>
+                    {voice.muted ? <MicOff size={14} /> : <Mic size={14} />}
+                    {voice.muted ? t('lan.toolsVoiceUnmute') : t('lan.toolsVoiceMute')}
+                  </button>
+                  <span>{t('lan.toolsVoiceLiveHint')}</span>
+                </div>
+                <div className="lan-voice-participants">
+                  {voice.participants.map((peer) => <span key={peer.id} className="chip">{peer.name}</span>)}
+                </div>
+                {Object.entries(voice.remoteStreams).map(([id, stream]) => <RemoteAudio key={id} stream={stream} />)}
+              </>
+            ) : (
+              <div className="lan-voice-start">
+                <div className="lan-voice-start-icon"><Mic size={26} /></div>
+                <div>
+                  <strong>{t('lan.toolsVoiceStart')}</strong>
+                  <span>{t('lan.toolsVoiceStartHint', { name: activeChat.name, count: voicePeers.length })}</span>
+                  <small>{t('lan.toolsVoiceRealtimeHint')}</small>
+                </div>
+                <button type="button" className="btn btn-primary" onClick={() => void startVoice()} disabled={!canSend}>
+                  <Mic size={15} /> {t('lan.toolsVoiceStart')}
+                </button>
               </div>
-              <button type="button" className={recording ? 'btn btn-danger' : 'btn btn-primary'} onClick={() => void startRecording()} disabled={busy || !canSend}>
-                {recording ? <Square size={15} /> : <Mic size={15} />}
-                {recording ? t('lan.toolsStop') : t('lan.toolsRecord')}
-              </button>
-            </div>
-            <div className="lan-tool-history">
-              {messages.filter((message) => message.kind === 'voice').length === 0 ? (
-                <div className="lan-tool-empty">{t('lan.toolsVoiceEmpty')}</div>
-              ) : messages.filter((message) => message.kind === 'voice').map(renderMessage)}
-            </div>
+            )}
           </div>
         )}
 
@@ -433,19 +427,32 @@ export function LanToolsModal({ peers, onClose }: LanToolsModalProps) {
                 <span>{file ? formatBytes(file.size) : t('lan.toolsFileHint')}</span>
               </div>
               <div className="lan-tool-file-actions">
-                <button type="button" className="btn btn-ghost" onClick={() => void chooseFile()} disabled={busy || recording}>
-                  <Paperclip size={15} /> {t('lan.toolsChooseFile')}
-                </button>
+                <button type="button" className="btn btn-ghost" onClick={() => void chooseFile()} disabled={busy}><Paperclip size={15} /> {t('lan.toolsChooseFile')}</button>
                 <button type="button" className="btn btn-primary" onClick={() => void sendFile()} disabled={busy || !file || !canSend}>
-                  {busy ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />}
-                  {t('lan.toolsSend')}
+                  {busy ? <LoaderCircle size={15} className="spin" /> : <Send size={15} />} {t('lan.toolsSend')}
                 </button>
               </div>
             </div>
             <div className="lan-tool-history">
-              {messages.filter((message) => message.kind === 'file').length === 0 ? (
-                <div className="lan-tool-empty">{t('lan.toolsFileEmpty')}</div>
-              ) : messages.filter((message) => message.kind === 'file').map(renderMessage)}
+              {fileMessages.length === 0 ? <div className="lan-tool-empty">{t('lan.toolsFileEmpty')}</div> : fileMessages.map((message) => (
+                <div className={message.incoming ? 'lan-tool-message' : 'lan-tool-message is-self'} key={message.id}>
+                  <div className="lan-tool-message-meta"><strong>{message.fromName}</strong><span>{formatClock(message.createdAt, locale)}</span></div>
+                  <div className="lan-tool-file">
+                    <Paperclip size={16} />
+                    <div><strong>{message.fileName || t('lan.toolsFile')}</strong><span>{formatBytes(message.size ?? 0)}</span></div>
+                    {message.incoming && !message.downloaded && (
+                      <button type="button" className="btn btn-ghost btn-sm" onClick={() => void downloadFile(message)} disabled={downloading === message.id}>
+                        {downloading === message.id ? <LoaderCircle size={13} className="spin" /> : <Download size={13} />}
+                        {t('lan.toolsDownload')}
+                      </button>
+                    )}
+                    {message.incoming && message.downloaded && <span className="chip">{t('lan.toolsDownloaded')}</span>}
+                  </div>
+                  {message.incoming && !message.downloaded && typeof message.progress === 'number' && message.progress > 0 && (
+                    <div className="lan-file-progress"><span style={{ width: message.progress + '%' }} /></div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
         )}

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -164,6 +164,7 @@ type LanSyncPreview struct {
 	VersionMismatch       bool                 `json:"versionMismatch"`
 	LoaderMismatch        bool                 `json:"loaderMismatch"`
 	LoaderVersionMismatch bool                 `json:"loaderVersionMismatch"`
+	RuntimeMissing        bool                 `json:"runtimeMissing"`
 	Running               bool                 `json:"running"`
 	Blocking              bool                 `json:"blocking"`
 	BlockingReason        string               `json:"blockingReason,omitempty"`
@@ -254,6 +255,13 @@ func (a *App) prepareLanSync(ctx context.Context, peerID, targetInstanceID strin
 	preview.LoaderMismatch = normalizeLoader(manifest.Instance.Loader) != normalizeLoader(instance.Loader)
 	preview.LoaderVersionMismatch = strings.TrimSpace(manifest.Instance.LoaderVersion) != "" &&
 		strings.TrimSpace(manifest.Instance.LoaderVersion) != strings.TrimSpace(instance.LoaderVersion)
+	preview.RuntimeMissing = !a.instanceView(instance).VersionInstalled
+	if normalizeLoader(instance.Loader) != "vanilla" {
+		launchID := strings.TrimSpace(instance.LaunchVersionID)
+		if launchID == "" || launchID == strings.TrimSpace(instance.MCVersion) || !a.mojang.IsProfileInstalled(launchID) {
+			preview.RuntimeMissing = true
+		}
+	}
 	if preview.VersionMismatch {
 		preview.Blocking = true
 		preview.BlockingReason = fmt.Sprintf("Minecraft 版本不一致：共享为 %s，本地为 %s", manifest.Instance.MCVersion, instance.MCVersion)
@@ -263,6 +271,9 @@ func (a *App) prepareLanSync(ctx context.Context, peerID, targetInstanceID strin
 	}
 	if preview.LoaderVersionMismatch && !preview.Blocking {
 		preview.Warnings = append(preview.Warnings, fmt.Sprintf("加载器版本不一致：共享为 %s，本地为 %s；确认同步后会自动更新本地加载器", manifest.Instance.LoaderVersion, instance.LoaderVersion))
+	}
+	if preview.RuntimeMissing {
+		preview.Warnings = append(preview.Warnings, "本地游戏运行库不完整，确认同步后会补齐缺失的游戏文件与加载器")
 	}
 	if preview.Running {
 		preview.Warnings = append(preview.Warnings, "目标版本正在运行，同步前需要先关闭游戏")
@@ -492,14 +503,17 @@ func (a *App) SyncFromLanPeer(peerID, targetInstanceID, expectedDigest string) (
 	} else {
 		result.Skipped = prepared.preview.Plan.SameFiles
 	}
-	if prepared.preview.LoaderVersionMismatch && strings.TrimSpace(prepared.preview.Peer.LoaderVersion) != "" {
-		// The shared pack may require a different loader build. Update the local
-		// loader only after the user explicitly confirmed the diff digest.
-		task.update("loader", "正在更新本地加载器版本…", 0, 0)
+	if prepared.preview.RuntimeMissing || (prepared.preview.LoaderVersionMismatch && strings.TrimSpace(prepared.preview.Peer.LoaderVersion) != "") {
+		// Content sync only copies the shared files. Fill in missing vanilla,
+		// library, asset and loader runtime files when the target is incomplete or
+		// the peer uses a different loader build.
+		task.update("runtime", "正在补齐游戏运行库与加载器…", 0, 0)
 		updated := prepared.instance
-		updated.LoaderVersion = prepared.preview.Peer.LoaderVersion
+		if prepared.preview.LoaderVersionMismatch && strings.TrimSpace(prepared.preview.Peer.LoaderVersion) != "" {
+			updated.LoaderVersion = prepared.preview.Peer.LoaderVersion
+		}
 		if err := a.installInstanceRuntime(ctx, &updated, task); err != nil {
-			wrapped := fmt.Errorf("文件已同步，但加载器更新失败: %w", err)
+			wrapped := fmt.Errorf("文件已同步，但运行库或加载器补齐失败: %w", err)
 			task.finish(wrapped)
 			return result, wrapped
 		}

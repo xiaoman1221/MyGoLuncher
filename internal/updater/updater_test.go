@@ -17,6 +17,10 @@ import (
 	"testing"
 )
 
+func legacyFamily(artifact Artifact) *ArtifactFamily {
+	return &ArtifactFamily{Legacy: &artifact}
+}
+
 func testZip(t *testing.T) []byte {
 	t.Helper()
 	var buffer bytes.Buffer
@@ -44,9 +48,9 @@ func TestCheckAndApplyWebUpdate(t *testing.T) {
 	var server *httptest.Server
 	manifest := Manifest{
 		Version: "1.1.0",
-		Web: &Artifact{
+		Web: legacyFamily(Artifact{
 			Version: "1.1.0", URL: "", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(payload)),
-		},
+		}),
 	}
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -61,7 +65,7 @@ func TestCheckAndApplyWebUpdate(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	manifest.Web.URL = server.URL + "/web.zip"
+	manifest.Web.Legacy.URL = server.URL + "/web.zip"
 
 	oldKey, oldURL := PublicKey, ManifestURL
 	PublicKey = public
@@ -112,6 +116,55 @@ func TestRejectsInvalidSignature(t *testing.T) {
 	}
 }
 
+func TestArtifactFamilyNewManifest(t *testing.T) {
+	data := `{
+		"version":"2.0.0",
+		"web":{"any":{"any":{"version":"2.0.0","url":"https://cdn.example/web.zip","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":10}}},
+		"app":{"windows":{"x64":{"version":"2.0.0","url":"https://cdn.example/app.exe","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":20}}}
+	}`
+	var manifest Manifest
+	if err := json.Unmarshal([]byte(data), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	web, ok := manifest.Web.Select()
+	if !ok || web.URL != "https://cdn.example/web.zip" {
+		t.Fatalf("web = %#v, %v", web, ok)
+	}
+	if manifest.App == nil || manifest.App.Legacy != nil {
+		t.Fatalf("app family = %#v", manifest.App)
+	}
+	if _, ok := manifest.App.Entries["windows"]["x64"]; !ok {
+		t.Fatalf("windows/x64 missing: %#v", manifest.App.Entries)
+	}
+}
+
+func TestArtifactFamilyLegacyManifest(t *testing.T) {
+	data := `{"version":"1.1.0","web":{"version":"1.1.0","url":"https://cdn.example/web.zip","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":10}}`
+	var manifest Manifest
+	if err := json.Unmarshal([]byte(data), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	web, ok := manifest.Web.Select()
+	if !ok || web.URL != "https://cdn.example/web.zip" {
+		t.Fatalf("legacy web = %#v, %v", web, ok)
+	}
+}
+
+func TestArtifactFamilyAliasAndNested(t *testing.T) {
+	data := `{"version":"2.0.0","web":{"version":"2.0.0","url":"https://cdn.example/default.zip","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","size":10,"any":{"any":{"version":"2.0.0","url":"https://cdn.example/any.zip","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","size":20}}}}`
+	var manifest Manifest
+	if err := json.Unmarshal([]byte(data), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	web, ok := manifest.Web.Select()
+	if !ok || web.URL != "https://cdn.example/any.zip" {
+		t.Fatalf("alias/nested web = %#v, %v", web, ok)
+	}
+	if manifest.Web.Legacy == nil || manifest.Web.Legacy.URL != "https://cdn.example/default.zip" {
+		t.Fatalf("legacy alias = %#v", manifest.Web.Legacy)
+	}
+}
+
 func TestCompareVersions(t *testing.T) {
 	cases := []struct {
 		a, b string
@@ -137,9 +190,9 @@ func TestCheckAndApplyWebUpdateFromAPI(t *testing.T) {
 	manifest := Manifest{
 		Version: "1.1.0",
 		Force:   true,
-		Web: &Artifact{
+		Web: legacyFamily(Artifact{
 			Version: "1.1.0", SHA256: hex.EncodeToString(sum[:]), Size: int64(len(payload)),
-		},
+		}),
 	}
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -157,7 +210,7 @@ func TestCheckAndApplyWebUpdateFromAPI(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	manifest.Web.URL = server.URL + "/web.zip"
+	manifest.Web.Legacy.URL = server.URL + "/web.zip"
 
 	oldURL, oldKey, oldManifest := APIBaseURL, APIKey, ManifestURL
 	ConfigureAPI(server.URL, "test-product-key")

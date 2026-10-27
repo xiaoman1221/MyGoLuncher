@@ -1124,10 +1124,112 @@ select.text-input option {
   color: var(--text);
 }
 
+input,
+textarea,
+select,
+[contenteditable="true"],
+[contenteditable="plaintext-only"] {
+  -webkit-user-select: text !important;
+  -ms-user-select: text !important;
+  user-select: text !important;
+}
+
 img,
 svg,
 canvas,
 video {
   -webkit-user-drag: none !important;
   user-select: none !important;
+}
+
+/* ---- Global motion polish ---- */
+@keyframes surfaceIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.994);
+    filter: saturate(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    filter: none;
+  }
+}
+
+.page-stage .page > * {
+  animation: surfaceIn 0.38s var(--ease-out) both;
+}
+
+.page-stage .page > *:nth-child(2) { animation-delay: 0.035s; }
+.page-stage .page > *:nth-child(3) { animation-delay: 0.07s; }
+.page-stage .page > *:nth-child(4) { animation-delay: 0.105s; }
+.page-stage .page > *:nth-child(5) { animation-delay: 0.14s; }
+.page-stage .page > *:nth-child(n + 6) { animation-delay: 0.175s; }
+
+@media (hover: hover) and (pointer: fine) {
+  .panel {
+    transition: border-color 0.22s ease, box-shadow 0.22s ease, transform 0.22s var(--ease-out);
+  }
+
+  .panel:hover {
+    border-color: color-mix(in srgb, var(--accent) 22%, var(--line));
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.18);
+    transform: translateY(-1px);
+  }
+
+  .resource-folder-card:hover,
+  .lan-peer:hover,
+  .lan-world-card:hover,
+  .instance-card:hover {
+    transform: translateY(-2px);
+  }
+}
+
+.btn,
+.icon-button,
+.chip-button,
+.lan-tools-tab {
+  transition:
+    background 0.18s ease,
+    color 0.18s ease,
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.18s var(--ease-out);
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.985);
+}
+
+input,
+textarea,
+select,
+.text-input {
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+.text-input:focus-visible {
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-stage .page > * {
+    animation: none !important;
+  }
+
+  .panel:hover,
+  .resource-folder-card:hover,
+  .lan-peer:hover,
+  .lan-world-card:hover,
+  .instance-card:hover,
+  .btn:hover:not(:disabled) {
+    transform: none;
+  }
 }

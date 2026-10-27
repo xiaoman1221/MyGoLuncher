@@ -60,16 +60,126 @@ type Artifact struct {
 	Size    int64  `json:"size,omitempty"`
 }
 
+func (a Artifact) Valid() bool {
+	return strings.TrimSpace(a.URL) != "" && strings.TrimSpace(a.SHA256) != ""
+}
+
+// ArtifactFamily is the LicensingGo platform map:
+// OS -> architecture -> artifact. It also accepts the legacy single-artifact
+// shape returned by older manifests.
+type ArtifactFamily struct {
+	Entries map[string]map[string]Artifact
+	Legacy  *Artifact
+}
+
+func (f *ArtifactFamily) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	f.Entries = map[string]map[string]Artifact{}
+	var legacy Artifact
+	if err := json.Unmarshal(data, &legacy); err == nil && legacy.Valid() {
+		f.Legacy = &legacy
+	}
+	for key, value := range raw {
+		if key == "version" || key == "url" || key == "sha256" || key == "size" {
+			continue
+		}
+		var architectures map[string]Artifact
+		if err := json.Unmarshal(value, &architectures); err != nil {
+			continue
+		}
+		clean := map[string]Artifact{}
+		for arch, artifact := range architectures {
+			if artifact.Valid() {
+				clean[strings.ToLower(strings.TrimSpace(arch))] = artifact
+			}
+		}
+		if len(clean) > 0 {
+			f.Entries[strings.ToLower(strings.TrimSpace(key))] = clean
+		}
+	}
+	// An empty family is tolerated so a manifest can publish only one of
+	// web/app; Select reports whether this family has a usable artifact.
+	return nil
+}
+
+func (f ArtifactFamily) MarshalJSON() ([]byte, error) {
+	if len(f.Entries) > 0 {
+		return json.Marshal(f.Entries)
+	}
+	if f.Legacy != nil {
+		return json.Marshal(f.Legacy)
+	}
+	return []byte("null"), nil
+}
+
+// Select chooses the current operating system and architecture, falling back
+// to the any/any package and then the legacy default artifact.
+func (f *ArtifactFamily) Select() (Artifact, bool) {
+	if f == nil {
+		return Artifact{}, false
+	}
+	osKey := manifestOS()
+	archKey := manifestArch()
+	if architectures, ok := f.Entries[osKey]; ok {
+		if artifact, ok := architectures[archKey]; ok && artifact.Valid() {
+			return artifact, true
+		}
+		if artifact, ok := architectures["any"]; ok && artifact.Valid() {
+			return artifact, true
+		}
+		if artifact, ok := architectures["universal"]; ok && artifact.Valid() {
+			return artifact, true
+		}
+	}
+	if architectures, ok := f.Entries["any"]; ok {
+		if artifact, ok := architectures[archKey]; ok && artifact.Valid() {
+			return artifact, true
+		}
+		if artifact, ok := architectures["any"]; ok && artifact.Valid() {
+			return artifact, true
+		}
+	}
+	if f.Legacy != nil && f.Legacy.Valid() {
+		return *f.Legacy, true
+	}
+	return Artifact{}, false
+}
+
+func manifestOS() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "macos"
+	default:
+		return runtime.GOOS
+	}
+}
+
+func manifestArch() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x64"
+	case "386":
+		return "x86"
+	case "arm":
+		return "armv7"
+	default:
+		return runtime.GOARCH
+	}
+}
+
 // Manifest is the payload signed by the release key.
 type Manifest struct {
-	Version    string    `json:"version"`
-	MinVersion string    `json:"minVersion,omitempty"`
-	Notes      string    `json:"notes,omitempty"`
-	Mandatory  bool      `json:"mandatory,omitempty"`
-	Force      bool      `json:"force,omitempty"`
-	Published  string    `json:"publishedAt,omitempty"`
-	Web        *Artifact `json:"web,omitempty"`
-	App        *Artifact `json:"app,omitempty"`
+	Version    string          `json:"version"`
+	MinVersion string          `json:"minVersion,omitempty"`
+	Notes      string          `json:"notes,omitempty"`
+	Mandatory  bool            `json:"mandatory,omitempty"`
+	Force      bool            `json:"force,omitempty"`
+	Published  string          `json:"publishedAt,omitempty"`
+	Web        *ArtifactFamily `json:"web,omitempty"`
+	App        *ArtifactFamily `json:"app,omitempty"`
 }
 
 // Info is the safe update state returned to the UI.
@@ -130,16 +240,16 @@ func Check(ctx context.Context, currentVersion, currentWebVersion string) (Info,
 	if compareVersions(manifest.Version, currentVersion) > 0 {
 		result.Available = true
 	}
-	if manifest.Web != nil && manifest.Web.URL != "" && manifest.Web.SHA256 != "" {
-		result.HasWeb = manifest.Web.Version != "" && !sameVersion(manifest.Web.Version, currentWebVersion)
-		result.WebVersion = manifest.Web.Version
+	if artifact, ok := manifest.Web.Select(); ok {
+		result.HasWeb = artifact.Version != "" && !sameVersion(artifact.Version, currentWebVersion)
+		result.WebVersion = artifact.Version
 		if result.HasWeb {
 			result.Available = true
 		}
 	}
-	if manifest.App != nil && manifest.App.URL != "" && manifest.App.SHA256 != "" {
-		result.HasApp = compareVersions(manifest.App.Version, currentVersion) > 0
-		result.AppVersion = manifest.App.Version
+	if artifact, ok := manifest.App.Select(); ok {
+		result.HasApp = compareVersions(artifact.Version, currentVersion) > 0
+		result.AppVersion = artifact.Version
 		if result.HasApp {
 			result.Available = true
 		}
@@ -276,12 +386,16 @@ func ApplyWeb(ctx context.Context, root string) (string, error) {
 	if manifest.Web == nil {
 		return "", errors.New("更新清单没有前端热更新包")
 	}
+	artifact, ok := manifest.Web.Select()
+	if !ok {
+		return "", errors.New("更新清单没有适用于当前平台的前端包")
+	}
 	cache := filepath.Join(root, "cache", "updates")
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return "", err
 	}
-	zipPath := filepath.Join(cache, "web-"+safeVersion(manifest.Web.Version)+".zip")
-	if err := download(ctx, *manifest.Web, zipPath); err != nil {
+	zipPath := filepath.Join(cache, "web-"+safeVersion(artifact.Version)+".zip")
+	if err := download(ctx, artifact, zipPath); err != nil {
 		return "", err
 	}
 	staging, err := os.MkdirTemp(cache, "web-staging-*")
@@ -295,7 +409,7 @@ func ApplyWeb(ctx context.Context, root string) (string, error) {
 	if _, err := os.Stat(filepath.Join(staging, "index.html")); err != nil {
 		return "", errors.New("前端热更新包缺少 index.html")
 	}
-	_ = os.WriteFile(filepath.Join(staging, ".version"), []byte(manifest.Web.Version), 0o644)
+	_ = os.WriteFile(filepath.Join(staging, ".version"), []byte(artifact.Version), 0o644)
 	dest := filepath.Join(root, "web")
 	backup := filepath.Join(root, "web.old")
 	if _, err := os.Stat(dest); err == nil {
@@ -314,6 +428,13 @@ func ApplyWeb(ctx context.Context, root string) (string, error) {
 // ApplyApp downloads and verifies a new executable, then starts a detached
 // PowerShell helper that waits for this process to exit before replacing it.
 func ApplyApp(ctx context.Context, root, currentExe, currentVersion string) (string, error) {
+	return ApplyAppWithGuard(ctx, root, currentExe, currentVersion, nil)
+}
+
+// ApplyAppWithGuard is ApplyApp with a final guard invoked after the download
+// completes and before the detached replacement helper is started. The launcher
+// uses it to abort if a Minecraft process started during the download.
+func ApplyAppWithGuard(ctx context.Context, root, currentExe, currentVersion string, guard func() error) (string, error) {
 	if runtime.GOOS != "windows" {
 		return "", errors.New("自动替换当前仅支持 Windows")
 	}
@@ -327,26 +448,63 @@ func ApplyApp(ctx context.Context, root, currentExe, currentVersion string) (str
 	if manifest.App == nil {
 		return "", errors.New("更新清单没有完整安装包")
 	}
-	if compareVersions(manifest.App.Version, currentVersion) <= 0 {
+	artifact, ok := manifest.App.Select()
+	if !ok {
+		return "", errors.New("更新清单没有适用于当前平台的完整安装包")
+	}
+	if compareVersions(artifact.Version, currentVersion) <= 0 {
 		return "", errors.New("当前已经是最新版本")
 	}
 	cache := filepath.Join(root, "cache", "updates")
 	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return "", err
 	}
-	newExe := filepath.Join(cache, "MyMinecraftGoLuncher-"+safeVersion(manifest.App.Version)+".exe")
-	if err := download(ctx, *manifest.App, newExe); err != nil {
+	newExe := filepath.Join(cache, "MyMinecraftGoLuncher-"+safeVersion(artifact.Version)+".exe")
+	if err := download(ctx, artifact, newExe); err != nil {
 		return "", err
+	}
+	if guard != nil {
+		if err := guard(); err != nil {
+			return "", err
+		}
 	}
 	script := filepath.Join(cache, "apply-update.ps1")
 	content := fmt.Sprintf(`param([int]$TargetPid, [string]$NewExe, [string]$TargetExe)
-$ErrorActionPreference = 'SilentlyContinue'
-Wait-Process -Id $TargetPid -Timeout 120
-Start-Sleep -Milliseconds 500
-Copy-Item -LiteralPath $TargetExe -Destination ($TargetExe + '.bak') -Force
-Copy-Item -LiteralPath $NewExe -Destination $TargetExe -Force
-Start-Process -FilePath $TargetExe
-Remove-Item -LiteralPath $PSCommandPath -Force
+$ErrorActionPreference = 'Stop'
+$targetDir = Split-Path -Parent $TargetExe
+$backup = $TargetExe + '.bak'
+$log = Join-Path $targetDir 'update-error.log'
+try {
+  Wait-Process -Id $TargetPid -Timeout 120 -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 500
+  if (Get-Process -Id $TargetPid -ErrorAction SilentlyContinue) {
+    throw '启动器仍在运行，已取消替换'
+  }
+  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
+  Copy-Item -LiteralPath $TargetExe -Destination $backup -Force -ErrorAction Stop
+  $copied = $false
+  for ($i = 0; $i -lt 80; $i++) {
+    try {
+      Copy-Item -LiteralPath $NewExe -Destination $TargetExe -Force
+      $copied = $true
+      break
+    } catch {
+      Start-Sleep -Milliseconds 250
+    }
+  }
+  if (-not $copied) {
+    throw '无法替换程序文件，目标文件仍被占用'
+  }
+  Start-Process -FilePath $TargetExe -WorkingDirectory $targetDir
+} catch {
+  Add-Content -LiteralPath $log -Value ('[' + (Get-Date).ToString('s') + '] ' + $_.Exception.Message) -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $backup) {
+    Copy-Item -LiteralPath $backup -Destination $TargetExe -Force -ErrorAction SilentlyContinue
+  }
+  Start-Process -FilePath $TargetExe -WorkingDirectory $targetDir -ErrorAction SilentlyContinue
+} finally {
+  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
+}
 `)
 	if err := os.WriteFile(script, []byte(content), 0o600); err != nil {
 		return "", err

@@ -34,7 +34,7 @@
 - **服务器管理（MCSM）**：添加多个 MCSManager 面板与实例，绑定本地版本后，把 `mods/`、`config/`、`defaultconfigs/`、`scripts/`、`kubejs/`、`datapacks/`、`resourcepacks/`、`shaderpacks/` 增量同步到服务器；支持远程启动、停止、重启、手动勾选要更新的文件，以及可选删除远端多余文件。每次同步前会在服务器上创建 `.mgl-backups/` 回滚快照，保留最近 5 份，可一键恢复。
 - **局域网联机**：启动后自动发现同一局域网内使用本启动器的其他客户端（侧边栏显示数量），并自动发现「对局域网开放」的 Minecraft 世界和局域网服务器，显示版本、MOTD 与在线玩家。选择本地版本即可一键直连，也支持手动输入地址；加入前会校验游戏版本，避免版本不匹配导致启动失败。玩家名与版本广播只在联机页打开期间开启，离开页面自动停止。
 - **局域网版本同步**：可把本地版本的 `mods/`、`shaderpacks/`、`resourcepacks/`、`config/` 共享给同一局域网的其他客户端；对方在联机页选择本地版本后，启动器会先比较 Minecraft 版本、加载器版本以及新增/变更文件，确认差异后再增量同步，SHA-256 校验，只下载缺失或变化的文件。共享清单在确认后发生变化时必须重新确认。加载器版本不同时，确认后会同步更新本地加载器。
-- **局域网小工具**：联机页提供「联机工具」，支持文字聊天、最长 60 秒的语音消息、最大 512 MB 的文件发送；可发给指定玩家或局域网所有人，接收的文件保存在数据目录的 `lan-inbox`，语音可直接回放。
+- **局域网小工具**：联机页提供「联机工具」，支持群组/私聊文字聊天、WebRTC 实时语音（群组和私聊）以及最大 512 MB 的文件传输；文件通过多路 Range 并行下载，接收文件保存在数据目录的 `lan-inbox`，传输进度实时显示。
 - **账户**：
   - Microsoft 正版登录（设备码 OAuth）。
   - 外置登录，内置 **LittleSkin**（`https://littleskin.cn/api/yggdrasil`）与 **YggdrasilSkinServer**（`https://yss.1v.fit`），也兼容其他 Authlib-Injector 服务器。
@@ -48,7 +48,7 @@
 - **游戏语言同步**：启动游戏前将 Minecraft 语言设置为启动器当前界面语言（`zh_cn` / `zh_tw` / `en_us` / `ja_jp` / `ko_kr`），写入实例的 `options.txt`。
 - **启动后隐藏**：检测到游戏窗口真正出现后才隐藏启动器；游戏窗口关闭（进程退出）后自动恢复启动器窗口。可在设置中关闭。
 - **退出清理**：关闭启动器时先强制结束所有由它启动的 Minecraft 游戏进程；Windows 上还会把游戏加入 `KILL_ON_JOB_CLOSE` Job Object，即使启动器异常退出或被强制结束，游戏 JVM 也会被系统一并终止。
-- **退出确认**：默认关闭窗口时询问「最小化 / 退出」，可勾选记住选择，之后在「设置 → 窗口与退出」中改为每次询问、最小化到系统托盘或直接退出。最小化后窗口收起到任务栏右侧的通知区域，左键恢复，右键菜单可退出。版本号为 `v1.0.2`。
+- **退出确认**：默认关闭窗口时询问「最小化 / 退出」，可勾选记住选择，之后在「设置 → 窗口与退出」中改为每次询问、最小化到系统托盘或直接退出。最小化后窗口收起到任务栏右侧的通知区域，左键恢复，右键菜单可退出。版本号为 `v1.0.3`。
 - **文本编辑**：页面文字支持选择，输入框和文本框支持全选、复制、剪切、粘贴及右键菜单。
 - **加载器修复**：Forge/NeoForge 安装器通过 BMCLAPI `--mirror` 下载，并预取 `mcp_config`；现代 Forge 启动时不再把原版 client jar 和 Forge 补丁 client 同时放入类路径，避免 `module ResolutionException`。Fabric/Quilt 档案兼容 `+0000` 时间戳。加载器未安装完成时不再静默启动原版。
 - **主题**：黑夜模式（荧光绿）/ 白天模式（粉色），主题保存在本机。
@@ -163,8 +163,11 @@ cd frontend && npm run build
 
 ### 授权数据
 
-- 用户输入激活码后按 LicensingGo 机器码规范计算 `lgmc1` 机器码并提交激活。
-- 激活码、机器码、解绑密钥、到期时间、features 与最近校验时间通过 `secretstore` 保存。
+- 激活入口位于「关于」页的「授权与订阅」面板，设置页不再显示授权面板。
+- 用户输入激活码、激活码绑定的邮箱和客户名称后，按 LicensingGo 机器码规范计算 `lgmc1` 机器码并提交激活；邮箱大小写不敏感，客户名称必须与购买登记完全一致。
+- 激活码、机器码、邮箱、客户名称、解绑密钥、到期时间、features 与最近校验时间通过 `secretstore` 保存。
+- 如果首次激活后没有拿到 `unbind_key`（例如本地记录丢失后重复激活），仍可保存激活状态，并通过绑定邮箱申请验证码解绑。
+- 邮箱验证解绑需要服务端配置 SMTP；验证码 6 位、10 分钟有效、最多尝试 5 次。
 - Windows 只写入当前用户注册表 `HKCU\Software\MyGoLuncher\Secrets` 并用 DPAPI 加密；其他平台使用 AES-256-GCM 文件 + 0600 密钥文件。不会写入 `MGL`。
 - 启动时在线校验；网络失败时，若上次成功校验在 7 天内，进入离线宽限期，否则要求重新联网。
 
@@ -193,7 +196,7 @@ $env:MGL_SIGN_PFX_PASSWORD = "PFX 密码"
 - 发布构建启用 `-trimpath`、去除符号表，并通过 `-X .../security.Enforce=true` 开启调试器检测。
 - `-Pack` 使用 UPX 加壳；加壳后如需代码签名必须重新签名。
 - 代码签名使用 `signtool` 和受信任的 Authenticode 证书；证书密码只从环境变量读取。
-- 官方构建会使用 `MGL_PRODUCT_SERVER_URL` 和 `MGL_PRODUCT_API_KEY` 请求 LicensingGo 的 `GET /api/v1/update`；不需要单独配置更新地址。社区构建没有产品 Key，设置页会显示未配置。
+- 官方构建会使用 `MGL_PRODUCT_SERVER_URL` 和 `MGL_PRODUCT_API_KEY` 请求 LicensingGo 的 `GET /api/v1/update`；不需要单独配置更新地址。社区构建没有产品 Key，关于页会显示未配置。
 - GitHub Actions 官方三平台构建、自签名与 Release 发布流程见 [docs/GITHUB_RELEASE.md](docs/GITHUB_RELEASE.md)；只有 commit message 中包含 `vX.Y.Z` 或手动运行才会触发。
 - 如果检测到进程以 Windows 管理员或 Unix root 身份运行，界面会先显示风险提示；用户可以选择继续本次运行或直接退出。程序清单仍为 `asInvoker`，不会主动请求提权。
 
@@ -221,22 +224,30 @@ X-API-Key: {ProductAPIKey}
 
 ```json
 {
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minVersion": "1.0.0",
   "notes": "修复若干问题",
   "mandatory": false,
   "force": false,
   "web": {
-    "version": "1.0.2",
-    "url": "https://updates.example.com/ota/1.0.2/web-1.0.2.zip",
-    "sha256": "…",
-    "size": 342397
+    "any": {
+      "any": {
+        "version": "1.0.3",
+        "url": "https://updates.example.com/ota/1.0.3/web-1.0.3.zip",
+        "sha256": "…",
+        "size": 342397
+      }
+    }
   },
   "app": {
-    "version": "1.0.2",
-    "url": "https://updates.example.com/ota/1.0.2/MyMinecraftGoLuncher-1.0.2.exe",
-    "sha256": "…",
-    "size": 23863808
+    "windows": {
+      "x64": {
+        "version": "1.0.3",
+        "url": "https://updates.example.com/ota/1.0.3/MyMinecraftGoLuncher-1.0.3.exe",
+        "sha256": "…",
+        "size": 23863808
+      }
+    }
   }
 }
 ```
@@ -244,15 +255,19 @@ X-API-Key: {ProductAPIKey}
 - `web` / `app` 至少配置一个。
 - `mandatory` 提示必须升级，`force` 表示需要立即安装；客户端会在更新面板显示对应提示。
 - 更新包 URL 必须是 HTTPS，客户端会校验 SHA256 与 size。
+- `web` / `app` 使用 `平台 → 架构 → 包` 的包族结构；客户端按本机平台选择，找不到时回退 `any/any`。
+- 旧版单对象清单仍可解析，服务端下发的顶层默认别名也兼容。
 - 修改清单后不需要 Ed25519 签名；LicensingGo 在 HTTPS 接口下直接返回。
 - 旧式的静态签名清单仍保留在 updater 代码中用于兼容，但官方构建优先使用 API。
 
 ### 客户端行为
 
-- 前端热更新：下载 web zip，校验后解压到 `MGL/web`，Wails 重新加载 WebView；旧版本保留为 `MGL/web.old`，可在设置页回滚。
-- 完整 OTA：下载并校验新 exe，生成本地 PowerShell 替换脚本，退出后替换并重启；旧 exe 保留 `.bak`。
+- 更新入口位于「关于」页；设置页不再显示更新面板。
+- 更新前会检查 Minecraft 运行状态。只要还有启动器管理的游戏进程在运行，就必须先关闭游戏，更新会直接阻止。
+- 前端热更新：下载 web zip，校验后解压到 `MGL/web`，Wails 重新加载 WebView；旧版本保留为 `MGL/web.old`，可在关于页回滚。
+- 完整 OTA：先完整下载并校验新 exe，再退出启动器；本地 PowerShell 助手等待进程退出后替换整个 exe，保留旧文件为 `.bak`，最后重新启动新 exe。下载完成后会再次检查游戏状态，避免下载期间启动游戏。
 - 「一键更新」会自动检查最新清单：有完整客户端更新时优先下载并重启替换；只有前端更新时直接应用热更新。
-- 如果未配置产品 API Key 或服务器地址，设置页显示未配置。
+- 如果未配置产品 API Key 或服务器地址，关于页显示未配置。
 
 ### 官方构建
 
@@ -338,9 +353,9 @@ env_key  = "ORCA_KEY"
 
 ### 联机工具
 
-- 在「联机」页面点击「联机工具」，可向指定玩家或局域网所有人发送聊天、语音消息和文件。
-- 语音消息最长 60 秒，需要允许启动器使用麦克风；发送后在聊天记录中点击即可回放。
-- 文件最大 512 MB，接收方会自动保存到数据目录下的 `lan-inbox`，可通过「打开接收目录」查看。
+- 在「联机」页面点击「联机工具」，可创建群组或与单个玩家私聊；聊天、语音和文件共用当前会话。
+- 实时语音使用 WebRTC 点对点音频，支持群组语音和私聊语音，最多 8 人；需要允许启动器使用麦克风。
+- 文件最大 512 MB，发送方只提供下载源，接收方确认后使用多线程 Range 下载；进度实时显示，保存到数据目录下的 `lan-inbox`。
 - 联机工具使用独立的随机端口和令牌，随启动器玩家广播；双方都需要运行支持该功能的版本，并保持联机页面打开。
 
 ## 账户说明

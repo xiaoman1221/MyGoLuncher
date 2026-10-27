@@ -20,20 +20,20 @@
 以下 commit message 会触发：
 
 ```text
-release: v1.0.2
-fix: prepare v1.0.2 release
-v1.0.2
+release: v1.0.3
+fix: prepare v1.0.3 release
+v1.0.3
 ```
 
 以下不会触发：
 
 ```text
 fix: crash on startup
-release: 1.0.2
+release: 1.0.3
 update docs
 ```
 
-gate 会提取 `v1.0.2`，然后检查源码版本是否已经是 `1.0.2`。不一致会直接失败。
+gate 会提取 `v1.0.3`，然后检查源码版本是否已经是 `1.0.3`。不一致会直接失败。
 
 推送带版本号的 commit 并构建成功后，会自动创建 GitHub Release。
 
@@ -186,28 +186,28 @@ gh secret set LINUX_GPG_PRIVATE_KEY_BASE64 < .\linux-gpg.b64
 
 ## 4. 修改版本号
 
-例如发布 `1.0.2`：
+例如发布 `1.0.3`：
 
 ```powershell
-node .\scripts\set-version.mjs 1.0.2
-node .\scripts\check-release-version.mjs 1.0.2
+node .\scripts\set-version.mjs 1.0.3
+node .\scripts\check-release-version.mjs 1.0.3
 ```
 
 正常输出：
 
 ```text
-release version 1.0.2 is consistent
+release version 1.0.3 is consistent
 ```
 
 提交并使用带版本号的 commit message：
 
 ```powershell
 git add .
-git commit -m "release: v1.0.2"
+git commit -m "release: v1.0.3"
 git push origin master
 ```
 
-推送后 gate 检测到 `v1.0.2`，开始测试和构建。
+推送后 gate 检测到 `v1.0.3`，开始测试和构建。
 
 > 不要再用普通 commit 触发正式发布；普通 commit 即使修改了版本文件，也不会通过 gate。
 
@@ -222,7 +222,7 @@ Actions → Official release → Run workflow
 填写：
 
 ```text
-version: 1.0.2
+version: 1.0.3
 publish: false
 ```
 
@@ -235,7 +235,7 @@ publish: false
 ### 方式 A：带版本号的 commit
 
 ```text
-release: v1.0.2
+release: v1.0.3
 ```
 
 推送到 `master` 或 `main` 后，构建成功会自动创建 GitHub Release。
@@ -244,7 +244,7 @@ release: v1.0.2
 
 ```text
 Actions → Official release → Run workflow
-version: 1.0.2
+version: 1.0.3
 publish: true
 ```
 
@@ -275,7 +275,7 @@ linux-public-key.asc
 ### Windows
 
 ```powershell
-Get-AuthenticodeSignature .\MyGoLuncher-1.0.2-windows-amd64.exe |
+Get-AuthenticodeSignature .\MyGoLuncher-1.0.3-windows-amd64.exe |
   Format-List Status, StatusMessage, SignerCertificate
 ```
 
@@ -312,19 +312,19 @@ sha256sum -c SHA256SUMS.txt
 
 ```json
 {
-  "version": "1.0.2",
+  "version": "1.0.3",
   "minVersion": "1.0.0",
   "mandatory": false,
   "force": false,
   "web": {
-    "version": "1.0.2",
-    "url": "https://github.com/<owner>/<repo>/releases/download/v1.0.2/MyGoLuncher-1.0.2-web.zip",
+    "version": "1.0.3",
+    "url": "https://github.com/<owner>/<repo>/releases/download/v1.0.3/MyGoLuncher-1.0.3-web.zip",
     "sha256": "<SHA256SUMS 中的值>",
     "size": 347631
   },
   "app": {
-    "version": "1.0.2",
-    "url": "https://github.com/<owner>/<repo>/releases/download/v1.0.2/MyGoLuncher-1.0.2-windows-amd64.exe",
+    "version": "1.0.3",
+    "url": "https://github.com/<owner>/<repo>/releases/download/v1.0.3/MyGoLuncher-1.0.3-windows-amd64.exe",
     "sha256": "<SHA256SUMS 中的值>",
     "size": 23955456
   }
@@ -333,7 +333,7 @@ sha256sum -c SHA256SUMS.txt
 
 ## 10. 注意事项
 
-- commit message 必须包含完整的 `vX.Y.Z`，只写 `1.0.2` 不会触发。
+- commit message 必须包含完整的 `vX.Y.Z`，只写 `1.0.3` 不会触发。
 - gate 跳过时属于正常流程，不是构建失败。
 - 标签不会触发本工作流。
 - 正式发布会自动创建 GitHub Release；如果只想试构建，请使用手动运行并设置 `publish: false`。
