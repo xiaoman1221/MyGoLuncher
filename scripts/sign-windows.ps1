@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $false)][string]$Exe = "",
   [Parameter(Mandatory = $true)][string]$PfxPath,
   [string]$TimestampUrl = "http://timestamp.digicert.com"
