@@ -96,7 +96,7 @@ export function UpdatePanel({ className = '' }: { className?: string }) {
         )}
         <div className="update-row">
           <div>
-            <strong>{t('settings.updateCurrent', { version: info?.currentVersion ?? '1.0.3' })}</strong>
+            <strong>{t('settings.updateCurrent', { version: info?.currentVersion ?? '1.0.4' })}</strong>
             {info?.configured && info.available && (
               <span className="field-hint">
                 {t('settings.updateAvailable', { version: info.version ?? info.appVersion ?? info.webVersion ?? '' })}

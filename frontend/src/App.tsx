@@ -499,7 +499,7 @@ export default function App() {
         >
           <RefreshCw size={15} /> {t('common.retry')}
         </button>
-        <span className="boot-legal">MyGoLuncher · v{bootstrap?.version ?? '1.0.3'}</span>
+        <span className="boot-legal">MyGoLuncher · v{bootstrap?.version ?? '1.0.4'}</span>
       </div>
     );
   }

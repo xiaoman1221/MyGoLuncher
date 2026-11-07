@@ -22,7 +22,7 @@ const licenseURL = 'https://www.gnu.org/licenses/agpl-3.0.html';
 
 export function AboutPage() {
   const { bootstrap, t, openDataFolder, pushToast } = useApp();
-  const version = bootstrap?.version || '1.0.3';
+  const version = bootstrap?.version || '1.0.4';
   const official = Boolean(bootstrap?.license.configured);
 
   const openLink = async (url: string) => {

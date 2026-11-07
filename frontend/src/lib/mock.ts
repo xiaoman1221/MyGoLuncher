@@ -806,7 +806,7 @@ function bootstrap(): Bootstrap {
     settings: clone(settings),
     instances: clone(instances),
     paths,
-    version: '1.0.3',
+    version: '1.0.4',
     initError: '',
     running: instances.filter((i) => i.running).map((i) => i.id),
     accounts: clone(accounts),
@@ -871,7 +871,7 @@ function makeResource(
     downloads,
     categories,
     gameVersions,
-    latestVersion: '1.0.3',
+    latestVersion: '1.0.4',
     color: 0,
     dateModified: nowMinus(1440),
   };
@@ -1013,7 +1013,7 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       } satisfies LicenseStatus as T;
     case 'CheckForUpdates':
       return {
-        configured: false, currentVersion: '1.0.3', mandatory: false, available: false,
+        configured: false, currentVersion: '1.0.4', mandatory: false, available: false,
         hasWeb: false, hasApp: false,
       } satisfies UpdateInfo as T;
     case 'ApplyWebUpdate':

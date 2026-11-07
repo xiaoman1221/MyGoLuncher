@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-// Security gate used by TeamCity release builds and by the standalone
-// "Security Checks" build type.
+// Security gate used by GitHub Actions and local release checks.
 //
 // Checks:
 //   1. Sensitive files are not tracked by git.

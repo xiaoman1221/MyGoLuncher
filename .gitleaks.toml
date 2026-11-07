@@ -6,7 +6,7 @@ title = "MyGoLuncher"
 [allowlist]
 description = "Scanner source and fake test fixtures"
 paths = [
-  '''scripts/teamcity-security\.mjs''',
+  '''scripts/security-check\.mjs''',
   '''internal/license/.*_test\.go''',
   '''internal/secretstore/.*_test\.go''',
   '''build/''',

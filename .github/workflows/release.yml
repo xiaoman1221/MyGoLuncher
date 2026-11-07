@@ -6,7 +6,7 @@ on:
       version:
         description: 'Release version without the v prefix'
         required: true
-        default: '1.0.3'
+        default: '1.0.4'
       publish:
         description: 'Create the GitHub Release after all builds succeed'
         type: boolean
@@ -54,6 +54,9 @@ jobs:
         run: |
           npm ci
           npm run build
+
+      - name: Security checks
+        run: node scripts/security-check.mjs
 
       - name: Test backend
         run: |

@@ -43,7 +43,3 @@ tmp_*/
 .minecraft/
 MyGoLuncher/
 MGL/
-
-# TeamCity publishes release artifacts here and commits them back to master
-!releases/
-!releases/**

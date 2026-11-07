@@ -16,7 +16,7 @@ import (
 const activationPrefix = "/api/v1/activation"
 
 // AppVersion is the client version reported to the activation service.
-var AppVersion = "1.0.3"
+var AppVersion = "1.0.4"
 
 // Client talks to one LicensingGo product activation API.
 type Client struct {

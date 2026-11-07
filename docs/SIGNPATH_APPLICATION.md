@@ -18,7 +18,7 @@ MyGoLuncher 是一个开源的 Minecraft 启动器，提供版本管理、模组
 
 ## 构建与产物
 
-- CI：TeamCity，Windows runner（详见 `.teamcity/README.md`）
+- CI：GitHub Actions，Windows/macOS/Linux runner（详见 `.github/workflows/release.yml`）
 - 前端：`cd frontend && npm ci && npm run build`
 - 后端：`go test ./...`
 - 桌面产物：`wails build`（社区构建，不含商业产品配置）
@@ -33,7 +33,7 @@ MyGoLuncher 是一个开源的 Minecraft 启动器，提供版本管理、模组
 - 摘要：SHA-256
 - 时间戳：需要
 - 是否需要 EV：以 SignPath 建议为准
-- 发布方式：TeamCity 构建产物提交到仓库 `releases/` 目录
+- 发布方式：GitHub Actions 构建并发布到 GitHub Release
 - 签名后校验：`signtool verify /pa /v`
 
 ## 商业披露
