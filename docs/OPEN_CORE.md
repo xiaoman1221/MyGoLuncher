@@ -61,7 +61,7 @@ wails build
 ```powershell
 $env:MGL_PRODUCT_API_KEY = "..."
 $env:MGL_PRODUCT_SERVER_URL = "https://..."
-.scriptsuild-release.ps1 -Pack
+.\scripts\build-release.ps1 -Pack
 ```
 
 - 产品配置只存在于构建产物和私有 CI secret 中，不进入公开仓库

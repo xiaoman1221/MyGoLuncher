@@ -49,6 +49,7 @@ func (a *App) syncLanEntitlement() {
 		}
 		return
 	}
+	a.stopLanShareServer()
 	a.stopLanTools()
 	a.lanSvc.Stop()
 }

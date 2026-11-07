@@ -1,5 +1,4 @@
 import type {
-  AccountLoginEvent,
   AccountState,
   AccountView,
   AuthlibServer,

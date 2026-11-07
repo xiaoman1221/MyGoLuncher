@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"MyMinecraftGoLuncher/internal/httpx"
+	"MyMinecraftGoLuncher/internal/util"
 )
 
 // LAN transfers bypass system proxies: a corporate proxy must not receive
@@ -242,8 +243,7 @@ func downloadFile(ctx context.Context, baseURL, token string, entry FileEntry, d
 		return fmt.Errorf("下载 %s 哈希校验失败", entry.Path)
 	}
 	_ = temp.Chmod(0o644)
-	_ = os.Remove(dest)
-	if err := os.Rename(tempName, dest); err != nil {
+	if err := util.ReplaceFile(tempName, dest); err != nil {
 		return fmt.Errorf("替换 %s 失败: %w", entry.Path, err)
 	}
 	return nil

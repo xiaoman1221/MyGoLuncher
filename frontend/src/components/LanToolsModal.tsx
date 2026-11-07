@@ -181,7 +181,9 @@ export function LanToolsModal({ peers, onClose }: LanToolsModalProps) {
     if (!available) setActiveKey('all');
   }, [activeKey, groups, chatPeers]);
 
-  const canSend = activeChat.peerIds.length > 0;
+  // Without selfId a private chat id would be malformed (dm::peer), so wait
+  // until the toolbox state has loaded.
+  const canSend = Boolean(selfId) && activeChat.peerIds.length > 0;
   const chatMessages = messages.filter((message) => {
     if (message.kind !== 'chat') return false;
     if (activeChat.chatId === 'all') return !message.chatId || message.chatId === 'all';

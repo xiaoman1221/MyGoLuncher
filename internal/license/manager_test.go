@@ -217,3 +217,145 @@ func TestManagerUsesGraceWhenValidationFails(t *testing.T) {
 		t.Fatalf("grace status = %#v", status)
 	}
 }
+
+func TestValidateRevokedVerdictPersists(t *testing.T) {
+	useTestProduct(t)
+	now := time.Now().UTC()
+	valid := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/activation/activate":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "active", "expires_at": now.Add(30 * 24 * time.Hour),
+				"features": []string{"lan"}, "unbind_key": "unbind-1",
+			})
+		case "/api/v1/activation/validate":
+			if valid {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"valid": true, "status": "active", "expires_at": now.Add(30 * 24 * time.Hour),
+					"features": []string{"lan"},
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"valid": false, "status": "revoked", "reason": "code_disabled", "message": "disabled",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	oldURL := ServerURL
+	ServerURL = server.URL
+	defer func() { ServerURL = oldURL }()
+
+	secrets := secretstore.NewMemory()
+	manager, err := NewManager(secrets, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.now = func() time.Time { return now }
+	if _, err := manager.Activate(context.Background(), "TEST-CODE", "buyer@example.com", "Acme Inc"); err != nil {
+		t.Fatal(err)
+	}
+	valid = false
+	status, err := manager.Validate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != "invalid" || manager.Active() {
+		t.Fatalf("revoked status = %#v", status)
+	}
+	// A restart must not fall back to active/grace from LastValidated.
+	restarted, err := NewManager(secrets, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restarted.now = func() time.Time { return now }
+	if status := restarted.Status(); status.State != "invalid" || restarted.Active() {
+		t.Fatalf("revoked verdict was not persisted: %#v", status)
+	}
+}
+
+func TestValidateDefinitiveClientErrorIsNotGrace(t *testing.T) {
+	useTestProduct(t)
+	now := time.Now().UTC()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/activation/activate" {
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "active", "expires_at": now.Add(30 * 24 * time.Hour),
+				"features": []string{}, "unbind_key": "unbind-1",
+			})
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": "product_disabled", "message": "disabled"})
+	}))
+	defer server.Close()
+	oldURL := ServerURL
+	ServerURL = server.URL
+	defer func() { ServerURL = oldURL }()
+
+	manager, err := NewManager(secretstore.NewMemory(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.now = func() time.Time { return now }
+	if _, err := manager.Activate(context.Background(), "TEST-CODE", "buyer@example.com", "Acme Inc"); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	manager.creds.LastValidated = now.Add(-time.Hour)
+	manager.mu.Unlock()
+	status, err := manager.Validate(context.Background())
+	if err == nil {
+		t.Fatal("expected a definitive client error")
+	}
+	if status.State != "error" || manager.Active() {
+		t.Fatalf("status after 403 = %#v", status)
+	}
+}
+
+func TestValidateRenewsLocallyExpiredCode(t *testing.T) {
+	useTestProduct(t)
+	now := time.Now().UTC()
+	newExpiry := now.Add(30 * 24 * time.Hour)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/activation/activate":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "active", "expires_at": now.Add(-time.Hour),
+				"features": []string{}, "unbind_key": "unbind-1",
+			})
+		case "/api/v1/activation/validate":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"valid": true, "status": "active", "expires_at": newExpiry, "features": []string{},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	oldURL := ServerURL
+	ServerURL = server.URL
+	defer func() { ServerURL = oldURL }()
+
+	manager, err := NewManager(secretstore.NewMemory(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.now = func() time.Time { return now }
+	if _, err := manager.Activate(context.Background(), "TEST-CODE", "buyer@example.com", "Acme Inc"); err != nil {
+		t.Fatal(err)
+	}
+	status, err := manager.Validate(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != "active" || !manager.Active() {
+		t.Fatalf("renewed status = %#v", status)
+	}
+	if status.ExpiresAt == "" {
+		t.Fatal("renewed expiry was not applied")
+	}
+}

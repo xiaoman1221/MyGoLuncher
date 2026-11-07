@@ -1,7 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { Language, MessageKey } from './i18n';
 import type {
-  AccountState,
   AccountView,
   Bootstrap,
   InstanceView,
@@ -12,11 +11,25 @@ import type {
 
 export type ToastKind = 'success' | 'error' | 'info';
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface Toast {
   id: number;
   kind: ToastKind;
   title: string;
   message?: string;
+  action?: ToastAction;
+}
+
+export interface ConfirmOptions {
+  title?: string;
+  message: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
 }
 
 export interface AppContextValue {
@@ -39,7 +52,7 @@ export interface AppContextValue {
   selectInstance: (id: string) => void;
   refreshInstances: () => Promise<void>;
   reloadBootstrap: () => Promise<void>;
-  saveSettings: (settings: Settings) => Promise<void>;
+  saveSettings: (settings: Settings) => Promise<Settings>;
   openAccounts: () => void;
   openCreate: () => void;
   openEdit: (id: string) => void;
@@ -50,7 +63,8 @@ export interface AppContextValue {
   launchToServer: (id: string, address: string) => Promise<void>;
   stop: (id: string) => Promise<void>;
   openConsole: (id: string) => void;
-  pushToast: (kind: ToastKind, title: string, message?: string) => void;
+  pushToast: (kind: ToastKind, title: string, message?: string, action?: ToastAction) => void;
+  confirm: (options: ConfirmOptions) => Promise<boolean>;
   lanPeerCount: number;
   isDemo: boolean;
   licenseOpen: boolean;

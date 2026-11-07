@@ -3,6 +3,7 @@ package util
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -44,6 +45,34 @@ func WriteJSON(path string, v any) error {
 		return err
 	}
 	return os.Rename(tmpName, path)
+}
+
+// ReplaceFile moves tempPath over dest. On platforms where Rename cannot
+// replace an existing file it falls back to a backup-and-restore sequence so
+// a failed replacement never loses the previous destination.
+func ReplaceFile(tempPath, dest string) error {
+	if err := os.Rename(tempPath, dest); err == nil {
+		return nil
+	}
+	backup := dest + ".bak-replace"
+	for index := 1; ; index++ {
+		if _, err := os.Stat(backup); os.IsNotExist(err) {
+			break
+		}
+		backup = fmt.Sprintf("%s.bak-replace.%d", dest, index)
+	}
+	if err := os.Rename(dest, backup); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return os.Rename(tempPath, dest)
+		}
+		return err
+	}
+	if err := os.Rename(tempPath, dest); err != nil {
+		_ = os.Rename(backup, dest)
+		return err
+	}
+	_ = os.Remove(backup)
+	return nil
 }
 
 // Exists reports whether path exists and is not a directory.

@@ -268,8 +268,15 @@ func OpenWithSecrets(paths Paths, secrets secretstore.Store) (*Store, error) {
 	s := &Store{paths: paths, secrets: secrets, settings: DefaultSettings()}
 	// Reset only the schema marker so a legacy settings file can be detected.
 	s.settings.SchemaVersion = 0
+	settingsLoadFailed := false
 	if err := loadJSON(paths.Settings, &s.settings); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.loadErr = fmt.Errorf("读取设置失败: %w", err)
+		// Never overwrite a settings file we could not parse. Move it aside
+		// first so the original data stays recoverable.
+		if backupErr := quarantineFile(paths.Settings); backupErr != nil {
+			settingsLoadFailed = true
+			s.loadErr = fmt.Errorf("%v; 备份失败: %v", s.loadErr, backupErr)
+		}
 	}
 	settingsDirty := false
 	secretsReady := true
@@ -349,8 +356,13 @@ func OpenWithSecrets(paths Paths, secrets secretstore.Store) (*Store, error) {
 		settingsDirty = true
 	}
 	var db instanceDB
+	instancesReady := true
 	if err := loadJSON(paths.InstanceDB, &db); err != nil && !errors.Is(err, os.ErrNotExist) {
 		s.loadErr = fmt.Errorf("读取版本列表失败: %w", err)
+		if backupErr := quarantineFile(paths.InstanceDB); backupErr != nil {
+			instancesReady = false
+			s.loadErr = fmt.Errorf("%v; 备份失败: %v", s.loadErr, backupErr)
+		}
 	}
 	s.instances = db.Instances
 	instancesDirty := false
@@ -381,10 +393,10 @@ func OpenWithSecrets(paths Paths, secrets secretstore.Store) (*Store, error) {
 		}
 	}
 	s.sortInstancesLocked()
-	if settingsDirty && secretsReady {
+	if settingsDirty && secretsReady && !settingsLoadFailed {
 		_ = savePublicSettings(paths.Settings, s.settings)
 	}
-	if instancesDirty {
+	if instancesDirty && instancesReady {
 		_ = saveJSON(paths.InstanceDB, instanceDB{Instances: s.instances})
 	}
 	if err := s.MigrateInstanceLayout(); err != nil && s.loadErr == nil {
@@ -401,6 +413,26 @@ func (s *Store) ResetLoadError() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.loadErr = nil
+}
+
+// quarantineFile moves an unreadable JSON file aside so a later save cannot
+// destroy the user's original data. It returns an error only when the file
+// exists but could not be moved.
+func quarantineFile(path string) error {
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	backup := fmt.Sprintf("%s.corrupt-%s", path, time.Now().Format("20060102-150405"))
+	for index := 1; ; index++ {
+		if _, err := os.Stat(backup); errors.Is(err, os.ErrNotExist) {
+			break
+		}
+		backup = fmt.Sprintf("%s.corrupt-%s-%d", path, time.Now().Format("20060102-150405"), index)
+	}
+	return os.Rename(path, backup)
 }
 
 func loadJSON(path string, v any) error {
@@ -465,11 +497,17 @@ func versionFolderBase(name string) string {
 	if len(runes) > 48 {
 		out = strings.Trim(string(runes[:48]), " .-_")
 	}
-	switch strings.ToUpper(out) {
+	// Windows reserves device names even when an extension is appended
+	// (CON.txt resolves to CON), so check the segment before the first dot.
+	reserved := strings.ToUpper(out)
+	if index := strings.IndexByte(reserved, '.'); index >= 0 {
+		reserved = reserved[:index]
+	}
+	switch reserved {
 	case "CON", "PRN", "AUX", "NUL",
 		"COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
 		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
-		out += "-version"
+		out = "version-" + out
 	}
 	return out
 }
@@ -720,15 +758,22 @@ func (s *Store) CreateInstance(inst Instance) (Instance, error) {
 	if inst.ID == "" {
 		inst.ID = newID()
 	}
-	if _, ok := s.Instance(inst.ID); ok {
-		return Instance{}, errors.New("版本 ID 冲突，请重试")
-	}
 	inst.Name = strings.TrimSpace(inst.Name)
 	if inst.Name == "" {
 		inst.Name = inst.MCVersion + " 版本"
 	}
 	if _, err := SafeName(inst.Name); err != nil {
 		return Instance{}, err
+	}
+	// Hold the write lock while checking the ID and allocating the version
+	// folder. Otherwise two concurrent imports can pick the same folder and
+	// overwrite each other.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.instances {
+		if existing.ID == inst.ID {
+			return Instance{}, errors.New("版本 ID 冲突，请重试")
+		}
 	}
 	if !validVersionID(inst.VersionID) || s.versionIDTaken(inst.VersionID, inst.ID) {
 		inst.VersionID = s.allocateVersionID(inst.Name, inst.ID)
@@ -761,11 +806,9 @@ func (s *Store) CreateInstance(inst Instance) (Instance, error) {
 			return Instance{}, err
 		}
 	}
-	s.mu.Lock()
 	s.instances = append(s.instances, inst)
 	s.sortInstancesLocked()
 	err := saveJSON(s.paths.InstanceDB, instanceDB{Instances: s.instances})
-	s.mu.Unlock()
 	return inst, err
 }
 

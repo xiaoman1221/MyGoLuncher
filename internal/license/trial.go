@@ -96,13 +96,17 @@ func (m *Manager) trialStatusLocked(now time.Time) (Status, bool) {
 	}
 	status := Status{
 		State: "trial_expired", Configured: m.client != nil, Trial: true,
-		MachineCode: MachineCode(Collect()), Features: []string{},
+		MachineCode: m.machine, Features: []string{},
 		TrialRemaining: TrialTotal - m.trial.Starts, TrialDays: TrialDays,
 		Message: "试用已结束",
 	}
 	if !m.trial.EndsAt.IsZero() {
 		ends := m.trial.EndsAt
 		status.TrialEndsAt = formatTime(&ends)
+	}
+	if !m.trial.LastSeen.IsZero() && now.Add(12*time.Hour).Before(m.trial.LastSeen) {
+		status.Message = "检测到系统时间异常，请校准系统时间后重启启动器"
+		return status, true
 	}
 	if m.trial.Starts >= TrialTotal {
 		status.Message = "三次试用已用完"

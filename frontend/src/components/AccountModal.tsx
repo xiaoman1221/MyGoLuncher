@@ -125,7 +125,7 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
         setDevice(null);
         setMsDone(true);
         setMsError('');
-        void reloadBootstrap();
+        void reloadBootstrap().catch((error: Error) => setMsError(error.message));
       } else {
         setMsError(event.message);
       }
@@ -140,7 +140,7 @@ export function AccountModal({ open, onClose }: { open: boolean; onClose: () => 
       if (event.success) {
         setYssDone(true);
         setYssError('');
-        void reloadBootstrap();
+        void reloadBootstrap().catch((error: Error) => setYssError(error.message));
       } else {
         setYssError(event.message);
       }

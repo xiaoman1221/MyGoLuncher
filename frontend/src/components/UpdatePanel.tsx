@@ -5,7 +5,7 @@ import { useApp } from '../lib/app-context';
 import type { UpdateInfo } from '../lib/types';
 
 export function UpdatePanel({ className = '' }: { className?: string }) {
-  const { bootstrap, t, pushToast } = useApp();
+  const { bootstrap, t, pushToast, confirm } = useApp();
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -45,7 +45,7 @@ export function UpdatePanel({ className = '' }: { className?: string }) {
       return;
     }
     if (next.hasApp) {
-      if (!canUpdate() || !window.confirm(t('settings.updateAppConfirm'))) return;
+      if (!canUpdate() || !(await confirm({ message: t('settings.updateAppConfirm'), danger: true }))) return;
       await api.applyAppUpdate();
       return;
     }
@@ -66,15 +66,15 @@ export function UpdatePanel({ className = '' }: { className?: string }) {
     });
   };
 
-  const applyApp = () => {
-    if (!canUpdate() || !window.confirm(t('settings.updateAppConfirm'))) return;
+  const applyApp = async () => {
+    if (!canUpdate() || !(await confirm({ message: t('settings.updateAppConfirm'), danger: true }))) return;
     void run('app', async () => {
       await api.applyAppUpdate();
     });
   };
 
-  const rollback = () => {
-    if (!window.confirm(t('settings.updateRollbackConfirm'))) return;
+  const rollback = async () => {
+    if (!(await confirm({ message: t('settings.updateRollbackConfirm'), danger: true }))) return;
     void run('rollback', async () => {
       await api.rollbackWebUpdate();
     });

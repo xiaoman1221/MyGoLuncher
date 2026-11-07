@@ -21,7 +21,10 @@ func TestScanSubnetsLifecycle(t *testing.T) {
 	}
 	defer service.Stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// The scan can probe maxScanNets*254 hosts with a 2s timeout each. With
+	// scanWorkers workers that is roughly 32s worst case, so leave headroom
+	// for slower CI and loaded machines.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	var updates int64
 	if err := service.ScanSubnets(ctx, func(done, total int) {

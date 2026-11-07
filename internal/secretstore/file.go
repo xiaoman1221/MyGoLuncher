@@ -71,10 +71,28 @@ func (f *fileStore) loadOrCreateKey() error {
 	if _, err := io.ReadFull(rand.Reader, key); err != nil {
 		return err
 	}
-	if err := os.WriteFile(f.keyPath, key, 0o600); err != nil {
+	temp, err := os.CreateTemp(f.dir, ".secrets-key-*.tmp")
+	if err != nil {
 		return err
 	}
-	if err := os.Chmod(f.keyPath, 0o600); err != nil {
+	tempName := temp.Name()
+	defer os.Remove(tempName)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(key); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempName, f.keyPath); err != nil {
 		return err
 	}
 	f.key = key
@@ -156,9 +174,16 @@ func (f *fileStore) saveLocked() error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	_ = os.Remove(f.dataPath)
+	// On Unix Rename replaces the destination atomically, so a crash can never
+	// leave the store without data. Windows cannot replace an existing file,
+	// hence the remove+retry fallback (production uses the registry there).
 	if err := os.Rename(tempName, f.dataPath); err != nil {
-		return err
+		if removeErr := os.Remove(f.dataPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return err
+		}
+		if retryErr := os.Rename(tempName, f.dataPath); retryErr != nil {
+			return retryErr
+		}
 	}
 	return os.Chmod(f.dataPath, 0o600)
 }

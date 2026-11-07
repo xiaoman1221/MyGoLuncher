@@ -28,6 +28,15 @@ export function ToastStack({ toasts, onDismiss, withConsole }: ToastStackProps) 
               <strong>{toast.title}</strong>
               {toast.message && <span>{toast.message}</span>}
             </div>
+            {toast.action && (
+              <button
+                type="button"
+                className="toast-action"
+                onClick={() => { toast.action?.onClick(); onDismiss(toast.id); }}
+              >
+                {toast.action.label}
+              </button>
+            )}
             <button type="button" className="toast-close" onClick={() => onDismiss(toast.id)} aria-label={t('common.close')}>
               <X size={14} />
             </button>

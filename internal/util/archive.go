@@ -77,11 +77,20 @@ func ExtractZip(zipPath, dest, strip string) error {
 			rc.Close()
 			return err
 		}
-		_, copyErr := io.Copy(out, io.LimitReader(rc, 4<<30))
+		expected := int64(f.UncompressedSize64)
+		if expected < 0 || expected > 4<<30 {
+			out.Close()
+			rc.Close()
+			return fmt.Errorf("压缩包条目过大: %s", f.Name)
+		}
+		written, copyErr := io.Copy(out, io.LimitReader(rc, expected+1))
 		closeErr := out.Close()
 		rc.Close()
 		if copyErr != nil {
 			return copyErr
+		}
+		if written > expected {
+			return fmt.Errorf("压缩包条目大小不符: %s", f.Name)
 		}
 		if closeErr != nil {
 			return closeErr
@@ -140,10 +149,17 @@ func ExtractTarGz(archivePath, dest string) error {
 			if err != nil {
 				return err
 			}
-			_, copyErr := io.Copy(out, io.LimitReader(tr, 4<<30))
+			if h.Size < 0 || h.Size > 4<<30 {
+				out.Close()
+				return fmt.Errorf("压缩包条目过大: %s", h.Name)
+			}
+			written, copyErr := io.Copy(out, io.LimitReader(tr, h.Size+1))
 			closeErr := out.Close()
 			if copyErr != nil {
 				return copyErr
+			}
+			if written > h.Size {
+				return fmt.Errorf("压缩包条目大小不符: %s", h.Name)
 			}
 			if closeErr != nil {
 				return closeErr

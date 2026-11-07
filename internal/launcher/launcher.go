@@ -114,6 +114,9 @@ func (p *Process) StoppedByUser() bool { return p.stopped.Load() }
 
 // Start validates an installed version, prepares natives, and launches Java.
 func (l *Launcher) Start(ctx context.Context, opts Options) (*Process, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	inst := opts.Instance
 	if inst.ID == "" {
 		return nil, errors.New("版本无效")
@@ -174,7 +177,7 @@ func (l *Launcher) Start(ctx context.Context, opts Options) (*Process, error) {
 	allArgs := append(jvmArgs, merged.MainClass)
 	allArgs = append(allArgs, gameArgs...)
 
-	cmd := exec.Command(opts.JavaPath, allArgs...)
+	cmd := exec.CommandContext(ctx, opts.JavaPath, allArgs...)
 	cmd.Dir = gameDir
 	sysutil.ConfigureProcess(cmd)
 	cmd.Env = os.Environ()
@@ -242,8 +245,10 @@ func (l *Launcher) Start(ctx context.Context, opts Options) (*Process, error) {
 	go stream(stdout)
 	go stream(stderr)
 	go func() {
-		waitErr := cmd.Wait()
+		// Drain stdout/stderr before Wait: Wait closes the pipes, which would
+		// truncate the final lines of a crash log.
 		readers.Wait()
+		waitErr := cmd.Wait()
 		code := 0
 		if cmd.ProcessState != nil {
 			code = cmd.ProcessState.ExitCode()

@@ -357,7 +357,10 @@ func (a *App) DownloadLanFile(messageID string) (lantools.Message, error) {
 	if name == "" || name == "." {
 		name = "received-file"
 	}
-	dest := uniqueLanInboxPath(server.Inbox(), name)
+	dest, err := uniqueLanInboxPath(server.Inbox(), name)
+	if err != nil {
+		return lantools.Message{}, err
+	}
 	workers := 6
 	if message.Size < 8*1024*1024 {
 		workers = 4
@@ -375,17 +378,22 @@ func (a *App) DownloadLanFile(messageID string) (lantools.Message, error) {
 	return updated, nil
 }
 
-func uniqueLanInboxPath(dir, name string) string {
+func uniqueLanInboxPath(dir, name string) (string, error) {
 	name = filepath.Base(name)
 	ext := filepath.Ext(name)
 	base := strings.TrimSuffix(name, ext)
 	candidate := filepath.Join(dir, name)
-	for index := 1; ; index++ {
-		if _, err := os.Stat(candidate); os.IsNotExist(err) {
-			return candidate
+	for index := 1; index < 10000; index++ {
+		_, statErr := os.Stat(candidate)
+		if errors.Is(statErr, os.ErrNotExist) {
+			return candidate, nil
+		}
+		if statErr != nil {
+			return "", fmt.Errorf("无法检查接收目录: %w", statErr)
 		}
 		candidate = filepath.Join(dir, fmt.Sprintf("%s (%d)%s", base, index, ext))
 	}
+	return "", errors.New("接收目录中存在过多同名文件")
 }
 
 // SendLanSignal forwards one WebRTC signaling payload to a peer.

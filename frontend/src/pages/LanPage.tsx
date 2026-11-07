@@ -24,7 +24,6 @@ import { LanToolsModal } from '../components/LanToolsModal';
 import { cn } from '../lib/format';
 import type { MessageKey } from '../lib/i18n';
 import type {
-  InstanceView,
   LanPeer,
   LanShareDir,
   LanSnapshot,
@@ -81,6 +80,8 @@ export function LanPage() {
   const [toolsOpen, setToolsOpen] = useState(false);
   const startedRef = useRef(false);
   const sharingRef = useRef(false);
+  // Guards against an older snapshot request resolving after a newer one.
+  const snapshotSeqRef = useRef(0);
   sharingRef.current = snapshot.sharing;
 
   useEffect(() => {
@@ -94,8 +95,9 @@ export function LanPage() {
     const unsubscribe = onEvent<LanSnapshot>('lan:changed', (next) => {
       if (active) setSnapshot(next);
     });
+    const seq = ++snapshotSeqRef.current;
     api.getLanSnapshot()
-      .then((current) => { if (active) setSnapshot(current); })
+      .then((current) => { if (active && seq === snapshotSeqRef.current) setSnapshot(current); })
       .finally(() => { if (active) setStarting(false); });
     return () => {
       active = false;
@@ -114,8 +116,9 @@ export function LanPage() {
     setStarting(true);
     const broadcast = startedRef.current ? snapshot.broadcast : true;
     startedRef.current = true;
+    const seq = ++snapshotSeqRef.current;
     api.startLanDiscovery(joinInstance, broadcast)
-      .then((current) => { if (active) setSnapshot(current); })
+      .then((current) => { if (active && seq === snapshotSeqRef.current) setSnapshot(current); })
       .catch((error) => {
         if (active) pushToast('error', t('lan.startFailed'), (error as Error).message);
       })

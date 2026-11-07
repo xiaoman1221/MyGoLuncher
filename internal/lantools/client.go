@@ -18,7 +18,17 @@ import (
 	"time"
 )
 
-var client = &http.Client{Timeout: 30 * time.Minute}
+// LAN traffic must never go through a system proxy: the peer is a local
+// address and the request carries the tool token.
+var client = &http.Client{
+	Timeout: 30 * time.Minute,
+	Transport: &http.Transport{
+		Proxy:                 nil,
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ResponseHeaderTimeout: 30 * time.Second,
+		IdleConnTimeout:       90 * time.Second,
+	},
+}
 
 func endpoint(target Target, path string, query url.Values) string {
 	host := target.Address
@@ -225,12 +235,19 @@ func DownloadSharedFile(ctx context.Context, target Target, fileID, dest string,
 				setErr(fmt.Errorf("对方不支持分块下载 (%d)", resp.StatusCode))
 				return
 			}
+			expected := end - start + 1
+			var rangeStart, rangeEnd, rangeTotal int64
+			if _, scanErr := fmt.Sscanf(resp.Header.Get("Content-Range"), "bytes %d-%d/%d", &rangeStart, &rangeEnd, &rangeTotal); scanErr != nil ||
+				rangeStart != start || rangeEnd != end || (rangeTotal > 0 && rangeTotal != size) {
+				setErr(errors.New("对方返回的分块范围不正确"))
+				return
+			}
 			file, err := os.OpenFile(tempName, os.O_WRONLY, 0o644)
 			if err != nil {
 				setErr(err)
 				return
 			}
-			_, copyErr := io.Copy(io.NewOffsetWriter(file, start), io.LimitReader(resp.Body, end-start+1))
+			copied, copyErr := io.Copy(io.NewOffsetWriter(file, start), io.LimitReader(resp.Body, expected))
 			closeErr := file.Close()
 			if copyErr != nil {
 				setErr(copyErr)
@@ -240,7 +257,11 @@ func DownloadSharedFile(ctx context.Context, target Target, fileID, dest string,
 				setErr(closeErr)
 				return
 			}
-			current := atomic.AddInt64(&written, end-start+1)
+			if copied != expected {
+				setErr(fmt.Errorf("分块大小不一致（期望 %d，实际 %d）", expected, copied))
+				return
+			}
+			current := atomic.AddInt64(&written, expected)
 			if progress != nil {
 				progress(int(current * 100 / size))
 			}

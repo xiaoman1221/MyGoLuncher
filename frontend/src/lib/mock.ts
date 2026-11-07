@@ -32,7 +32,6 @@ import type {
   ResourceType,
   ResourceVersion,
   SearchRequest,
-  SearchResult,
   ServerPackExportResult,
   ServerProfile,
   ServerProfileRequest,
@@ -1241,7 +1240,14 @@ export async function mockCall<T>(method: string, args: unknown[]): Promise<T> {
       ];
       let index = 0;
       const timer = setInterval(() => {
-        if (index >= lines.length) { clearInterval(timer); launchTimers.delete(id); return; }
+        if (index >= lines.length) {
+          clearInterval(timer);
+          launchTimers.delete(id);
+          // The real backend emits this once the game window appears; the
+          // launch overlay waits for it.
+          emit('launch:window', { instanceId: id });
+          return;
+        }
         logs.get(id)?.push(lines[index]);
         emit('launch:log', { instanceId: id, line: lines[index] });
         index++;

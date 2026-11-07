@@ -11,10 +11,13 @@ const (
 const (
 	MaxChatTextBytes = 4096
 	MaxVoiceBytes    = 20 << 20
-	MaxFileBytes     = 512 << 20
-	MaxMessages      = 200
-	MaxSignalBytes   = 96 << 10
-	MaxSignals       = 500
+	// MaxVoiceCacheBytes bounds all voice clips kept in memory. Message
+	// metadata is still retained; only the audio payload is dropped.
+	MaxVoiceCacheBytes = 128 << 20
+	MaxFileBytes       = 512 << 20
+	MaxMessages        = 200
+	MaxSignalBytes     = 96 << 10
+	MaxSignals         = 500
 )
 
 // Signal is one WebRTC signaling message exchanged over the LAN toolbox.

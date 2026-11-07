@@ -325,6 +325,22 @@ func localPath(root, rel string) (string, error) {
 	if err != nil || within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
 		return "", errors.New("共享路径越界")
 	}
+	// Reject symlinks/junctions inside the shared tree. A lexical containment
+	// check alone would follow them and could write outside the instance.
+	current := rootAbs
+	for _, part := range strings.Split(within, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, statErr := os.Lstat(current)
+		if statErr != nil {
+			break // remaining components do not exist yet
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("共享路径包含符号链接")
+		}
+	}
 	return fullAbs, nil
 }
 

@@ -21,6 +21,11 @@ import (
 
 const UserAgent = "MyGoLuncher/1.0"
 
+// downloadIdleTimeout aborts a download when the server stops sending data.
+// The overall duration is intentionally not capped: large runtimes and
+// modpacks can legitimately take a long time on slow links.
+const downloadIdleTimeout = 60 * time.Second
+
 var Client = &http.Client{
 	Timeout: 0,
 	Transport: &http.Transport{
@@ -172,7 +177,14 @@ func DownloadAny(ctx context.Context, urls []string, f File) error {
 }
 
 func downloadAttempt(ctx context.Context, f File) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.URL, nil)
+	// Cancel the request when the body stalls. Each successful read resets
+	// the timer, so slow but progressing downloads are unaffected.
+	idleCtx, cancelIdle := context.WithCancel(ctx)
+	defer cancelIdle()
+	idleTimer := time.AfterFunc(downloadIdleTimeout, cancelIdle)
+	defer idleTimer.Stop()
+
+	req, err := http.NewRequestWithContext(idleCtx, http.MethodGet, f.URL, nil)
 	if err != nil {
 		return err
 	}
@@ -188,6 +200,10 @@ func downloadAttempt(ctx context.Context, f File) error {
 	total := resp.ContentLength
 	if total <= 0 {
 		total = f.Size
+	}
+	expectedSize := f.Size
+	if expectedSize <= 0 {
+		expectedSize = total
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(f.Dest), ".download-*")
 	if err != nil {
@@ -208,11 +224,18 @@ func downloadAttempt(ctx context.Context, f File) error {
 	if hasher != nil {
 		writer = io.MultiWriter(tmp, hasher)
 	}
+	// Never write more than one byte past the expected size. When the size is
+	// unknown, the idle timeout is the only bound.
+	var reader io.Reader = resp.Body
+	if expectedSize > 0 {
+		reader = io.LimitReader(resp.Body, expectedSize+1)
+	}
 	var done int64
 	buf := make([]byte, 256<<10)
 	for {
-		n, readErr := resp.Body.Read(buf)
+		n, readErr := reader.Read(buf)
 		if n > 0 {
+			idleTimer.Reset(downloadIdleTimeout)
 			if _, err := writer.Write(buf[:n]); err != nil {
 				tmp.Close()
 				return err
@@ -227,6 +250,9 @@ func downloadAttempt(ctx context.Context, f File) error {
 		}
 		if readErr != nil {
 			tmp.Close()
+			if idleCtx.Err() != nil && ctx.Err() == nil {
+				return errors.New("下载停滞超时")
+			}
 			return readErr
 		}
 	}
@@ -249,10 +275,6 @@ func downloadAttempt(ctx context.Context, f File) error {
 		if !strings.EqualFold(got, want) {
 			return fmt.Errorf("校验失败（期望 %s，实际 %s）", shortHash(want), shortHash(got))
 		}
-	}
-	expectedSize := f.Size
-	if expectedSize <= 0 {
-		expectedSize = total
 	}
 	if expectedSize > 0 && done != expectedSize {
 		return fmt.Errorf("文件大小不符（期望 %d，实际 %d）", expectedSize, done)

@@ -91,7 +91,11 @@ func (a *App) newTask(title string) *progressTask {
 		updatedAt: now,
 	}
 	for key, entry := range a.taskLogs {
-		if key != id && (len(a.taskLogs) > 80 || now.Sub(entry.updatedAt) > 2*time.Hour) {
+		if key == id || (len(a.taskLogs) <= 80 && now.Sub(entry.updatedAt) <= 2*time.Hour) {
+			continue
+		}
+		// Keep running tasks cancellable; only drop logs for finished work.
+		if entry.task == nil || entry.task.isFinished() {
 			delete(a.taskLogs, key)
 		}
 	}
@@ -130,6 +134,12 @@ func (a *App) GetTaskLog(taskID string) TaskLog {
 		result.Entries = []TaskLogEntry{}
 	}
 	return result
+}
+
+func (t *progressTask) isFinished() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.finished
 }
 
 func (t *progressTask) context() context.Context {

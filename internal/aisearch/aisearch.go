@@ -306,8 +306,37 @@ func init() {
 	})
 }
 
-// NormalizeQuery applies the built-in Chinese alias table. Chinese punctuation
-// is treated as a separator so queries copied from a sentence still work.
+// traditionalToSimplified covers the traditional characters used by common
+// Minecraft mod names. A full conversion table is unnecessary; this keeps
+// queries copied from Traditional Chinese clients searchable.
+var traditionalToSimplified = strings.NewReplacer(
+	"機", "机", "動", "动", "業", "业", "農", "农", "樂", "乐", "鈉", "钠",
+	"鋰", "锂", "銣", "铷", "鎂", "镁", "錳", "锰", "蘋", "苹", "熱", "热",
+	"脹", "胀", "馬", "马", "應", "应", "緻", "致", "儲", "储", "屜", "屉",
+	"簡", "简", "價", "价", "換", "换", "無", "无", "盡", "尽", "貪", "贪",
+	"輝", "辉", "淵", "渊", "國", "国", "虛", "虚", "龍", "龙", "藝", "艺",
+	"塊", "块", "寶", "宝", "夢", "梦", "靈", "灵", "亞", "亚", "歷", "历",
+	"與", "与", "遙", "遥", "遠", "远", "線", "线", "傳", "传", "標", "标",
+	"勢", "势", "鍵", "键", "衝", "冲", "區", "区", "預", "预", "實", "实",
+	"體", "体", "務", "务", "書", "书", "詩", "诗", "戰", "战", "鬥", "斗",
+	"話", "话", "飾", "饰", "欄", "栏", "冊", "册", "傘", "伞", "創", "创",
+	"築", "筑", "車", "车", "萬", "万", "僕", "仆", "運", "运", "鐵", "铁",
+	"經", "经", "濟", "济", "記", "记", "憶", "忆", "點", "点", "選", "选",
+	"單", "单", "開", "开", "關", "关", "軟", "软", "驗", "验", "證", "证",
+)
+
+func isNoiseSearchToken(token string) bool {
+	switch strings.ToLower(token) {
+	case "minecraft", "mc", "mod", "mods", "plugin", "plugins", "addon", "addons",
+		"模组", "插件", "我的世界":
+		return true
+	}
+	return false
+}
+
+// NormalizeQuery applies the built-in Chinese alias table. Chinese punctuation,
+// full-width characters and common Traditional Chinese variants are normalized
+// so queries copied from a client or chat still match.
 func NormalizeQuery(query string) string {
 	query = strings.TrimSpace(query)
 	if query == "" {
@@ -316,12 +345,60 @@ func NormalizeQuery(query string) string {
 	query = strings.NewReplacer(
 		"，", " ", "。", " ", "！", " ", "？", " ", "、", " ",
 		"：", " ", "；", " ", "（", " ", "）", " ", "【", " ", "】", " ",
+		"Ａ", "A", "Ｂ", "B", "Ｃ", "C", "Ｄ", "D", "Ｅ", "E", "Ｆ", "F",
+		"Ｇ", "G", "Ｈ", "H", "Ｉ", "I", "Ｊ", "J", "Ｋ", "K", "Ｌ", "L",
+		"Ｍ", "M", "Ｎ", "N", "Ｏ", "O", "Ｐ", "P", "Ｑ", "Q", "Ｒ", "R",
+		"Ｓ", "S", "Ｔ", "T", "Ｕ", "U", "Ｖ", "V", "Ｗ", "W", "Ｘ", "X",
+		"Ｙ", "Y", "Ｚ", "Z", "０", "0", "１", "1", "２", "2", "３", "3",
+		"４", "4", "５", "5", "６", "6", "７", "7", "８", "8", "９", "9",
 	).Replace(query)
-	result := query
+	result := traditionalToSimplified.Replace(query)
 	for _, alias := range aliases {
 		result = strings.ReplaceAll(result, alias.from, alias.to)
 	}
-	return strings.Join(strings.Fields(result), " ")
+
+	tokens := strings.Fields(result)
+	seen := map[string]bool{}
+	unique := make([]string, 0, len(tokens))
+	meaningfulLatin := false
+	hasCJK := false
+	for _, token := range tokens {
+		lower := strings.ToLower(token)
+		if seen[lower] {
+			continue
+		}
+		seen[lower] = true
+		unique = append(unique, token)
+		if HasCJK(token) {
+			hasCJK = true
+		} else if !isNoiseSearchToken(token) {
+			meaningfulLatin = true
+		}
+	}
+	// "sodium 好用的" should search "sodium", not a phrase that no project
+	// title contains. Keep the Chinese token when it is the only signal.
+	if meaningfulLatin && hasCJK {
+		filtered := unique[:0]
+		for _, token := range unique {
+			if !HasCJK(token) {
+				filtered = append(filtered, token)
+			}
+		}
+		unique = filtered
+	}
+	// Drop filler words only when a real keyword remains.
+	if len(unique) > 1 {
+		filtered := unique[:0]
+		for _, token := range unique {
+			if !isNoiseSearchToken(token) {
+				filtered = append(filtered, token)
+			}
+		}
+		if len(filtered) > 0 {
+			unique = filtered
+		}
+	}
+	return strings.Join(unique, " ")
 }
 
 // QueryCandidates returns the primary normalized query followed by the

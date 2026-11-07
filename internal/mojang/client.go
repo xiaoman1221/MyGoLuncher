@@ -2,6 +2,8 @@ package mojang
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,29 +79,29 @@ func (c *Client) Manifest(ctx context.Context) (Manifest, error) {
 	if len(urls) == 0 {
 		urls = []string{ManifestURL}
 	}
-	var raw []byte
 	var err error
 	for _, endpoint := range urls {
-		raw, err = httpx.GetRaw(ctx, endpoint)
-		if err == nil {
-			break
+		raw, getErr := httpx.GetRaw(ctx, endpoint)
+		if getErr != nil {
+			err = getErr
+		} else {
+			var m Manifest
+			// A mirror returning 200 with an error page must not prevent the
+			// next candidate (including the official source) from being tried.
+			if jsonErr := json.Unmarshal(raw, &m); jsonErr == nil && len(m.Versions) > 0 {
+				_ = os.WriteFile(cachePath, raw, 0o644)
+				SortVersions(m.Versions)
+				c.mu.Lock()
+				c.manifest = &m
+				c.fetchedAt = time.Now()
+				c.mu.Unlock()
+				return m, nil
+			}
+			err = errors.New("版本清单格式异常")
 		}
 		if ctx.Err() != nil {
 			return Manifest{}, ctx.Err()
 		}
-	}
-	if err == nil {
-		var m Manifest
-		if jsonErr := json.Unmarshal(raw, &m); jsonErr == nil && len(m.Versions) > 0 {
-			_ = os.WriteFile(cachePath, raw, 0o644)
-			SortVersions(m.Versions)
-			c.mu.Lock()
-			c.manifest = &m
-			c.fetchedAt = time.Now()
-			c.mu.Unlock()
-			return m, nil
-		}
-		err = errors.New("版本清单格式异常")
 	}
 
 	var m Manifest
@@ -156,13 +158,33 @@ func (c *Client) EnsureVersion(ctx context.Context, id string) (Version, error) 
 	if err != nil {
 		return Version{}, err
 	}
-	raw, err := fetchFirst(ctx, mirror.CandidateURLs(c.sourceList(), mirror.ResourceVersion, entry.URL, id))
-	if err != nil {
-		return Version{}, fmt.Errorf("获取版本元数据失败: %w", err)
-	}
+	var raw []byte
 	var v Version
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return Version{}, fmt.Errorf("解析版本元数据失败: %w", err)
+	var lastErr error
+	for _, endpoint := range mirror.CandidateURLs(c.sourceList(), mirror.ResourceVersion, entry.URL, id) {
+		candidate, getErr := httpx.GetRaw(ctx, endpoint)
+		if getErr != nil {
+			lastErr = getErr
+			continue
+		}
+		if entry.SHA1 != "" && !verifySHA1(candidate, entry.SHA1) {
+			lastErr = errors.New("版本元数据校验失败")
+			continue
+		}
+		var parsed Version
+		if jsonErr := json.Unmarshal(candidate, &parsed); jsonErr != nil {
+			lastErr = fmt.Errorf("解析版本元数据失败: %w", jsonErr)
+			continue
+		}
+		raw, v = candidate, parsed
+		lastErr = nil
+		break
+	}
+	if raw == nil {
+		if lastErr == nil {
+			lastErr = errors.New("没有可用的下载地址")
+		}
+		return Version{}, fmt.Errorf("获取版本元数据失败: %w", lastErr)
 	}
 	if v.ID == "" {
 		v.ID = id
@@ -788,25 +810,13 @@ func (c *Client) downloadAssets(ctx context.Context, indexPath string, workers i
 	return nil
 }
 
-func fetchFirst(ctx context.Context, urls []string) ([]byte, error) {
-	var lastErr error
-	for _, endpoint := range urls {
-		if endpoint == "" {
-			continue
-		}
-		raw, err := httpx.GetRaw(ctx, endpoint)
-		if err == nil {
-			return raw, nil
-		}
-		lastErr = err
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
+func verifySHA1(raw []byte, want string) bool {
+	want = strings.TrimSpace(want)
+	if want == "" {
+		return true
 	}
-	if lastErr == nil {
-		lastErr = errors.New("没有可用的下载地址")
-	}
-	return nil, lastErr
+	sum := sha1.Sum(raw)
+	return strings.EqualFold(hex.EncodeToString(sum[:]), want)
 }
 
 func report(fn ProgressFunc, stage, message string, current, total int) {

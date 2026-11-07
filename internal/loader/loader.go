@@ -285,11 +285,23 @@ func (i *Installer) fetchProfile(ctx context.Context, sources []mirror.Source, l
 
 func (i *Installer) installForge(ctx context.Context, sources []mirror.Source, mcVersion, loaderType, loaderVersion, javaPath string, progress mojang.ProgressFunc) (string, error) {
 	loaderVersion = cleanLoaderVersion(loaderVersion, mcVersion, loaderType)
-	if id := findInstalledProfile(i.Paths.Versions, mcVersion, loaderType, loaderVersion); id != "" && i.Mojang.IsProfileInstalled(id) {
-		if progress != nil {
-			progress("loader", displayLoader(loaderType)+" 已安装", 1, 1)
+	if id := findInstalledProfile(i.Paths.Versions, mcVersion, loaderType, loaderVersion); id != "" {
+		if i.Mojang.IsProfileInstalled(id) {
+			if progress != nil {
+				progress("loader", displayLoader(loaderType)+" 已安装", 1, 1)
+			}
+			return id, nil
 		}
-		return id, nil
+		// The profile may have been created by another launcher or an earlier
+		// interrupted install. Adopt it instead of running the installer again.
+		if profile, err := i.Mojang.LocalVersion(id); err == nil && strings.TrimSpace(profile.MainClass) != "" {
+			if err := i.Mojang.MarkProfileInstalled(id); err == nil {
+				if progress != nil {
+					progress("loader", "已检测到完整的 "+displayLoader(loaderType)+" 档案，直接复用", 1, 1)
+				}
+				return id, nil
+			}
+		}
 	}
 	installerURL, err := forgeInstallerURL(mcVersion, loaderType, loaderVersion)
 	if err != nil {
@@ -374,17 +386,22 @@ func (i *Installer) runForgeInstaller(ctx context.Context, javaPath, installerPa
 	cmd := exec.CommandContext(runCtx, javaPath, args...)
 	cmd.Dir = i.Paths.Data
 	sysutil.HideWindow(cmd)
-	output, runErr := cmd.CombinedOutput()
-	text := strings.TrimSpace(string(output))
+	writer := newInstallerOutput(display, progress)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	runErr := cmd.Run()
+	text := strings.TrimSpace(writer.String())
 	if runCtx.Err() == context.DeadlineExceeded {
 		return "", errors.New(display + " 安装超时")
 	}
 	if runErr != nil {
-		return "", fmt.Errorf("%s 安装失败: %v\n%s", display, runErr, tailString(text, 1800))
+		return "", fmt.Errorf("%s 安装失败: %v\n%s\n提示：请确认该版本使用的 Java 版本正确，或尝试在设置中更换下载源后重试。",
+			display, runErr, tailString(text, 1800))
 	}
 	id := findInstalledProfile(i.Paths.Versions, mcVersion, loaderType, loaderVersion)
 	if id == "" {
-		return "", fmt.Errorf("%s 安装器未生成版本档案\n%s", display, tailString(text, 1200))
+		return "", fmt.Errorf("%s 安装器未生成版本档案\n%s\n提示：安装器可能被安全软件中断，请重试或在设置中更换下载源。",
+			display, tailString(text, 1200))
 	}
 	if err := i.Mojang.MarkProfileInstalled(id); err != nil {
 		return "", fmt.Errorf("%s 版本档案已生成，但写入安装标记失败: %w", display, err)
@@ -531,6 +548,11 @@ func findInstalledProfile(versionsDir, mcVersion, loaderType, loaderVersion stri
 		candidates = append(candidates, mcVersion+"-forge-"+loaderVersion, mcVersion+"-forge"+loaderVersion, "forge-"+loaderVersion)
 	case "neoforge":
 		candidates = append(candidates, "neoforge-"+loaderVersion, mcVersion+"-neoforge-"+loaderVersion)
+		// NeoForge 1.20.1 (47.x) ships the legacy Forge artifact and creates
+		// a "1.20.1-forge-47.x" profile.
+		if mcVersion == "1.20.1" || strings.HasPrefix(loaderVersion, "47.") {
+			candidates = append(candidates, mcVersion+"-forge-"+loaderVersion, "forge-"+loaderVersion)
+		}
 	}
 	for _, id := range candidates {
 		if util.NonEmptyFile(filepath.Join(versionsDir, id, id+".json")) {
@@ -552,7 +574,10 @@ func findInstalledProfile(versionsDir, mcVersion, loaderType, loaderVersion stri
 			continue
 		}
 		if loaderType == "neoforge" && !strings.Contains(lower, "neoforge") {
-			continue
+			// The 1.20.1 NeoForge installer produces a "forge-47.x" profile.
+			if !(strings.HasPrefix(loaderVersion, "47.") && strings.Contains(lower, "forge")) {
+				continue
+			}
 		}
 		if util.NonEmptyFile(filepath.Join(versionsDir, id, id+".json")) {
 			return id
@@ -578,11 +603,55 @@ func displayLoader(t string) string {
 	return "Forge"
 }
 
+// installerOutput forwards the installer's console output to the task log while
+// keeping a bounded tail for error messages.
+type installerOutput struct {
+	mu       sync.Mutex
+	buffer   strings.Builder
+	display  string
+	progress mojang.ProgressFunc
+	lastEmit time.Time
+}
+
+func newInstallerOutput(display string, progress mojang.ProgressFunc) *installerOutput {
+	return &installerOutput{display: display, progress: progress}
+}
+
+func (w *installerOutput) Write(data []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buffer.Write(data)
+	if w.buffer.Len() > 64<<10 {
+		text := w.buffer.String()
+		w.buffer.Reset()
+		w.buffer.WriteString(text[len(text)-(32<<10):])
+	}
+	if w.progress != nil && time.Since(w.lastEmit) >= 400*time.Millisecond {
+		lines := strings.Split(strings.TrimRight(string(data), "\r\n"), "\n")
+		line := strings.TrimSpace(lines[len(lines)-1])
+		if line != "" {
+			w.progress("loader", w.display+"："+tailString(line, 160), 0, 0)
+			w.lastEmit = time.Now()
+		}
+	}
+	return len(data), nil
+}
+
+func (w *installerOutput) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buffer.String()
+}
+
 func tailString(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return "…" + s[len(s)-max:]
+	runes := []rune(s)
+	if len(runes) <= max {
+		return s
+	}
+	return "…" + string(runes[len(runes)-max:])
 }
 
 // Normalize translates UI labels to internal loader identifiers.

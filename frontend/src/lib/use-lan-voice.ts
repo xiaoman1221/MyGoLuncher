@@ -30,6 +30,9 @@ export function useLanVoice({ selfId, onError }: UseLanVoiceOptions) {
   const sessionRef = useRef('');
   const selfIdRef = useRef(selfId);
   const activeRef = useRef(false);
+  const startingRef = useRef(false);
+  // Kept as a high-water mark across calls: the backend retains signaling
+  // messages, and resetting to 0 would replay offers from the previous call.
   const seqRef = useRef(0);
   const pollRef = useRef<number | null>(null);
   const pollingRef = useRef(false);
@@ -61,6 +64,12 @@ export function useLanVoice({ selfId, onError }: UseLanVoiceOptions) {
     };
     pc.onconnectionstatechange = () => {
       if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        // Drop the broken peer so the next offer rebuilds a fresh connection
+        // instead of reusing a closed RTCPeerConnection.
+        if (peersRef.current.get(peerId) === state) {
+          peersRef.current.delete(peerId);
+        }
+        if (pc.connectionState !== 'closed') pc.close();
         setRemoteStreams((current) => {
           const next = { ...current };
           delete next[peerId];
@@ -146,18 +155,19 @@ export function useLanVoice({ selfId, onError }: UseLanVoiceOptions) {
   }, []);
 
   const start = useCallback(async (nextSession: string, peers: LanVoicePeer[]) => {
-    if (activeRef.current) stop();
-    if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') {
-      throw new Error('当前环境不支持实时语音');
-    }
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-    });
+    if (startingRef.current) throw new Error('语音正在启动');
+    startingRef.current = true;
     try {
+      if (activeRef.current) stop();
+      if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') {
+        throw new Error('当前环境不支持实时语音');
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
       localStreamRef.current = stream;
       sessionRef.current = nextSession;
       activeRef.current = true;
-      seqRef.current = 0;
       setActive(true);
       setSession(nextSession);
       setParticipants(peers);
@@ -178,6 +188,8 @@ export function useLanVoice({ selfId, onError }: UseLanVoiceOptions) {
     } catch (error) {
       stop();
       throw error;
+    } finally {
+      startingRef.current = false;
     }
   }, [ensurePeer, pollSignals, sendSignal, stop]);
 

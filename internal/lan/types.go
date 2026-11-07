@@ -102,7 +102,8 @@ type Config struct {
 
 type worldEntry struct {
 	World
-	lastSeen time.Time
+	lastSeen     time.Time
+	pingFailures int
 }
 
 type peerEntry struct {

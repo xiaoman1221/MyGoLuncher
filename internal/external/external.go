@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 
 	"MyMinecraftGoLuncher/internal/util"
@@ -703,11 +704,44 @@ func scanVersionDirectory(versionsDir, mcRoot string, result ScanResult) (ScanRe
 
 func sortCandidates(candidates []Candidate) {
 	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].MCVersion != candidates[j].MCVersion {
-			return candidates[i].MCVersion > candidates[j].MCVersion
+		if left, right := candidates[i].MCVersion, candidates[j].MCVersion; left != right {
+			return compareMinecraftVersions(left, right) > 0
 		}
 		return candidates[i].Name < candidates[j].Name
 	})
+}
+
+// compareMinecraftVersions compares numeric segments so 1.20.1 sorts above
+// 1.9.4 instead of using lexicographic order.
+func compareMinecraftVersions(left, right string) int {
+	split := func(value string) []int {
+		fields := strings.FieldsFunc(value, func(r rune) bool {
+			return r == '.' || r == '-' || r == '+' || r == '_'
+		})
+		numbers := make([]int, 0, len(fields))
+		for _, field := range fields {
+			number, _ := strconv.Atoi(field)
+			numbers = append(numbers, number)
+		}
+		return numbers
+	}
+	a, b := split(left), split(right)
+	for index := 0; index < len(a) || index < len(b); index++ {
+		av, bv := 0, 0
+		if index < len(a) {
+			av = a[index]
+		}
+		if index < len(b) {
+			bv = b[index]
+		}
+		if av != bv {
+			if av > bv {
+				return 1
+			}
+			return -1
+		}
+	}
+	return strings.Compare(left, right)
 }
 
 func prismCandidate(instanceDir, versionDir, gameRoot, name string) (Candidate, error) {
@@ -1176,10 +1210,13 @@ func customContentRoot(sourceDir string) string {
 	if strings.EqualFold(filepath.Base(sourceDir), "versions") {
 		return filepath.Dir(sourceDir)
 	}
-	// Prism / MultiMC instances usually keep content under .minecraft.
-	nested := filepath.Join(sourceDir, ".minecraft")
-	if stat, err := os.Stat(nested); err == nil && stat.IsDir() {
-		return nested
+	// Prism / MultiMC instances keep content under "minecraft"; older
+	// layouts and other launchers use ".minecraft".
+	for _, name := range []string{"minecraft", ".minecraft"} {
+		nested := filepath.Join(sourceDir, name)
+		if stat, err := os.Stat(nested); err == nil && stat.IsDir() && hasContent(nested) {
+			return nested
+		}
 	}
 	// A version folder normally shares content with its parent game root, but
 	// some custom packs keep mods/configs inside the version folder itself.

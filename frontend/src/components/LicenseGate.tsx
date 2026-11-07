@@ -12,7 +12,7 @@ interface LicenseGateProps {
 }
 
 export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) {
-  const { t, theme, language } = useApp();
+  const { t, theme, language, confirm } = useApp();
   const [code, setCode] = useState('');
   const [email, setEmail] = useState(status.email ?? '');
   const [customer, setCustomer] = useState(status.customer ?? '');
@@ -28,7 +28,6 @@ export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) 
     setCurrent(status);
     setEmail((value) => value || status.email || '');
     setCustomer((value) => value || status.customer || '');
-    if (status.activated && !status.trial && status.canSelfUnbind === false) setEmailOpen(true);
   }, [status]);
 
   const stateLabel = (value: LicenseStatus) => {
@@ -87,14 +86,14 @@ export function LicenseGate({ status, onActivated, onClose }: LicenseGateProps) 
   const validate = () => void run('validate', () => api.validateLicense());
   const startTrial = () => void run('trial', () => api.startTrial());
 
-  const unbind = () => {
+  const unbind = async () => {
     if (!current.canSelfUnbind) {
       setEmailOpen(true);
       setError(t('license.selfUnbindUnavailable'));
       return;
     }
-    if (!window.confirm(t('license.unbindConfirm'))) return;
-    void run('unbind', () => api.unbindLicense());
+    if (!(await confirm({ message: t('license.unbindConfirm'), danger: true }))) return;
+    await run('unbind', () => api.unbindLicense());
   };
 
   const requestEmailUnbind = async () => {

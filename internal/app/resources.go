@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"MyMinecraftGoLuncher/internal/aisearch"
 	"MyMinecraftGoLuncher/internal/curseforge"
@@ -175,6 +176,27 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 		Items: []ResourceProject{}, Offset: req.Offset, Limit: req.Limit,
 		CurseForgeReady: strings.TrimSpace(settings.CurseForgeAPIKey) != "", Warnings: []string{},
 	}
+	key := strings.TrimSpace(settings.CurseForgeAPIKey)
+	includeMR := req.Source != sourceCurseForge
+	includeCF := (req.Source == sourceCurseForge || req.Source == "all") && key != ""
+	if req.Source == sourceCurseForge && key == "" {
+		result.Warnings = append(result.Warnings, "未配置 CurseForge API Key，无法搜索 CurseForge。请在设置中填写 API Key。")
+		return result, nil
+	}
+	if req.Source == "all" && key == "" {
+		result.Warnings = append(result.Warnings, "未配置 CurseForge API Key，当前仅显示 Modrinth 结果。")
+	}
+
+	// Cache before the AI call so repeated searches (for example while
+	// toggling tabs) do not pay for translation again.
+	cacheKey := fmt.Sprintf("%s|%s|%s|%s|%s|%d|%d|%t|%s|%s|%s|%s",
+		originalQuery, req.Type, req.Source, req.Sort, req.InstanceID, req.Offset, req.Limit,
+		req.UseAI, settings.AISearchProvider, settings.AISearchModel,
+		key, fmt.Sprint(includeMR)+":"+fmt.Sprint(includeCF))
+	if cached, ok := a.loadResourceCache(cacheKey); ok {
+		return cached, nil
+	}
+
 	if req.UseAI && settings.AISearchEnabled && aisearch.HasCJK(searchQuery) {
 		translated, err := aisearch.TranslateQuery(a.context(), aisearch.Config{
 			Provider: settings.AISearchProvider,
@@ -235,15 +257,58 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 			}
 		}
 	}
-	key := strings.TrimSpace(settings.CurseForgeAPIKey)
-	includeMR := req.Source != sourceCurseForge
-	includeCF := (req.Source == sourceCurseForge || req.Source == "all") && key != ""
-	if req.Source == sourceCurseForge && key == "" {
-		result.Warnings = append(result.Warnings, "未配置 CurseForge API Key，无法搜索 CurseForge。请在设置中填写 API Key。")
-		return result, nil
-	}
-	if req.Source == "all" && key == "" {
-		result.Warnings = append(result.Warnings, "未配置 CurseForge API Key，当前仅显示 Modrinth 结果。")
+	// Query candidates are independent; run them concurrently to keep Chinese
+	// searches (which try up to three variants) from tripling latency.
+	searchQueries := func(limit int, work func(query string) ([]ResourceProject, int, error)) (
+		[]ResourceProject, int, int, error,
+	) {
+		type outcome struct {
+			projects []ResourceProject
+			total    int
+			err      error
+			ok       bool
+		}
+		results := make([]outcome, len(queries))
+		var qwg sync.WaitGroup
+		for index, query := range queries {
+			qwg.Add(1)
+			go func(index int, query string) {
+				defer qwg.Done()
+				projects, total, err := work(query)
+				results[index] = outcome{projects: projects, total: total, err: err, ok: err == nil}
+			}(index, query)
+		}
+		qwg.Wait()
+		seen := map[string]bool{}
+		merged := make([]ResourceProject, 0, limit*len(queries))
+		total := 0
+		successful := 0
+		var lastErr error
+		for _, item := range results {
+			if !item.ok {
+				lastErr = item.err
+				continue
+			}
+			successful++
+			if item.total > total {
+				total = item.total
+			}
+			for _, project := range item.projects {
+				if seen[project.ID] {
+					continue
+				}
+				seen[project.ID] = true
+				merged = append(merged, project)
+			}
+		}
+		if successful == 0 {
+			return nil, 0, 0, lastErr
+		}
+		rankResourceProjects(merged, queries[0])
+		if limit > 0 && len(merged) > limit {
+			merged = merged[:limit]
+		}
+		return merged, total, successful, nil
 	}
 
 	var wg sync.WaitGroup
@@ -255,38 +320,21 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			seen := map[string]bool{}
-			successful := 0
-			for _, query := range queries {
+			mrProjects, mrTotal, _, mrErr = searchQueries(req.Limit, func(query string) ([]ResourceProject, int, error) {
 				found, err := modrinth.Search(a.context(), modrinth.SearchRequest{
 					Query: query, ProjectType: modrinthType(req.Type),
 					GameVersion: gameVersion, Loader: loaderName,
 					Offset: req.Offset, Limit: req.Limit, Sort: req.Sort,
 				})
 				if err != nil {
-					mrErr = err
-					continue
+					return nil, 0, err
 				}
-				successful++
-				if found.TotalHits > mrTotal {
-					mrTotal = found.TotalHits
-				}
+				projects := make([]ResourceProject, 0, len(found.Hits))
 				for _, project := range found.Hits {
-					if seen[project.ProjectID] {
-						continue
-					}
-					seen[project.ProjectID] = true
-					mrProjects = append(mrProjects, mapModrinthProject(project, req.Type))
+					projects = append(projects, mapModrinthProject(project, req.Type))
 				}
-			}
-			if successful == 0 {
-				return
-			}
-			mrErr = nil
-			rankResourceProjects(mrProjects, queries[0])
-			if len(mrProjects) > req.Limit {
-				mrProjects = mrProjects[:req.Limit]
-			}
+				return projects, found.TotalHits, nil
+			})
 		}()
 	}
 	if includeCF {
@@ -306,38 +354,20 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 				cfLoader = loaderName
 			}
 			client := curseforge.New(key)
-			seen := map[string]bool{}
-			successful := 0
-			for _, query := range queries {
+			cfProjects, cfTotal, _, cfErr = searchQueries(req.Limit, func(query string) ([]ResourceProject, int, error) {
 				found, err := client.Search(a.context(), curseforge.SearchRequest{
 					Query: query, ClassID: classID, GameVersion: cfGameVersion,
 					Loader: cfLoader, Offset: req.Offset, Limit: req.Limit, Sort: req.Sort,
 				})
 				if err != nil {
-					cfErr = err
-					continue
+					return nil, 0, err
 				}
-				successful++
-				if found.Total > cfTotal {
-					cfTotal = found.Total
-				}
+				projects := make([]ResourceProject, 0, len(found.Projects))
 				for _, project := range found.Projects {
-					projectID := strconv.FormatInt(project.ID, 10)
-					if seen[projectID] {
-						continue
-					}
-					seen[projectID] = true
-					cfProjects = append(cfProjects, mapCurseForgeProject(project, req.Type))
+					projects = append(projects, mapCurseForgeProject(project, req.Type))
 				}
-			}
-			if successful == 0 {
-				return
-			}
-			cfErr = nil
-			rankResourceProjects(cfProjects, queries[0])
-			if len(cfProjects) > req.Limit {
-				cfProjects = cfProjects[:req.Limit]
-			}
+				return projects, found.Total, nil
+			})
 		}()
 	}
 	wg.Wait()
@@ -355,7 +385,6 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 	} else if includeCF {
 		result.Items = cfProjects
 	}
-	rankResourceProjects(result.Items, queries[0])
 	result.Total = mrTotal + cfTotal
 	if len(result.Items) == 0 && mrErr != nil && cfErr != nil {
 		return result, errors.New("两个平台均搜索失败")
@@ -366,7 +395,47 @@ func (a *App) SearchResources(req ResourceSearchRequest) (ResourceSearchResult, 
 	if len(result.Items) == 0 && cfErr != nil && !includeMR {
 		return result, cfErr
 	}
+	// Do not cache partial failures: a mirror/API hiccup should be retried.
+	if (!includeMR || mrErr == nil) && (!includeCF || cfErr == nil) {
+		a.storeResourceCache(cacheKey, result)
+	}
 	return result, nil
+}
+
+type resourceCacheEntry struct {
+	result    ResourceSearchResult
+	expiresAt time.Time
+}
+
+func (a *App) loadResourceCache(key string) (ResourceSearchResult, bool) {
+	a.resourceMu.Lock()
+	defer a.resourceMu.Unlock()
+	entry, ok := a.resourceCache[key]
+	if !ok || time.Now().After(entry.expiresAt) {
+		if ok {
+			delete(a.resourceCache, key)
+		}
+		return ResourceSearchResult{}, false
+	}
+	result := entry.result
+	result.Items = append([]ResourceProject(nil), entry.result.Items...)
+	result.Warnings = append([]string(nil), entry.result.Warnings...)
+	result.QueryAlternatives = append([]string(nil), entry.result.QueryAlternatives...)
+	return result, true
+}
+
+func (a *App) storeResourceCache(key string, result ResourceSearchResult) {
+	if result.AIError != "" {
+		return
+	}
+	a.resourceMu.Lock()
+	defer a.resourceMu.Unlock()
+	if a.resourceCache == nil || len(a.resourceCache) > 64 {
+		a.resourceCache = map[string]resourceCacheEntry{}
+	}
+	a.resourceCache[key] = resourceCacheEntry{
+		result: result, expiresAt: time.Now().Add(2 * time.Minute),
+	}
 }
 
 func mapModrinthProject(project modrinth.Project, resourceType string) ResourceProject {

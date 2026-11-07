@@ -28,6 +28,7 @@ export function LanSyncModal({ peer, instances, selectedId, onClose }: LanSyncMo
   const [syncing, setSyncing] = useState(false);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [preview, setPreview] = useState<LanSyncPreview | null>(null);
+  const [previewError, setPreviewError] = useState('');
 
   const compatible = useMemo(() => instances.filter((instance) => {
     if (peer.mcVersion && instance.mcVersion !== peer.mcVersion) return false;
@@ -59,6 +60,7 @@ export function LanSyncModal({ peer, instances, selectedId, onClose }: LanSyncMo
     }
     let alive = true;
     setLoadingPreview(true);
+    setPreviewError('');
     api.previewLanSync(peer.id, targetId)
       .then((result) => {
         if (alive) setPreview(result);
@@ -66,7 +68,7 @@ export function LanSyncModal({ peer, instances, selectedId, onClose }: LanSyncMo
       .catch((error: Error) => {
         if (alive) {
           setPreview(null);
-          pushToast('error', t('lan.syncPreviewFailed'), error.message);
+          setPreviewError(error.message);
         }
       })
       .finally(() => {
@@ -164,6 +166,16 @@ export function LanSyncModal({ peer, instances, selectedId, onClose }: LanSyncMo
                 version: peer.mcVersion || '—',
                 loader: peer.loader || 'Vanilla',
               })}</span>
+            </div>
+          </div>
+        )}
+
+        {previewError && !loadingPreview && (
+          <div className="inline-banner banner-error">
+            <TriangleAlert size={16} />
+            <div>
+              <strong>{t('lan.syncPreviewFailed')}</strong>
+              <span>{previewError}</span>
             </div>
           </div>
         )}

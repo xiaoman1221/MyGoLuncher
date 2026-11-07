@@ -38,15 +38,17 @@ type Server struct {
 	listener net.Listener
 	http     *http.Server
 	stopOnce sync.Once
+	cancel   context.CancelFunc
 	onItem   func(Message)
 	onUpdate func(Message)
 
-	mu        sync.Mutex
-	messages  []Message
-	voices    map[string]voiceData
-	signals   []Signal
-	signalSeq int64
-	shares    map[string]FileShare
+	mu         sync.Mutex
+	messages   []Message
+	voices     map[string]voiceData
+	voiceBytes int64
+	signals    []Signal
+	signalSeq  int64
+	shares     map[string]FileShare
 }
 
 // Start creates a LAN toolbox server listening on a random TCP port.
@@ -71,6 +73,7 @@ func Start(ctx context.Context, selfID, selfName, inbox string, onItem func(Mess
 	if address != nil {
 		port = address.Port
 	}
+	serverCtx, cancel := context.WithCancel(ctx)
 	s := &Server{
 		selfID:   strings.TrimSpace(selfID),
 		selfName: strings.TrimSpace(selfName),
@@ -78,6 +81,7 @@ func Start(ctx context.Context, selfID, selfName, inbox string, onItem func(Mess
 		token:    token,
 		port:     port,
 		listener: listener,
+		cancel:   cancel,
 		onItem:   onItem,
 		voices:   map[string]voiceData{},
 		shares:   map[string]FileShare{},
@@ -95,7 +99,7 @@ func Start(ctx context.Context, selfID, selfName, inbox string, onItem func(Mess
 		IdleTimeout:       60 * time.Second,
 	}
 	go func() {
-		<-ctx.Done()
+		<-serverCtx.Done()
 		s.Stop()
 	}()
 	go func() { _ = s.http.Serve(listener) }()
@@ -266,7 +270,7 @@ func (s *Server) AddOutgoingVoice(data []byte, mime string, durationMS int) Mess
 		DurationMS: durationMS,
 		CreatedAt:  nowString(),
 	}
-	s.voices[msg.ID] = voiceData{data: append([]byte(nil), data...), mime: mime}
+	s.addVoiceLocked(msg.ID, data, mime)
 	s.appendLocked(msg)
 	s.mu.Unlock()
 	return msg
@@ -283,16 +287,45 @@ func (s *Server) Voice(id string) ([]byte, string, bool) {
 	return append([]byte(nil), voice.data...), voice.mime, true
 }
 
+func (s *Server) addVoiceLocked(id string, data []byte, mime string) {
+	cloned := append([]byte(nil), data...)
+	s.voices[id] = voiceData{data: cloned, mime: mime}
+	s.voiceBytes += int64(len(cloned))
+}
+
+// trimVoicesLocked keeps cached audio below MaxVoiceCacheBytes. Message
+// metadata remains visible; only the payload of the oldest clips is dropped.
+func (s *Server) trimVoicesLocked() {
+	for s.voiceBytes > MaxVoiceCacheBytes {
+		dropped := false
+		for _, msg := range s.messages {
+			if voice, ok := s.voices[msg.ID]; ok {
+				s.voiceBytes -= int64(len(voice.data))
+				delete(s.voices, msg.ID)
+				dropped = true
+				break
+			}
+		}
+		if !dropped {
+			s.voiceBytes = 0
+			return
+		}
+	}
+}
+
 func (s *Server) appendLocked(msg Message) {
 	s.messages = append(s.messages, msg)
-	if len(s.messages) <= MaxMessages {
-		return
+	if len(s.messages) > MaxMessages {
+		drop := len(s.messages) - MaxMessages
+		for _, old := range s.messages[:drop] {
+			if voice, ok := s.voices[old.ID]; ok {
+				s.voiceBytes -= int64(len(voice.data))
+				delete(s.voices, old.ID)
+			}
+		}
+		s.messages = append([]Message(nil), s.messages[drop:]...)
 	}
-	drop := len(s.messages) - MaxMessages
-	for _, old := range s.messages[:drop] {
-		delete(s.voices, old.ID)
-	}
-	s.messages = append([]Message(nil), s.messages[drop:]...)
+	s.trimVoicesLocked()
 }
 
 func (s *Server) emit(msg Message) {
@@ -409,7 +442,7 @@ func (s *Server) handleVoice(w http.ResponseWriter, r *http.Request) {
 		Incoming:   true,
 	}
 	s.mu.Lock()
-	s.voices[msg.ID] = voiceData{data: append([]byte(nil), data...), mime: mime}
+	s.addVoiceLocked(msg.ID, data, mime)
 	s.mu.Unlock()
 	msg = s.addIncoming(msg)
 	writeJSON(w, msg)
@@ -737,6 +770,11 @@ func randomToken() (string, error) {
 // Stop shuts down the HTTP server and listener.
 func (s *Server) Stop() {
 	s.stopOnce.Do(func() {
+		// Cancel our child context so the watcher goroutine exits even when
+		// the parent (Wails) context is still alive.
+		if s.cancel != nil {
+			s.cancel()
+		}
 		if s.http != nil {
 			_ = s.http.Close()
 		}

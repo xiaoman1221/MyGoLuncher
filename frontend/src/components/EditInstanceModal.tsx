@@ -18,6 +18,9 @@ export function EditInstanceModal({ id, open, onClose }: { id: string | null; op
   const [javaPath, setJavaPath] = useState('');
   const [saving, setSaving] = useState(false);
 
+  // Only initialize when the dialog opens or switches instances. Depending on
+  // the whole instance object would reset fields whenever a background event
+  // refreshes the instance list.
   useEffect(() => {
     if (!open || !instance) return;
     setName(instance.name);
@@ -26,7 +29,8 @@ export function EditInstanceModal({ id, open, onClose }: { id: string | null; op
     setMemory(auto ? (bootstrap?.autoMemoryMB ?? 4096) : (instance.memoryMB || 4096));
     setJavaPath(instance.javaPath);
     setSaving(false);
-  }, [open, instance, bootstrap?.autoMemoryMB]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, instance?.id]);
 
   if (!instance) return null;
 

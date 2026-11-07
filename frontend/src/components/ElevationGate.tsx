@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { LoaderCircle, LogOut, ShieldAlert } from 'lucide-react';
+import { LoaderCircle, LogOut, ShieldAlert, X } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
 import { LogoMark } from './LogoMark';
@@ -41,6 +41,15 @@ export function ElevationGate({ onConfirmed }: ElevationGateProps) {
     <div className="license-screen elevation-screen" data-theme={theme}>
       <div className="license-backdrop" aria-hidden="true" />
       <main className="license-card elevation-card">
+        <button
+          type="button"
+          className="license-close"
+          onClick={() => void continueRun()}
+          disabled={Boolean(busy)}
+          aria-label={t('common.close')}
+        >
+          <X size={16} />
+        </button>
         <div className="license-brand">
           <LogoMark size={48} />
           <div>

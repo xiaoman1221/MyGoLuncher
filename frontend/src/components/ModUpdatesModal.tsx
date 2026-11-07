@@ -12,7 +12,7 @@ interface ModUpdatesModalProps {
 }
 
 export function ModUpdatesModal({ instance, onClose, onUpdated }: ModUpdatesModalProps) {
-  const { pushToast, t } = useApp();
+  const { pushToast, t, confirm } = useApp();
   const [report, setReport] = useState<ModUpdateReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -54,7 +54,7 @@ export function ModUpdatesModal({ instance, onClose, onUpdated }: ModUpdatesModa
       return true;
     } catch (reason) {
       const message = (reason as Error).message;
-      if (!force && message.includes('检测到模组冲突') && window.confirm(message)) {
+      if (!force && message.includes('检测到模组冲突') && await confirm({ message, danger: true })) {
         setBusy(null);
         return applyOne(file, true);
       }

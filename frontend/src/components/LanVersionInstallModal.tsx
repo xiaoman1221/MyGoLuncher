@@ -42,8 +42,9 @@ export function LanVersionInstallModal({ peer, onClose }: { peer: LanPeer; onClo
       pushToast('success', t('lan.installVersionDone'), result.instance.name);
       onClose();
     } catch (reason) {
+      // Keep the dialog open and show the failure inline; a toast on top of a
+      // modal is redundant and disappears before the user can read it.
       setError((reason as Error).message);
-      pushToast('error', t('lan.installVersionFailed'), (reason as Error).message);
     } finally {
       setInstalling(false);
     }

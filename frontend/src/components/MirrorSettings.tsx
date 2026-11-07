@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Gauge, Globe2, LoaderCircle, Plus, Trash2 } from 'lucide-react';
+import { Gauge, Globe2, LoaderCircle, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import { api } from '../lib/api';
 import type { MirrorConfig, MirrorSpeedResult, ResourceMirror, Settings } from '../lib/types';
 import type { MessageKey } from '../lib/i18n';
@@ -18,6 +18,7 @@ function speedLabel(result: MirrorSpeedResult): string {
 export function DownloadMirrorSettings({ form, patch, t }: { form: Settings; patch: Patch; t: Translate }) {
   const [testing, setTesting] = useState(false);
   const [results, setResults] = useState<MirrorSpeedResult[]>([]);
+  const [error, setError] = useState('');
 
   const update = (index: number, key: keyof MirrorConfig, value: string) => {
     patch('customMirrors', form.customMirrors.map((item, itemIndex) => (
@@ -37,10 +38,12 @@ export function DownloadMirrorSettings({ form, patch, t }: { form: Settings; pat
 
   const test = async () => {
     setTesting(true);
+    setError('');
     try {
       setResults(await api.testDownloadMirrors(form.customMirrors));
-    } catch {
+    } catch (err) {
       setResults([]);
+      setError((err as Error).message || t('settings.mirrorTestFailed'));
     } finally {
       setTesting(false);
     }
@@ -91,6 +94,12 @@ export function DownloadMirrorSettings({ form, patch, t }: { form: Settings; pat
           {testing ? t('settings.mirrorTesting') : t('settings.mirrorTest')}
         </button>
       </div>
+      {error && (
+        <div className="inline-banner banner-warning">
+          <TriangleAlert size={16} />
+          <div><span>{t('settings.mirrorTestFailed')}</span><small>{error}</small></div>
+        </div>
+      )}
       {results.length > 0 && (
         <div className="mirror-results">
           {results.map((result) => (

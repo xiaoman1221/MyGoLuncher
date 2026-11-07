@@ -36,7 +36,7 @@ const tabs: Array<{ key: ResourceType; labelKey: 'resources.type.mod' | 'resourc
 export function ResourcesPage() {
   const {
     instances, settings, selectedId, refreshInstances, selectInstance, navigate,
-    pushToast, t, locale, hasFeature, openLicense,
+    pushToast, t, locale, hasFeature, openLicense, confirm,
   } = useApp();
   const [type, setType] = useState<ResourceType>('mod');
   const [targetId, setTargetId] = useState(selectedId ?? instances[0]?.id ?? '');
@@ -149,7 +149,7 @@ export function ResourcesPage() {
         } catch (reason) {
           const message = (reason as Error).message;
           if (!message.includes('检测到模组冲突')) throw reason;
-          if (!window.confirm(message)) return;
+          if (!(await confirm({ message, danger: true }))) return;
           response = await api.installResource(targetId, project.source, project.projectId, '', mirrorId, true);
         }
         const detail = t('resources.installDoneDetail', { name: response.versionName || project.title });
@@ -256,7 +256,9 @@ export function ResourcesPage() {
                 <RefreshCw size={14} /> {t('modUpdates.check')}
               </button>
             )}
-            <span className="toolbar-count">{result ? `${result.total}` : ''}</span>
+            <span className="toolbar-count">
+              {loading ? <LoaderCircle size={13} className="spin" /> : result ? `${result.total}` : ''}
+            </span>
           </div>
         </div>
 
@@ -276,24 +278,20 @@ export function ResourcesPage() {
                 <span>{t('resources.aiUsed', { query: result.queryUsed })}</span>
               </div>
             )}
-            {result && !result.aiUsed && (result.queryAlternatives?.length ?? 0) > 1 && (
+            {result?.aiError && !result.aiUsed && (
               <div className="ai-search-note">
-                <Search size={13} />
-                <span>{t('resources.queryExpanded', {
-                  query: (result.queryAlternatives ?? []).slice(0, 2).join(' / '),
-                })}</span>
+                <TriangleAlert size={13} />
+                <span>{result.aiError}</span>
               </div>
             )}
-            {result?.aiError && (
-              <div className="inline-banner banner-warning">
+            {error && (
+              <div className="inline-banner banner-error">
                 <TriangleAlert size={16} />
-                <div>
-                  <strong>{t('resources.aiFailed')}</strong>
-                  <span>{result.aiError}</span>
-                </div>
+                <div><strong>{t('resources.searchFailed')}</strong><span>{error}</span></div>
               </div>
             )}
-            {result?.cjkQuery && !result.aiUsed && (
+            {/* Only surface setup hints when the search actually needs them. */}
+            {!loading && projects.length === 0 && result?.cjkQuery && !result.aiUsed && (
               <div className="inline-banner banner-warning">
                 <TriangleAlert size={16} />
                 <div>
@@ -305,7 +303,7 @@ export function ResourcesPage() {
                 </button>
               </div>
             )}
-            {warnings.length > 0 && (
+            {!loading && projects.length === 0 && warnings.length > 0 && (
               <div className="inline-banner banner-warning">
                 <TriangleAlert size={16} />
                 <div>
@@ -314,14 +312,8 @@ export function ResourcesPage() {
                 </div>
               </div>
             )}
-            {error && (
-              <div className="inline-banner banner-error">
-                <TriangleAlert size={16} />
-                <div><strong>{t('resources.installFailed')}</strong><span>{error}</span></div>
-              </div>
-            )}
 
-            {loading ? (
+            {loading && !result ? (
               <div className="resource-grid">
                 {Array.from({ length: 6 }).map((_, index) => (
                   <div className="resource-card resource-skeleton" key={index}>

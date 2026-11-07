@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
@@ -32,6 +33,11 @@ type Credentials struct {
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 	Features      []string   `json:"features,omitempty"`
 	LastValidated time.Time  `json:"last_validated,omitempty"`
+	// Revoked records a server verdict that the code is no longer usable.
+	// It must survive restarts, otherwise the offline grace window would
+	// re-activate a revoked license for up to seven days.
+	Revoked       bool   `json:"revoked,omitempty"`
+	RevokedReason string `json:"revoked_reason,omitempty"`
 }
 
 // Status is the serializable state consumed by the activation screen.
@@ -69,6 +75,7 @@ type Manager struct {
 	creds   Credentials
 	trial   trialState
 	status  Status
+	machine string
 	loadErr error
 }
 
@@ -85,12 +92,22 @@ func NewManager(secrets secretstore.Store, version string) (*Manager, error) {
 	manager := &Manager{
 		secrets: secrets,
 		now:     time.Now,
+		machine: machine,
 		status: Status{
 			State: "inactive", MachineCode: machine, Features: []string{}, GraceDays: offlineGraceDays,
 			Message: "请输入激活码激活本机", TrialRemaining: TrialTotal, TrialDays: TrialDays,
 		},
 	}
 	manager.loadTrial()
+	if manager.trial.Starts > 0 {
+		// Record the latest observed wall-clock time so a later clock
+		// rollback can be detected instead of reviving an expired trial.
+		now := manager.now().UTC()
+		if now.After(manager.trial.LastSeen) {
+			manager.trial.LastSeen = now
+			_ = manager.saveTrialLocked()
+		}
+	}
 	config, err := loadProductConfig()
 	if errors.Is(err, ErrProductNotConfigured) {
 		manager.status.State = "inactive"
@@ -144,6 +161,12 @@ func (m *Manager) Status() Status {
 	}
 	status.Features = append([]string{}, status.Features...)
 	if status.State == "active" || status.State == "grace" {
+		// Re-check the clock on every status read: rolling the system clock
+		// back must not extend a license indefinitely.
+		if !m.creds.LastValidated.IsZero() && m.now().UTC().Add(12*time.Hour).Before(m.creds.LastValidated) {
+			status.State = "error"
+			status.Message = "检测到系统时间异常，请校准系统时间后重新校验授权"
+		}
 		return status
 	}
 	if m.client != nil {
@@ -250,19 +273,39 @@ func (m *Manager) Validate(ctx context.Context) (Status, error) {
 		return m.Status(), nil
 	}
 	now := m.now().UTC()
-	if creds.ExpiresAt != nil && !creds.ExpiresAt.After(now) {
-		m.setStatus(Status{
-			State: "expired", Activated: true, Code: maskCode(creds.Code),
-			MachineCode: m.Status().MachineCode, Email: creds.Email, Customer: creds.Customer,
-			CanSelfUnbind: strings.TrimSpace(creds.UnbindKey) != "", ExpiresAt: formatTime(creds.ExpiresAt),
-			Features: cleanFeatures(creds.Features), Message: "激活码已过期，请续费",
-			LastChecked: now.Format(time.RFC3339), GraceDays: offlineGraceDays,
-		})
-		return m.Status(), nil
-	}
-	machine := m.Status().MachineCode
+	// Always ask the server, even when the local expiry has passed: the
+	// operator may have renewed the code in the meantime.
+	locallyExpired := creds.ExpiresAt != nil && !creds.ExpiresAt.After(now)
+	machine := m.machine
 	result, err := m.client.Validate(ctx, creds.Code, machine)
 	if err != nil {
+		if locallyExpired {
+			m.setStatus(Status{
+				State: "expired", Activated: true, Code: maskCode(creds.Code),
+				MachineCode: machine, Email: creds.Email, Customer: creds.Customer,
+				CanSelfUnbind: strings.TrimSpace(creds.UnbindKey) != "", ExpiresAt: formatTime(creds.ExpiresAt),
+				Features: cleanFeatures(creds.Features), Message: "激活码已过期，请联网续费或等待续费生效",
+				LastChecked: now.Format(time.RFC3339), GraceDays: offlineGraceDays,
+			})
+			return m.Status(), nil
+		}
+		// A definitive client error (bad product key, disabled product,
+		// revoked token) must not be softened into an offline grace period.
+		// 408/429 are transient and still qualify for grace.
+		var apiErr *APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 &&
+			apiErr.StatusCode != http.StatusRequestTimeout && apiErr.StatusCode != http.StatusTooManyRequests {
+			apiErrText := DescribeError(err)
+			m.setStatus(Status{
+				State: "error", Activated: true, Code: maskCode(creds.Code),
+				MachineCode: machine, Email: creds.Email, Customer: creds.Customer,
+				CanSelfUnbind: strings.TrimSpace(creds.UnbindKey) != "",
+				Message:       "授权校验失败：" + apiErrText.Error(),
+				LastChecked:   now.Format(time.RFC3339), GraceDays: offlineGraceDays,
+				Features: cleanFeatures(creds.Features),
+			})
+			return m.Status(), apiErrText
+		}
 		grace := creds.LastValidated.IsZero() || now.Sub(creds.LastValidated) > gracePeriod
 		if !grace {
 			until := creds.LastValidated.Add(gracePeriod)
@@ -292,6 +335,16 @@ func (m *Manager) Validate(ctx context.Context) (Status, error) {
 		} else if result.Reason == "not_activated" {
 			state = "inactive"
 		}
+		// Persist the verdict so a restart cannot fall back to "active" just
+		// because LastValidated is still inside the grace window.
+		creds.Revoked = true
+		creds.RevokedReason = firstNonEmpty(result.Reason, result.Message)
+		if err := m.save(creds); err != nil {
+			return m.Status(), err
+		}
+		m.mu.Lock()
+		m.creds = creds
+		m.mu.Unlock()
 		m.setStatus(Status{
 			State: state, Activated: true, Code: maskCode(creds.Code),
 			MachineCode: machine, Email: creds.Email, Customer: creds.Customer,
@@ -302,6 +355,8 @@ func (m *Manager) Validate(ctx context.Context) (Status, error) {
 		})
 		return m.Status(), nil
 	}
+	creds.Revoked = false
+	creds.RevokedReason = ""
 	creds.MachineCode = machine
 	creds.ExpiresAt = result.ExpiresAt
 	creds.Features = cleanFeatures(result.Features)
@@ -443,7 +498,7 @@ func (m *Manager) setStatus(status Status) {
 func (m *Manager) statusFor(creds Credentials) Status {
 	status := Status{
 		State: "active", Activated: true, Code: maskCode(creds.Code),
-		MachineCode: MachineCode(Collect()), Email: creds.Email, Customer: creds.Customer,
+		MachineCode: m.machine, Email: creds.Email, Customer: creds.Customer,
 		CanSelfUnbind: strings.TrimSpace(creds.UnbindKey) != "",
 		ExpiresAt:     formatTime(creds.ExpiresAt),
 		Features:      cleanFeatures(creds.Features), GraceDays: offlineGraceDays,
@@ -454,19 +509,35 @@ func (m *Manager) statusFor(creds Credentials) Status {
 	if status.MachineCode == "" {
 		status.MachineCode = creds.MachineCode
 	}
+	now := m.now().UTC()
+	if creds.Revoked {
+		status.State = "invalid"
+		if creds.RevokedReason == "code_expired" {
+			status.State = "expired"
+		} else if creds.RevokedReason == "not_activated" {
+			status.State = "inactive"
+		}
+		status.Message = "授权已失效，请重新激活或联系管理员"
+		return status
+	}
 	if creds.MachineCode != "" && !strings.EqualFold(creds.MachineCode, status.MachineCode) {
 		status.State = "machine_changed"
 		status.Message = "机器码已变化，请先解绑原机器或联系管理员"
 		return status
 	}
-	if creds.ExpiresAt != nil && !creds.ExpiresAt.After(m.now().UTC()) {
+	if !creds.LastValidated.IsZero() && now.Add(12*time.Hour).Before(creds.LastValidated) {
+		status.State = "error"
+		status.Message = "检测到系统时间异常，请校准系统时间后重新校验授权"
+		return status
+	}
+	if creds.ExpiresAt != nil && !creds.ExpiresAt.After(now) {
 		status.State = "expired"
 		status.Message = "激活码已过期，请续费"
 		return status
 	}
 	if creds.LastValidated.IsZero() {
 		status.Message = "已激活，等待联网校验"
-	} else if m.now().UTC().Sub(creds.LastValidated) > gracePeriod {
+	} else if now.Sub(creds.LastValidated) > gracePeriod {
 		status.State = "error"
 		status.Message = "授权校验已超过 7 天，请联网重新校验"
 	} else {

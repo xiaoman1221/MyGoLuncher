@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"MyMinecraftGoLuncher/internal/store"
+	"MyMinecraftGoLuncher/internal/util"
 )
 
 const profilePrefix = "mygoluncher-"
@@ -136,11 +137,7 @@ func Sync(mcDir string, instances []store.Instance, isolation bool) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	// os.Rename cannot replace an existing file on every Windows Go version.
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return util.ReplaceFile(tmpName, path)
 }
 
 func min(a, b int) int {

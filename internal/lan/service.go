@@ -9,6 +9,7 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -117,6 +118,9 @@ func (s *Service) Stop() {
 	s.running = false
 	s.broadcast = false
 	s.scanStop = nil
+	s.identity = Identity{}
+	s.onChange = nil
+	s.warnings = nil
 	s.worlds = map[string]*worldEntry{}
 	s.peers = map[string]*peerEntry{}
 	s.lastPing = map[string]time.Time{}
@@ -199,7 +203,7 @@ func (s *Service) SyncTarget(peerID string) (SyncTarget, bool) {
 func (s *Service) Snapshot() Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	sharing := s.identity.SyncPort > 0
+	sharing := s.running && s.identity.SyncPort > 0
 	snapshot := Snapshot{
 		Running:   s.running,
 		Broadcast: s.broadcast,
@@ -321,15 +325,28 @@ func (s *Service) schedulePing(key, host string, port int) {
 		result, err := pingMinecraft(ctx, host, port, 2*time.Second)
 		s.mu.Lock()
 		delete(s.pinging, key)
+		entry, ok := s.worlds[key]
 		if err != nil {
+			// Scanned servers are not re-announced, so drop them quickly after
+			// two consecutive ping failures instead of keeping stale cards.
+			if ok && entry.Source == "scan" {
+				entry.pingFailures++
+				if entry.pingFailures >= 2 {
+					delete(s.worlds, key)
+					delete(s.lastPing, key)
+					s.mu.Unlock()
+					s.notify()
+					return
+				}
+			}
 			s.mu.Unlock()
 			return
 		}
-		entry, ok := s.worlds[key]
 		if !ok {
 			s.mu.Unlock()
 			return
 		}
+		entry.pingFailures = 0
 		entry.Version = result.Version
 		entry.Online = result.Online
 		entry.Max = result.Max
@@ -559,8 +576,21 @@ func (s *Service) addCloser(closer io.Closer) {
 }
 
 func (s *Service) addWarning(message string) {
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
 	s.mu.Lock()
+	for _, existing := range s.warnings {
+		if existing == message {
+			s.mu.Unlock()
+			return
+		}
+	}
 	s.warnings = append(s.warnings, message)
+	if len(s.warnings) > 6 {
+		s.warnings = s.warnings[len(s.warnings)-6:]
+	}
 	s.mu.Unlock()
 	s.notify()
 }

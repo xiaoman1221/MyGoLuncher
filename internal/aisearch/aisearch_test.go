@@ -104,10 +104,12 @@ func TestTranslateQueryDeepSeek(t *testing.T) {
 func TestQueryCandidatesChineseAliases(t *testing.T) {
 	cases := map[string][]string{
 		"钠 优化":        {"sodium optimization", "钠 优化"},
-		"机械动力 模组":     {"create mod", "机械动力 模组"},
+		"机械动力 模组":     {"create", "机械动力 模组"},
 		"物品管理器":       {"jei just enough items", "物品管理器"},
 		"未知中文模组":      {"未知中文mod", "未知中文模组"},
-		"Create 机械动力": {"Create create", "Create 机械动力"},
+		"Create 机械动力": {"Create", "Create 机械动力"},
+		"機械動力":        {"create", "機械動力"},
+		"sodium 好用的":  {"sodium", "sodium 好用的"},
 	}
 	for query, want := range cases {
 		got := QueryCandidates(query)

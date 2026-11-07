@@ -155,7 +155,8 @@ export function TaskTray() {
 
   const cancelTask = async (task: TaskProgress) => {
     if (task.done) return;
-    if (!window.confirm(t('task.cancelConfirm'))) return;
+    // Cancellation is safe (completed work is kept), so do not interrupt the
+    // user with a confirmation dialog.
     try {
       await api.cancelTask(task.taskId);
     } catch (reason) {

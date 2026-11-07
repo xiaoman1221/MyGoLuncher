@@ -14,6 +14,7 @@ export const languageNames: Record<Language, string> = {
 
 const zhCN = {
   'common.cancel': '取消',
+  'common.confirm': '确定',
   'common.save': '保存',
   'common.saving': '正在保存…',
   'common.saved': '已保存',
@@ -90,6 +91,7 @@ const zhCN = {
   'app.openGameFolderFailed': '无法打开游戏目录',
   'app.openVersionFolderFailed': '无法打开版本目录',
   'app.launchFailed': '启动失败',
+  'app.viewLogs': '查看日志',
   'app.stopFailed': '无法结束游戏',
   'app.msLoginSuccess': 'Microsoft 登录成功',
   'app.msLoginFailed': 'Microsoft 登录失败',
@@ -433,7 +435,7 @@ type BaseMessageKey = keyof typeof zhCN;
 export type MessageKey = BaseMessageKey | ExtraMessageKey;
 
 const zhTW: Record<BaseMessageKey, string> = {
-  'common.cancel': '取消', 'common.save': '儲存', 'common.saving': '正在儲存…', 'common.saved': '已儲存',
+  'common.cancel': '取消', 'common.confirm': '確定', 'common.save': '儲存', 'common.saving': '正在儲存…', 'common.saved': '已儲存',
   'common.saveSettings': '儲存設定', 'common.retry': '重試', 'common.close': '關閉', 'common.delete': '刪除',
   'common.add': '新增', 'common.create': '新增', 'common.installed': '已安裝', 'common.install': '安裝',
   'common.installing': '安裝中', 'common.launch': '啟動', 'common.stop': '結束', 'common.console': '主控台',
@@ -474,7 +476,7 @@ const zhTW: Record<BaseMessageKey, string> = {
   'about.openData': '開啟資料目錄',
   'app.bootSub': 'LUNCHER · MINECRAFT', 'app.initFailed': '啟動器初始化失敗', 'app.readConfigFailed': '無法讀取啟動器設定。',
   'app.refreshFailed': '重新整理版本失敗', 'app.openGameFolderFailed': '無法開啟遊戲資料夾',
-  'app.openVersionFolderFailed': '無法開啟版本資料夾', 'app.launchFailed': '啟動失敗', 'app.stopFailed': '無法結束遊戲',
+  'app.openVersionFolderFailed': '無法開啟版本資料夾', 'app.launchFailed': '啟動失敗', 'app.viewLogs': '查看日誌', 'app.stopFailed': '無法結束遊戲',
   'app.msLoginSuccess': 'Microsoft 登入成功', 'app.msLoginFailed': 'Microsoft 登入失敗', 'app.gameStarted': '遊戲已啟動',
   'app.gameStopped': '遊戲已停止', 'app.gameExited': '遊戲已退出', 'app.gameCrashed': '遊戲異常退出',
   'app.exitCode': '退出代碼 {code}', 'app.demoMode': '示範模式',
@@ -590,7 +592,7 @@ const zhTW: Record<BaseMessageKey, string> = {
 };
 
 const en: Record<BaseMessageKey, string> = {
-  'common.cancel': 'Cancel', 'common.save': 'Save', 'common.saving': 'Saving…', 'common.saved': 'Saved',
+  'common.cancel': 'Cancel', 'common.confirm': 'Confirm', 'common.save': 'Save', 'common.saving': 'Saving…', 'common.saved': 'Saved',
   'common.saveSettings': 'Save settings', 'common.retry': 'Retry', 'common.close': 'Close', 'common.delete': 'Delete',
   'common.add': 'Add', 'common.create': 'New', 'common.installed': 'Installed', 'common.install': 'Install',
   'common.installing': 'Installing', 'common.launch': 'Launch', 'common.stop': 'Stop', 'common.console': 'Console',
@@ -631,7 +633,7 @@ const en: Record<BaseMessageKey, string> = {
   'about.openData': 'Open data directory',
   'app.bootSub': 'LUNCHER · MINECRAFT', 'app.initFailed': 'Launcher failed to start', 'app.readConfigFailed': 'Could not read launcher settings.',
   'app.refreshFailed': 'Failed to refresh versions', 'app.openGameFolderFailed': 'Could not open the game folder',
-  'app.openVersionFolderFailed': 'Could not open the version folder', 'app.launchFailed': 'Launch failed', 'app.stopFailed': 'Could not stop the game',
+  'app.openVersionFolderFailed': 'Could not open the version folder', 'app.launchFailed': 'Launch failed', 'app.viewLogs': 'View logs', 'app.stopFailed': 'Could not stop the game',
   'app.msLoginSuccess': 'Microsoft sign-in successful', 'app.msLoginFailed': 'Microsoft sign-in failed', 'app.gameStarted': 'Game started',
   'app.gameStopped': 'Game stopped', 'app.gameExited': 'Game exited', 'app.gameCrashed': 'Game crashed',
   'app.exitCode': 'Exit code {code}', 'app.demoMode': 'Demo mode',
@@ -748,7 +750,7 @@ const en: Record<BaseMessageKey, string> = {
 };
 
 const ja: Record<BaseMessageKey, string> = {
-  'common.cancel': 'キャンセル', 'common.save': '保存', 'common.saving': '保存中…', 'common.saved': '保存済み',
+  'common.cancel': 'キャンセル', 'common.confirm': '確認', 'common.save': '保存', 'common.saving': '保存中…', 'common.saved': '保存済み',
   'common.saveSettings': '設定を保存', 'common.retry': '再試行', 'common.close': '閉じる', 'common.delete': '削除',
   'common.add': '追加', 'common.create': '新規', 'common.installed': 'インストール済み', 'common.install': 'インストール',
   'common.installing': 'インストール中', 'common.launch': '起動', 'common.stop': '停止', 'common.console': 'コンソール',
@@ -789,7 +791,7 @@ const ja: Record<BaseMessageKey, string> = {
   'about.openData': 'データフォルダーを開く',
   'app.bootSub': 'LUNCHER · MINECRAFT', 'app.initFailed': 'ランチャーの初期化に失敗しました', 'app.readConfigFailed': 'ランチャー設定を読み込めません。',
   'app.refreshFailed': 'バージョンの更新に失敗しました', 'app.openGameFolderFailed': 'ゲームフォルダーを開けませんでした',
-  'app.openVersionFolderFailed': 'バージョンフォルダーを開けませんでした', 'app.launchFailed': '起動に失敗しました', 'app.stopFailed': 'ゲームを停止できませんでした',
+  'app.openVersionFolderFailed': 'バージョンフォルダーを開けませんでした', 'app.launchFailed': '起動に失敗しました', 'app.viewLogs': 'ログを表示', 'app.stopFailed': 'ゲームを停止できませんでした',
   'app.msLoginSuccess': 'Microsoft サインインに成功しました', 'app.msLoginFailed': 'Microsoft サインインに失敗しました', 'app.gameStarted': 'ゲームを起動しました',
   'app.gameStopped': 'ゲームを停止しました', 'app.gameExited': 'ゲームが終了しました', 'app.gameCrashed': 'ゲームが異常終了しました',
   'app.exitCode': '終了コード {code}', 'app.demoMode': 'デモモード',
@@ -906,7 +908,7 @@ const ja: Record<BaseMessageKey, string> = {
 };
 
 const ko: Record<BaseMessageKey, string> = {
-  'common.cancel': '취소', 'common.save': '저장', 'common.saving': '저장 중…', 'common.saved': '저장됨',
+  'common.cancel': '취소', 'common.confirm': '확인', 'common.save': '저장', 'common.saving': '저장 중…', 'common.saved': '저장됨',
   'common.saveSettings': '설정 저장', 'common.retry': '다시 시도', 'common.close': '닫기', 'common.delete': '삭제',
   'common.add': '추가', 'common.create': '새로 만들기', 'common.installed': '설치됨', 'common.install': '설치',
   'common.installing': '설치 중', 'common.launch': '실행', 'common.stop': '종료', 'common.console': '콘솔',
@@ -947,7 +949,7 @@ const ko: Record<BaseMessageKey, string> = {
   'about.openData': '데이터 폴더 열기',
   'app.bootSub': 'LUNCHER · MINECRAFT', 'app.initFailed': '런처 초기화 실패', 'app.readConfigFailed': '런처 설정을 읽을 수 없습니다.',
   'app.refreshFailed': '버전 새로 고침 실패', 'app.openGameFolderFailed': '게임 폴더를 열 수 없습니다',
-  'app.openVersionFolderFailed': '버전 폴더를 열 수 없습니다', 'app.launchFailed': '실행 실패', 'app.stopFailed': '게임을 종료할 수 없습니다',
+  'app.openVersionFolderFailed': '버전 폴더를 열 수 없습니다', 'app.launchFailed': '실행 실패', 'app.viewLogs': '로그 보기', 'app.stopFailed': '게임을 종료할 수 없습니다',
   'app.msLoginSuccess': 'Microsoft 로그인 성공', 'app.msLoginFailed': 'Microsoft 로그인 실패', 'app.gameStarted': '게임이 시작되었습니다',
   'app.gameStopped': '게임이 중지되었습니다', 'app.gameExited': '게임이 종료되었습니다', 'app.gameCrashed': '게임이 비정상 종료되었습니다',
   'app.exitCode': '종료 코드 {code}', 'app.demoMode': '데모 모드',

@@ -62,7 +62,7 @@ function statusKey(status: ServerStatus | undefined): MessageKey {
 }
 
 export function ServersPage() {
-  const { instances, pushToast, t, locale } = useApp();
+  const { instances, pushToast, t, locale, confirm } = useApp();
   const [profiles, setProfiles] = useState<ServerProfile[]>([]);
   const [statuses, setStatuses] = useState<Record<string, ServerStatus>>({});
   const [loading, setLoading] = useState(true);
@@ -138,7 +138,7 @@ export function ServersPage() {
   };
 
   const remove = async (profile: ServerProfile) => {
-    if (!window.confirm(t('servers.deleteConfirm'))) return;
+    if (!(await confirm({ message: t('servers.deleteConfirm'), danger: true }))) return;
     setBusy(`delete:${profile.id}`);
     try {
       await api.deleteServerProfile(profile.id);
@@ -357,7 +357,7 @@ function ServerSyncModal({
   onClose: () => void;
   onDone: () => Promise<void>;
 }) {
-  const { pushToast, t } = useApp();
+  const { pushToast, t, confirm } = useApp();
   const [files, setFiles] = useState<ServerSyncFile[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
@@ -411,7 +411,7 @@ function ServerSyncModal({
 
   const run = async (mode: 'selected' | 'full') => {
     if (mode === 'full' && profile.deleteExtras) {
-      if (!window.confirm(t('servers.fullSyncConfirm'))) return;
+      if (!(await confirm({ message: t('servers.fullSyncConfirm'), danger: true }))) return;
     }
     setBusy(mode);
     try {
@@ -517,7 +517,7 @@ function ServerRollbackModal({
   onClose: () => void;
   onDone: () => Promise<void>;
 }) {
-  const { pushToast, t, locale } = useApp();
+  const { pushToast, t, locale, confirm } = useApp();
   const [backups, setBackups] = useState<ServerBackup[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -539,7 +539,7 @@ function ServerRollbackModal({
   };
 
   const restore = async (backup: ServerBackup) => {
-    if (!window.confirm(t('servers.rollbackConfirm', { time: formatTime(backup.createdAt) }))) return;
+    if (!(await confirm({ message: t('servers.rollbackConfirm', { time: formatTime(backup.createdAt) }), danger: true }))) return;
     setBusyId(backup.id);
     try {
       await api.rollbackServer(profile.id, backup.id);

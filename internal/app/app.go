@@ -76,12 +76,14 @@ type App struct {
 	orcaCancel  context.CancelFunc
 	orcaLoginID int
 
-	installMu sync.Mutex
-	taskMu    sync.Mutex
-	taskLogs  map[string]*taskLog
-	authMu    sync.Mutex
-	msCancel  context.CancelFunc
-	yssCancel context.CancelFunc
+	installMu     sync.Mutex
+	taskMu        sync.Mutex
+	taskLogs      map[string]*taskLog
+	resourceMu    sync.Mutex
+	resourceCache map[string]resourceCacheEntry
+	authMu        sync.Mutex
+	msCancel      context.CancelFunc
+	yssCancel     context.CancelFunc
 
 	totalMemoryMB int
 	autoMemoryMB  int
@@ -90,6 +92,7 @@ type App struct {
 	procMu     sync.Mutex
 	procs      map[string]*launcher.Process
 	launching  map[string]bool
+	deleting   map[string]bool
 	logs       map[string]*logRing
 	gameJob    *sysutil.Job
 	trayIcon   *tray.Tray
@@ -123,7 +126,8 @@ func (r *logRing) snapshot() []string {
 // NewApp constructs the application and loads persisted state.
 func NewApp() *App {
 	a := &App{
-		procs: map[string]*launcher.Process{}, launching: map[string]bool{}, logs: map[string]*logRing{},
+		procs: map[string]*launcher.Process{}, launching: map[string]bool{},
+		deleting: map[string]bool{}, logs: map[string]*logRing{},
 		elevated: securitypkg.IsElevated(),
 		gameJob:  sysutil.NewKillOnCloseJob(),
 	}
@@ -215,8 +219,8 @@ func (a *App) SyncLauncherProfiles() error {
 }
 
 // RequestClose handles the custom title-bar close button according to the
-// saved close behavior. "ask" emits app:close-request so the frontend can show
-// the confirmation dialog.
+// saved close behavior. "ask" only prompts when a game is still running;
+// otherwise closing the window exits immediately.
 func (a *App) RequestClose() {
 	switch a.closeBehavior() {
 	case "exit":
@@ -224,10 +228,22 @@ func (a *App) RequestClose() {
 	case "minimize":
 		a.MinimizeWindow()
 	default:
+		// Asking for confirmation on every close is noisy. Only prompt when
+		// a game started by this launcher is still running.
+		if !a.hasRunningGames() {
+			a.QuitApp()
+			return
+		}
 		if a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "app:close-request")
 		}
 	}
+}
+
+func (a *App) hasRunningGames() bool {
+	a.procMu.Lock()
+	defer a.procMu.Unlock()
+	return len(a.procs) > 0 || len(a.launching) > 0
 }
 
 // MinimizeWindow hides the launcher in the notification area without touching
@@ -287,6 +303,9 @@ func (a *App) BeforeClose(ctx context.Context) bool {
 		a.MinimizeWindow()
 		return true
 	default:
+		if !a.hasRunningGames() {
+			return false
+		}
 		runtime.EventsEmit(ctx, "app:close-request")
 		return true
 	}
@@ -300,14 +319,7 @@ func (a *App) Shutdown(ctx context.Context) {
 		a.trayIcon.Close()
 		a.trayIcon = nil
 	}
-	a.lanShare.mu.Lock()
-	if a.lanShare.server != nil {
-		a.lanShare.server.Stop()
-		a.lanShare.server = nil
-		a.lanShare.instanceID = ""
-		a.lanShare.dirs = nil
-	}
-	a.lanShare.mu.Unlock()
+	a.stopLanShareServer()
 	a.stopLanTools()
 	if a.lanSvc != nil {
 		a.lanSvc.Stop()
@@ -785,8 +797,10 @@ func (a *App) SelectAccount(id string) (AccountState, error) {
 	if err := a.accounts.Select(id); err != nil {
 		return AccountState{}, err
 	}
-	a.syncOfflineSetting()
 	a.emitAccountsChanged()
+	if err := a.syncOfflineSetting(); err != nil {
+		return a.accountState(), fmt.Errorf("账户已切换，但保存玩家名失败: %w", err)
+	}
 	return a.accountState(), nil
 }
 
@@ -802,8 +816,10 @@ func (a *App) AddOfflineAccount(name string) (AccountState, error) {
 	}
 	settings := a.store.Settings()
 	settings.PlayerName = account.Name
-	_, _ = a.store.SaveSettings(settings)
 	a.emitAccountsChanged()
+	if _, err := a.store.SaveSettings(settings); err != nil {
+		return a.accountState(), fmt.Errorf("账户已添加，但保存玩家名失败: %w", err)
+	}
 	return a.accountState(), nil
 }
 
@@ -818,8 +834,10 @@ func (a *App) RenameOfflineAccount(id, name string) (AccountState, error) {
 	}
 	settings := a.store.Settings()
 	settings.PlayerName = account.Name
-	_, _ = a.store.SaveSettings(settings)
 	a.emitAccountsChanged()
+	if _, err := a.store.SaveSettings(settings); err != nil {
+		return a.accountState(), fmt.Errorf("账户已重命名，但保存玩家名失败: %w", err)
+	}
 	return a.accountState(), nil
 }
 
@@ -831,8 +849,10 @@ func (a *App) RemoveAccount(id string) (AccountState, error) {
 	if err := a.accounts.Remove(id); err != nil {
 		return AccountState{}, err
 	}
-	a.syncOfflineSetting()
 	a.emitAccountsChanged()
+	if err := a.syncOfflineSetting(); err != nil {
+		return a.accountState(), fmt.Errorf("账户已删除，但保存玩家名失败: %w", err)
+	}
 	return a.accountState(), nil
 }
 
@@ -896,24 +916,28 @@ func (a *App) BeginYSSLogin(serverURL string) (YSSDeviceView, error) {
 	if serverURL == "" {
 		serverURL = auth.DefaultYSSBaseURL
 	}
+	pollCtx, pollCancel := context.WithCancel(a.context())
 	a.authMu.Lock()
 	if a.msCancel != nil || a.yssCancel != nil {
 		a.authMu.Unlock()
+		pollCancel()
 		return YSSDeviceView{}, errors.New("已有登录正在进行")
 	}
+	// Reserve the slot before the network call so a second click cannot start
+	// a parallel device-code flow while the first request is in flight.
+	a.yssCancel = pollCancel
 	a.authMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(a.context(), 30*time.Second)
 	meta, device, err := auth.BeginYSSDevice(ctx, serverURL, auth.DefaultYSSClientID)
 	cancel()
 	if err != nil {
+		pollCancel()
+		a.authMu.Lock()
+		a.yssCancel = nil
+		a.authMu.Unlock()
 		return YSSDeviceView{}, err
 	}
-
-	pollCtx, pollCancel := context.WithCancel(a.context())
-	a.authMu.Lock()
-	a.yssCancel = pollCancel
-	a.authMu.Unlock()
 
 	go func() {
 		defer func() {
@@ -987,11 +1011,16 @@ func (a *App) BeginMicrosoftLogin() (DeviceCodeView, error) {
 	if err := a.ready(); err != nil {
 		return DeviceCodeView{}, err
 	}
+	pollCtx, pollCancel := context.WithCancel(a.context())
 	a.authMu.Lock()
 	if a.msCancel != nil || a.yssCancel != nil {
 		a.authMu.Unlock()
+		pollCancel()
 		return DeviceCodeView{}, errors.New("已有登录正在进行")
 	}
+	// Reserve the slot before the network call so a second click cannot start
+	// a parallel device-code flow while the first request is in flight.
+	a.msCancel = pollCancel
 	a.authMu.Unlock()
 
 	clientID := a.microsoftClientID()
@@ -999,12 +1028,12 @@ func (a *App) BeginMicrosoftLogin() (DeviceCodeView, error) {
 	info, err := auth.StartDeviceCode(ctx, clientID)
 	cancel()
 	if err != nil {
+		pollCancel()
+		a.authMu.Lock()
+		a.msCancel = nil
+		a.authMu.Unlock()
 		return DeviceCodeView{}, err
 	}
-	pollCtx, pollCancel := context.WithCancel(a.context())
-	a.authMu.Lock()
-	a.msCancel = pollCancel
-	a.authMu.Unlock()
 
 	go func() {
 		defer func() {
@@ -1168,16 +1197,18 @@ func (a *App) resolveLaunchAuth(ctx context.Context) (launchAuth, error) {
 	}
 }
 
-func (a *App) syncOfflineSetting() {
+func (a *App) syncOfflineSetting() error {
 	account, ok := a.accounts.Selected()
 	if !ok || account.Kind != auth.KindOffline {
-		return
+		return nil
 	}
 	settings := a.store.Settings()
-	if settings.PlayerName != account.Name {
-		settings.PlayerName = account.Name
-		_, _ = a.store.SaveSettings(settings)
+	if settings.PlayerName == account.Name {
+		return nil
 	}
+	settings.PlayerName = account.Name
+	_, err := a.store.SaveSettings(settings)
+	return err
 }
 
 // VersionView is one downloadable game version.
@@ -1339,8 +1370,6 @@ func (a *App) CreateInstance(req CreateInstanceRequest) (view InstanceView, err 
 	}
 	if _, err := a.mojang.ManifestEntry(a.context(), req.MCVersion); err != nil {
 		return InstanceView{}, fmt.Errorf("无效的 Minecraft 版本: %w", err)
-	}
-	if !a.mojang.IsInstalled(req.MCVersion) {
 	}
 	loaderType := loader.Normalize(req.Loader)
 	if loaderType == "" {
@@ -1505,8 +1534,21 @@ func (a *App) DeleteInstance(id string, deleteFiles bool) error {
 		return err
 	}
 	a.procMu.Lock()
+	if a.launching[id] {
+		a.procMu.Unlock()
+		return errors.New("版本正在启动，无法删除")
+	}
+	if a.deleting == nil {
+		a.deleting = map[string]bool{}
+	}
+	a.deleting[id] = true
 	proc := a.procs[id]
 	a.procMu.Unlock()
+	defer func() {
+		a.procMu.Lock()
+		delete(a.deleting, id)
+		a.procMu.Unlock()
+	}()
 	if proc != nil {
 		_ = proc.Stop()
 		select {
@@ -1618,6 +1660,10 @@ func (a *App) launchInstance(id, language string, server *launcher.ServerAddress
 		a.procMu.Unlock()
 		return errors.New("该版本正在运行")
 	}
+	if a.deleting[id] {
+		a.procMu.Unlock()
+		return errors.New("该版本正在删除")
+	}
 	if a.launching[id] {
 		a.procMu.Unlock()
 		return errors.New("该版本正在启动")
@@ -1626,17 +1672,27 @@ func (a *App) launchInstance(id, language string, server *launcher.ServerAddress
 		a.launching = map[string]bool{}
 	}
 	a.launching[id] = true
+	ring := &logRing{}
+	ring.add("[启动器] 正在准备启动 " + inst.Name + "…")
+	a.logs[id] = ring
 	a.procMu.Unlock()
 	defer func() {
 		a.procMu.Lock()
 		delete(a.launching, id)
 		a.procMu.Unlock()
+		if err != nil {
+			// Keep the partial launch log available in the console.
+			ring.add("[启动器] 启动失败：" + err.Error())
+			err = describeLaunchError(err)
+		}
 	}()
 
 	inst = a.resolveLaunchVersion(inst)
+	ring.add("[启动器] 游戏版本: " + inst.MCVersion + " · 加载器: " + inst.Loader)
 	if err := a.ensureLoaderReady(inst); err != nil {
 		return err
 	}
+	ring.add("[启动器] 正在检查登录状态…")
 	launchAccount, err := a.resolveLaunchAuth(a.context())
 	if err != nil {
 		return err
@@ -1645,6 +1701,7 @@ func (a *App) launchInstance(id, language string, server *launcher.ServerAddress
 	launchInst.MemoryMB = a.effectiveMemoryMB(inst)
 	required := a.requiredJava(inst)
 	preferred := strings.TrimSpace(inst.JavaPath)
+	ring.add(fmt.Sprintf("[启动器] 正在查找 Java %d…", required))
 	rt, findErr := a.javaMgr.FindSuitable(a.context(), required, preferred, []string{a.store.Settings().DefaultJavaPath, inst.JavaPath})
 	if findErr != nil {
 		if preferred != "" {
@@ -1652,6 +1709,7 @@ func (a *App) launchInstance(id, language string, server *launcher.ServerAddress
 		}
 		// No compatible Java is available: install the matching Temurin
 		// runtime on demand so the first launch can proceed directly.
+		ring.add(fmt.Sprintf("[启动器] 未找到 Java %d，正在自动下载…", required))
 		t := a.newTask(fmt.Sprintf("准备 Java %d", required))
 		var installErr error
 		rt, installErr = a.javaMgr.Install(t.context(), required, t.javaBytesProgress("java"))
@@ -1667,8 +1725,7 @@ func (a *App) launchInstance(id, language string, server *launcher.ServerAddress
 			}
 		}
 	}
-	ring := &logRing{}
-	ring.add("[启动器] 正在启动 " + inst.Name + " · Java " + fmt.Sprint(rt.Major))
+	ring.add("[启动器] 使用 Java " + fmt.Sprint(rt.Major) + ": " + rt.Path)
 	if server != nil {
 		ring.add("[启动器] 直连服务器 " + server.String())
 	}
@@ -1782,6 +1839,40 @@ func (a *App) launchInstance(id, language string, server *launcher.ServerAddress
 		a.emitInstancesChanged()
 	}()
 	return nil
+}
+
+// describeLaunchError appends an actionable hint to common launch failures.
+// The original detail is kept so the console remains useful for diagnosis.
+func describeLaunchError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := err.Error()
+	if strings.Contains(message, "提示：") {
+		return err
+	}
+	if errors.Is(err, context.Canceled) {
+		return errors.New("启动已取消")
+	}
+	lower := strings.ToLower(message)
+	var hint string
+	switch {
+	case strings.Contains(message, "Java") || strings.Contains(lower, "java"):
+		hint = "请在「版本设置」中选择该版本可用的 Java，或清空 Java 路径让启动器自动下载匹配版本。"
+	case strings.Contains(message, "加载器") || strings.Contains(message, "安装器"):
+		hint = "请在「版本设置」点击「修复版本」，重新安装模组加载器。"
+	case strings.Contains(message, "游戏文件") || strings.Contains(message, "版本档案") || strings.Contains(message, "尚未安装"):
+		hint = "请先在「版本设置」中修复或重新下载该游戏版本。"
+	case strings.Contains(message, "账户") || strings.Contains(message, "登录") || strings.Contains(message, "令牌") || strings.Contains(message, "授权"):
+		hint = "请打开账户管理，重新登录后再启动。"
+	case strings.Contains(message, "内存"):
+		hint = "请降低该版本的内存设置，或关闭其他占用内存的程序。"
+	case strings.Contains(message, "目录") || strings.Contains(message, "路径") || strings.Contains(message, "拒绝访问"):
+		hint = "请确认游戏目录可写，并关闭可能占用游戏文件的程序。"
+	default:
+		hint = "可打开游戏控制台查看详细日志。"
+	}
+	return fmt.Errorf("%w\n提示：%s", err, hint)
 }
 
 func (a *App) emitLaunchState(state LaunchState) {

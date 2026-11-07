@@ -75,6 +75,14 @@ func Export(ctx context.Context, opts Options) (Result, error) {
 	defer os.RemoveAll(tempDir)
 
 	result := Result{Warnings: []string{}}
+	// Version strings are interpolated into generated .bat/.sh scripts, so
+	// reject anything that could break out of the argument.
+	if err := validateScriptToken("Minecraft 版本", opts.Instance.MCVersion); err != nil {
+		return result, err
+	}
+	if err := validateScriptToken("加载器版本", opts.Instance.LoaderVersion); err != nil {
+		return result, err
+	}
 	progress := opts.Progress
 	if progress == nil {
 		progress = func(string, string, int, int) {}
@@ -281,6 +289,24 @@ func writePack(zw *zip.Writer, opts Options, runtimePath, runtimeName, runtimeKi
 		return err
 	}
 	progress("pack", "服务器包内容已写入", 1, 1)
+	return nil
+}
+
+// validateScriptToken allows only characters that are safe in both cmd.exe
+// and POSIX shell arguments.
+func validateScriptToken(label, value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	for _, char := range value {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '.' || char == '-' ||
+			char == '_' || char == '+' {
+			continue
+		}
+		return fmt.Errorf("%s包含不允许的字符，无法生成安全的启动脚本", label)
+	}
 	return nil
 }
 

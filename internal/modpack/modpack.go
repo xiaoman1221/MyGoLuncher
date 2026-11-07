@@ -346,13 +346,6 @@ func importMRPack(ctx context.Context, path string, ins Inspection, gameDir stri
 	if err := decodeZipJSON(index, &idx); err != nil {
 		return 0, nil, err
 	}
-	report(progress, "extract", "正在展开整合包配置…", 0, 1)
-	if err := extractZipPrefix(path, gameDir, ins.basePrefix+"overrides"); err != nil {
-		return 0, nil, err
-	}
-	if err := extractZipPrefix(path, gameDir, ins.basePrefix+"client-overrides"); err != nil {
-		return 0, nil, err
-	}
 	var downloads []genericDownload
 	missing := 0
 	var warnings []string
@@ -383,6 +376,14 @@ func importMRPack(ctx context.Context, path string, ins Inspection, gameDir stri
 		}); err != nil {
 			return missing, warnings, err
 		}
+	}
+	// Overrides must win over downloaded files, so extract them last.
+	report(progress, "extract", "正在展开整合包配置…", 0, 1)
+	if err := extractZipPrefix(path, gameDir, ins.basePrefix+"overrides"); err != nil {
+		return missing, warnings, err
+	}
+	if err := extractZipPrefix(path, gameDir, ins.basePrefix+"client-overrides"); err != nil {
+		return missing, warnings, err
 	}
 	return missing, warnings, nil
 }
@@ -440,14 +441,17 @@ func importCurseForge(ctx context.Context, path string, ins Inspection, gameDir 
 		return 0, nil, err
 	}
 	overrideDir := firstNonEmpty(manifest.Overrides, "overrides")
-	report(progress, "extract", "正在展开 CurseForge 覆盖文件…", 0, 1)
-	if err := extractZipPrefix(path, gameDir, ins.basePrefix+overrideDir); err != nil {
-		return 0, nil, err
+	applyOverrides := func() error {
+		report(progress, "extract", "正在展开 CurseForge 覆盖文件…", 0, 1)
+		return extractZipPrefix(path, gameDir, ins.basePrefix+overrideDir)
 	}
 	if len(manifest.Files) == 0 {
-		return 0, nil, nil
+		return 0, nil, applyOverrides()
 	}
 	if strings.TrimSpace(opts.CurseForgeAPIKey) == "" {
+		if err := applyOverrides(); err != nil {
+			return 0, nil, err
+		}
 		return len(manifest.Files), []string{fmt.Sprintf("未配置 CurseForge API Key，已跳过 %d 个模组文件；可在设置中填写后重新导入", len(manifest.Files))}, nil
 	}
 	report(progress, "download", fmt.Sprintf("正在解析 CurseForge 文件 0/%d", len(manifest.Files)), 0, len(manifest.Files))
@@ -458,14 +462,16 @@ func importCurseForge(ctx context.Context, path string, ins Inspection, gameDir 
 			missing++
 			continue
 		}
-		url, filename, err := curseFileURL(ctx, opts.CurseForgeAPIKey, f.ProjectID, f.FileID)
-		name := filepath.Base(strings.TrimSpace(filename))
-		if err != nil || url == "" || name == "" || name == "." || name == string(filepath.Separator) {
+		info, err := curseFileInfoFor(ctx, opts.CurseForgeAPIKey, f.ProjectID, f.FileID)
+		name := filepath.Base(strings.TrimSpace(info.FileName))
+		if err != nil || info.URL == "" || name == "" || name == "." || name == string(filepath.Separator) {
 			missing++
 		} else {
 			downloads = append(downloads, genericDownload{
-				urls: downloadCandidates(opts.URLRewriter, []string{url}),
+				urls: downloadCandidates(opts.URLRewriter, []string{info.URL}),
 				dest: filepath.Join(gameDir, "mods", name),
+				sha1: info.SHA1,
+				size: info.Size,
 			})
 		}
 		report(progress, "download", fmt.Sprintf("正在解析 CurseForge 文件 %d/%d", i+1, len(manifest.Files)), i+1, len(manifest.Files))
@@ -479,6 +485,10 @@ func importCurseForge(ctx context.Context, path string, ins Inspection, gameDir 
 			return missing, nil, err
 		}
 	}
+	// Overrides have priority over the files listed in manifest.json.
+	if err := applyOverrides(); err != nil {
+		return missing, nil, err
+	}
 	var warnings []string
 	if missing > 0 {
 		warnings = append(warnings, fmt.Sprintf("有 %d 个 CurseForge 文件无法自动下载（作者禁止第三方下载或文件已删除）", missing))
@@ -486,33 +496,55 @@ func importCurseForge(ctx context.Context, path string, ins Inspection, gameDir 
 	return missing, warnings, nil
 }
 
-func curseFileURL(ctx context.Context, apiKey string, projectID, fileID int) (string, string, error) {
+type curseFileInfo struct {
+	URL      string
+	FileName string
+	SHA1     string
+	Size     int64
+}
+
+func curseFileInfoFor(ctx context.Context, apiKey string, projectID, fileID int) (curseFileInfo, error) {
 	endpoint := fmt.Sprintf("https://api.curseforge.com/v1/mods/%d/files/%d", projectID, fileID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", "", err
+		return curseFileInfo{}, err
 	}
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", httpx.UserAgent)
 	resp, err := httpx.Client.Do(req)
 	if err != nil {
-		return "", "", err
+		return curseFileInfo{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", fmt.Errorf("CurseForge API HTTP %d", resp.StatusCode)
+		return curseFileInfo{}, fmt.Errorf("CurseForge API HTTP %d", resp.StatusCode)
 	}
 	var payload struct {
 		Data struct {
 			FileName    string `json:"fileName"`
 			DownloadURL string `json:"downloadUrl"`
+			FileLength  int64  `json:"fileLength"`
+			Hashes      []struct {
+				Value string `json:"value"`
+				Algo  int    `json:"algo"`
+			} `json:"hashes"`
 		} `json:"data"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&payload); err != nil {
-		return "", "", err
+		return curseFileInfo{}, err
 	}
-	return payload.Data.DownloadURL, payload.Data.FileName, nil
+	info := curseFileInfo{
+		URL: payload.Data.DownloadURL, FileName: payload.Data.FileName, Size: payload.Data.FileLength,
+	}
+	// CurseForge hash algorithm 1 is SHA-1.
+	for _, hash := range payload.Data.Hashes {
+		if hash.Algo == 1 && len(hash.Value) == 40 {
+			info.SHA1 = hash.Value
+			break
+		}
+	}
+	return info, nil
 }
 
 func extractMultiMC(path string, ins Inspection, gameDir string, progress ProgressFunc) error {

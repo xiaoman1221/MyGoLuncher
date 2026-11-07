@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { RefreshCw, TriangleAlert } from 'lucide-react';
 import { api, isDemo } from './lib/api';
 import { onEvent } from './lib/events';
-import { AppContext, type Toast, type ToastKind } from './lib/app-context';
+import {
+  AppContext,
+  type ConfirmOptions,
+  type Toast,
+  type ToastAction,
+  type ToastKind,
+} from './lib/app-context';
 import {
   LANGUAGE_STORAGE_KEY,
   detectSystemLanguage,
@@ -35,6 +41,7 @@ import { FunLine } from './components/FunLine';
 import { CreateInstanceModal } from './components/CreateInstanceModal';
 import { EditInstanceModal } from './components/EditInstanceModal';
 import { ConfirmDeleteModal } from './components/ConfirmDeleteModal';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { AccountModal } from './components/AccountModal';
 import { LaunchOverlay } from './components/LaunchOverlay';
 import { LicenseGate } from './components/LicenseGate';
@@ -78,16 +85,23 @@ export default function App() {
   const [launchPhase, setLaunchPhase] = useState<'preparing' | 'waiting'>('preparing');
   const [licenseOpen, setLicenseOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
+  const [confirmOptions, setConfirmOptions] = useState<ConfirmOptions | null>(null);
+  const confirmResolver = useRef<((value: boolean) => void) | null>(null);
   const licenseActive = ['active', 'grace', 'trial'].includes(bootstrap?.license?.state ?? '');
   const elevationBlocked = Boolean(bootstrap?.elevated && !bootstrap.elevationConfirmed);
 
   const toastId = useRef(0);
   const toastTimers = useRef(new Map<number, number>());
   const settingsRef = useRef<Settings | null>(null);
+  const instancesRef = useRef<InstanceView[]>([]);
 
   useEffect(() => {
     settingsRef.current = bootstrap?.settings ?? null;
   }, [bootstrap?.settings]);
+
+  useEffect(() => {
+    instancesRef.current = bootstrap?.instances ?? [];
+  }, [bootstrap?.instances]);
 
   const setTheme = useCallback((next: Theme) => {
     setThemeState(next);
@@ -117,9 +131,9 @@ export default function App() {
   );
   const locale = localeFor(language);
 
-  const pushToast = useCallback((kind: ToastKind, title: string, message?: string) => {
+  const pushToast = useCallback((kind: ToastKind, title: string, message?: string, action?: ToastAction) => {
     const id = ++toastId.current;
-    setToasts((current) => [...current.slice(-4), { id, kind, title, message }]);
+    setToasts((current) => [...current.slice(-4), { id, kind, title, message, action }]);
     const timer = window.setTimeout(() => {
       setToasts((current) => current.filter((toast) => toast.id !== id));
       toastTimers.current.delete(id);
@@ -132,6 +146,22 @@ export default function App() {
     if (timer) window.clearTimeout(timer);
     toastTimers.current.delete(id);
     setToasts((current) => current.filter((toast) => toast.id !== id));
+  }, []);
+
+  // In-app confirmations avoid the native window.confirm dialog, which blocks
+  // the whole WebView and cannot be styled or translated consistently.
+  const confirm = useCallback((options: ConfirmOptions) => new Promise<boolean>((resolve) => {
+    // A second request supersedes the first instead of leaving it pending.
+    confirmResolver.current?.(false);
+    confirmResolver.current = resolve;
+    setConfirmOptions(options);
+  }), []);
+
+  const resolveConfirm = useCallback((value: boolean) => {
+    const resolve = confirmResolver.current;
+    confirmResolver.current = null;
+    setConfirmOptions(null);
+    resolve?.(value);
   }, []);
 
   const applyInstances = useCallback((instances: InstanceView[]) => {
@@ -217,6 +247,7 @@ export default function App() {
   const saveSettings = useCallback(async (next: Settings) => {
     const saved = await api.saveSettings(next);
     setBootstrap((current) => current ? { ...current, settings: saved } : current);
+    return saved;
   }, []);
 
   const selectInstance = useCallback((id: string) => setSelectedId(id), []);
@@ -237,6 +268,10 @@ export default function App() {
     }
   }, [pushToast, t]);
 
+  const openConsole = useCallback((id: string) => {
+    setConsoleId(id);
+  }, []);
+
   const launch = useCallback(async (id: string) => {
     setLaunchingId(id);
     setLaunchPhase('preparing');
@@ -244,9 +279,12 @@ export default function App() {
       await api.launchInstance(id, language);
     } catch (error) {
       setLaunchingId(null);
-      pushToast('error', t('app.launchFailed'), (error as Error).message);
+      pushToast('error', t('app.launchFailed'), (error as Error).message, {
+        label: t('app.viewLogs'),
+        onClick: () => openConsole(id),
+      });
     }
-  }, [pushToast, t, language]);
+  }, [pushToast, t, language, openConsole]);
 
   const launchToServer = useCallback(async (id: string, address: string) => {
     setLaunchingId(id);
@@ -255,9 +293,12 @@ export default function App() {
       await api.launchInstanceToServer(id, language, address);
     } catch (error) {
       setLaunchingId(null);
-      pushToast('error', t('app.launchFailed'), (error as Error).message);
+      pushToast('error', t('app.launchFailed'), (error as Error).message, {
+        label: t('app.viewLogs'),
+        onClick: () => openConsole(id),
+      });
     }
-  }, [pushToast, t, language]);
+  }, [pushToast, t, language, openConsole]);
 
   const stop = useCallback(async (id: string) => {
     try {
@@ -266,10 +307,6 @@ export default function App() {
       pushToast('error', t('app.stopFailed'), (error as Error).message);
     }
   }, [pushToast, t]);
-
-  const openConsole = useCallback((id: string) => {
-    setConsoleId(id);
-  }, []);
 
   const navigate = useCallback((next: PageKey) => {
     setPage(next);
@@ -308,7 +345,9 @@ export default function App() {
       }),
       onEvent<AccountLoginEvent>('auth:login', (event) => {
         if (event.success) {
-          void reloadBootstrap();
+          void reloadBootstrap().catch((error: Error) => {
+            pushToast('error', t('app.refreshFailed'), error.message);
+          });
           pushToast('success', t('app.msLoginSuccess'), event.account?.name);
         } else {
           pushToast('error', t('app.msLoginFailed'), event.message);
@@ -328,18 +367,19 @@ export default function App() {
           if (settingsRef.current?.showGameConsole !== false) {
             void openConsole(state.instanceId);
           }
-          const instance = bootstrap.instances.find((item) => item.id === state.instanceId);
+          const instance = instancesRef.current.find((item) => item.id === state.instanceId);
           pushToast('success', t('app.gameStarted'), instance ? instance.name : undefined);
         } else {
           setLaunchingId((current) => current === state.instanceId ? null : current);
           if (state.stoppedByUser) {
             pushToast('info', t('app.gameStopped'));
+          } else if (state.exitCode === 0) {
+            pushToast('info', t('app.gameExited'));
           } else {
-            pushToast(
-              state.exitCode === 0 ? 'info' : 'error',
-              state.exitCode === 0 ? t('app.gameExited') : t('app.gameCrashed'),
-              state.exitCode === 0 ? undefined : t('app.exitCode', { code: state.exitCode }),
-            );
+            pushToast('error', t('app.gameCrashed'), t('app.exitCode', { code: state.exitCode }), {
+              label: t('app.viewLogs'),
+              onClick: () => openConsole(state.instanceId),
+            });
           }
         }
       }),
@@ -412,6 +452,7 @@ export default function App() {
     stop,
     openConsole: (id: string) => { void openConsole(id); },
     pushToast,
+    confirm,
     lanPeerCount,
     isDemo,
     licenseOpen,
@@ -423,7 +464,7 @@ export default function App() {
     language, locale, t, setLanguage,
     navigate, selectedId, selectedInstance, launchingId, selectInstance, refreshInstances,
     reloadBootstrap, saveSettings, openDataFolder, openInstanceFolder, launch, launchToServer, stop, lanPeerCount,
-    openConsole, pushToast, licenseOpen, openLicense, closeLicense, hasFeature,
+    openConsole, pushToast, confirm, licenseOpen, openLicense, closeLicense, hasFeature,
   ]);
 
   if (loading) {
@@ -450,15 +491,15 @@ export default function App() {
           className="btn btn-primary"
           onClick={() => {
             setLoading(true);
+            // reloadBootstrap already sets bootError from initError.
             reloadBootstrap()
-              .then(() => setBootError(''))
               .catch((error: Error) => setBootError(error.message))
               .finally(() => setLoading(false));
           }}
         >
           <RefreshCw size={15} /> {t('common.retry')}
         </button>
-        <span className="boot-legal">MyGoLuncher · v1.0.1</span>
+        <span className="boot-legal">MyGoLuncher · v{bootstrap?.version ?? '1.0.3'}</span>
       </div>
     );
   }
@@ -517,6 +558,7 @@ export default function App() {
 
       <TaskTray />
       <ToastStack toasts={toasts} onDismiss={dismissToast} withConsole={Boolean(activeConsole)} />
+      <ConfirmDialog options={confirmOptions} onResolve={resolveConfirm} />
 
       {licenseOpen && (
         <LicenseGate

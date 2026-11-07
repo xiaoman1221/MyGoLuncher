@@ -43,14 +43,16 @@ export function SettingsPage() {
   const [orcaBusy, setOrcaBusy] = useState(false);
   const orcaCancelled = useRef(false);
 
-  useEffect(() => {
-    if (settings) setForm({ ...settings });
-  }, [settings]);
-
   const dirty = useMemo(() => {
     if (!form || !settings) return false;
     return JSON.stringify(form) !== JSON.stringify(settings);
   }, [form, settings]);
+
+  // Do not overwrite unsaved edits when an unrelated background refresh
+  // replaces the settings object.
+  useEffect(() => {
+    if (settings && !dirty) setForm({ ...settings });
+  }, [settings, dirty]);
 
   if (!form) {
     return <div className="page"><div className="skeleton skeleton-line wide" /></div>;
@@ -67,7 +69,8 @@ export function SettingsPage() {
     }
     setSaving(true);
     try {
-      await saveSettings(form);
+      const saved = await saveSettings(form);
+      setForm({ ...saved });
       setLanguage(resolveStartupLanguage(form.languageAuto, form.language));
       pushToast('success', t('settings.savedToast'));
     } catch (error) {

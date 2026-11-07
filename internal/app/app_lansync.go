@@ -17,6 +17,9 @@ import (
 )
 
 type lanShareState struct {
+	// opMu serializes the whole start/stop lifecycle; mu only protects the
+	// fields so snapshot readers never block on network or disk work.
+	opMu       sync.Mutex
 	mu         sync.Mutex
 	server     *lansync.Server
 	instanceID string
@@ -83,16 +86,16 @@ func (a *App) StartLanShare(instanceID string, dirs []string) (lan.Snapshot, err
 		return lan.Snapshot{}, errors.New("共享整个版本需要先开启版本隔离")
 	}
 
+	a.lanShare.opMu.Lock()
+	defer a.lanShare.opMu.Unlock()
 	a.lanShare.mu.Lock()
 	previous := a.lanShare.server
-	a.lanShare.server = nil
-	a.lanShare.instanceID = ""
-	a.lanShare.dirs = nil
+	previousInstanceID := a.lanShare.instanceID
+	previousDirs := append([]string(nil), a.lanShare.dirs...)
 	a.lanShare.mu.Unlock()
-	if previous != nil {
-		previous.Stop()
-	}
 
+	// Build the new share first. If it fails, the existing share keeps
+	// running instead of disappearing because of a failed switch.
 	task := a.newTask("准备版本共享 · " + instance.Name)
 	server, err := lansync.StartServer(task.context(), a.instanceDir(instance), lansync.InstanceInfo{
 		ID:              instance.ID,
@@ -106,10 +109,13 @@ func (a *App) StartLanShare(instanceID string, dirs []string) (lan.Snapshot, err
 	})
 	task.finish(err)
 	if err != nil {
-		if a.lanSvc != nil {
+		if a.lanSvc == nil {
+			return lan.Snapshot{}, err
+		}
+		if previous == nil {
 			a.lanSvc.SetIdentity(a.applyLanShareIdentity(a.lanIdentityWithTools(a.defaultLanInstanceID())))
 		}
-		return lan.Snapshot{}, err
+		return a.lanSvc.Snapshot(), err
 	}
 
 	a.lanShare.mu.Lock()
@@ -125,26 +131,47 @@ func (a *App) StartLanShare(instanceID string, dirs []string) (lan.Snapshot, err
 	if err := a.updateLanIdentity(identity); err != nil {
 		server.Stop()
 		a.lanShare.mu.Lock()
-		a.lanShare.server = nil
-		a.lanShare.instanceID = ""
-		a.lanShare.dirs = nil
+		a.lanShare.server = previous
+		a.lanShare.instanceID = previousInstanceID
+		a.lanShare.dirs = previousDirs
 		a.lanShare.mu.Unlock()
-		return lan.Snapshot{}, fmt.Errorf("共享已准备，但局域网广播启动失败: %w", err)
+		if a.lanSvc != nil {
+			if previous != nil {
+				a.lanSvc.SetIdentity(a.applyLanShareIdentity(a.lanIdentityWithTools(previousInstanceID)))
+			} else {
+				a.lanSvc.SetIdentity(a.applyLanShareIdentity(a.lanIdentityWithTools(a.defaultLanInstanceID())))
+			}
+		}
+		if a.lanSvc == nil {
+			return lan.Snapshot{}, fmt.Errorf("共享已准备，但局域网广播启动失败: %w", err)
+		}
+		return a.lanSvc.Snapshot(), fmt.Errorf("共享已准备，但局域网广播启动失败: %w", err)
+	}
+	if previous != nil && previous != server {
+		previous.Stop()
 	}
 	return a.lanSvc.Snapshot(), nil
 }
 
-// StopLanShare stops sharing and clears the sync advertisement.
-func (a *App) StopLanShare() (lan.Snapshot, error) {
+// stopLanShareServer stops the active share server, if any. It is also used
+// when the LAN entitlement is revoked and during shutdown.
+func (a *App) stopLanShareServer() {
+	a.lanShare.opMu.Lock()
 	a.lanShare.mu.Lock()
 	server := a.lanShare.server
 	a.lanShare.server = nil
 	a.lanShare.instanceID = ""
 	a.lanShare.dirs = nil
 	a.lanShare.mu.Unlock()
+	a.lanShare.opMu.Unlock()
 	if server != nil {
 		server.Stop()
 	}
+}
+
+// StopLanShare stops sharing and clears the sync advertisement.
+func (a *App) StopLanShare() (lan.Snapshot, error) {
+	a.stopLanShareServer()
 	if a.lanSvc != nil {
 		a.lanSvc.SetIdentity(a.applyLanShareIdentity(a.lanIdentityWithTools(a.defaultLanInstanceID())))
 		return a.lanSvc.Snapshot(), nil
