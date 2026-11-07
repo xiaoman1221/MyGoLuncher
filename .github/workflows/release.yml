@@ -207,8 +207,12 @@ jobs:
           security create-keychain -p "$KC_PASS" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
-          security import "$KEY" -k "$KEYCHAIN" -f openssl -T /usr/bin/codesign
-          security import "$CERT_ONLY" -k "$KEYCHAIN" -f openssl
+          echo "Importing macOS private key"
+          security import "$KEY" -k "$KEYCHAIN" -T /usr/bin/codesign
+          echo "Importing macOS certificate"
+          security import "$CERT_ONLY" -k "$KEYCHAIN"
+          echo "Imported macOS identity"
+          security find-identity -v -p codesigning "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
