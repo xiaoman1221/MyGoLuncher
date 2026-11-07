@@ -207,8 +207,8 @@ jobs:
           security create-keychain -p "$KC_PASS" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
-          security import "$KEY" -k "$KEYCHAIN" -f pem -T /usr/bin/codesign
-          security import "$CERT_ONLY" -k "$KEYCHAIN" -f pem
+          security import "$KEY" -k "$KEYCHAIN" -f pkcs8 -T /usr/bin/codesign
+          security import "$CERT_ONLY" -k "$KEYCHAIN" -f pemseq
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
