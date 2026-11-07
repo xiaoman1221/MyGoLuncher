@@ -6,13 +6,31 @@
 .teamcity/settings.kts
 ```
 
-包含三个**手动触发**的构建类型：
+包含一个自动安全检查构建和三个**手动触发**的商用发布构建：
 
-| 构建类型 | 代理要求 | 产物 |
-| --- | --- | --- |
-| Windows Commercial Release | Windows | `windows/MyGoLuncher-<版本>-windows-<arch>.exe` |
-| macOS Commercial Release | macOS | `macos/MyGoLuncher-<版本>-macos-<arch>.zip` |
-| Linux Commercial Release | Linux | `linux/MyGoLuncher-<版本>-linux-<arch>.tar.gz` |
+| 构建类型 | 触发 | 代理要求 | 产物 |
+| --- | --- | --- | --- |
+| Security Checks | master 提交 | Linux | 无（失败即阻断） |
+| Windows Commercial Release | 手动 | Windows | `windows/MyGoLuncher-<版本>-windows-<arch>.exe` |
+| macOS Commercial Release | 手动 | macOS | `macos/MyGoLuncher-<版本>-macos-<arch>.zip` |
+| Linux Commercial Release | 手动 | Linux | `linux/MyGoLuncher-<版本>-linux-<arch>.tar.gz` |
+
+安全检查脚本为：
+
+```text
+scripts/teamcity-security.mjs
+```
+
+检查内容：
+
+1. 敏感文件是否被 Git 跟踪（`product_private.go`、`.env`、PFX/P12、密钥、`.signing/`、`.idea/`、`MGL/`、`.minecraft/`）。
+2. 内置规则扫描已跟踪文本文件中的常见密钥/令牌。
+3. 若代理安装 `gitleaks`，使用 `.gitleaks.toml` 额外扫描当前工作树。
+4. `go vet ./...`
+5. `govulncheck ./...`（未安装时自动安装）
+6. `npm audit --omit=dev --audit-level=high`
+
+三个商用发布构建在执行构建前也会运行同一套安全检查，任何一项失败都会中止发布。
 
 三个构建都调用同一个跨平台脚本：
 
@@ -36,7 +54,9 @@ scripts/teamcity-release.mjs
 4. 准备三个代理：
    - **Windows**：Go 1.25+、Node.js 20+、Git、UPX、Windows SDK（`signtool.exe`）。
    - **macOS**：Go 1.25+、Node.js 20+、Git、Xcode Command Line Tools（`codesign`、`ditto`）、可选 UPX。
-   - **Linux**：Go 1.25+、Node.js 20+、Git、`tar`、UPX、Wails 构建依赖（GTK3 + WebKit2GTK）、可选 `gpg`。
+   - **Linux**：Go 1.25+、Node.js 20+、Git、`tar`、UPX、Wails 构建依赖（GTK3 + WebKit2GTK）、可选 `gpg`、可选 `gitleaks`。
+
+安全检查需要访问 Go 模块代理与 npm registry，用于安装 `govulncheck` 和执行 `npm audit`。
 
 Wails CLI 由发布脚本自动安装。
 

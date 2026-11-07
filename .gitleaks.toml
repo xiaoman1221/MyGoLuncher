@@ -1,0 +1,15 @@
+# gitleaks configuration for MyGoLuncher.
+# The security scanner contains credential regexes by design; test fixtures use
+# obviously fake tokens. Keep the allowlist intentionally narrow.
+title = "MyGoLuncher"
+
+[allowlist]
+description = "Scanner source and fake test fixtures"
+paths = [
+  '''scripts/teamcity-security\.mjs''',
+  '''internal/license/.*_test\.go''',
+  '''internal/secretstore/.*_test\.go''',
+  '''build/''',
+  '''frontend/node_modules/''',
+  '''frontend/dist/''',
+]

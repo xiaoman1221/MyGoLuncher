@@ -86,8 +86,7 @@ cd frontend && npm run build
 ## 文档
 
 - [Function.md](Function.md)：功能说明、免费/付费边界与已知限制
-- [.teamcity/README.md](.teamcity/README.md)：TeamCity 三平台商用发布
-- [docs/GITHUB_RELEASE.md](docs/GITHUB_RELEASE.md)：GitHub Actions 构建与发布
+- [.teamcity/README.md](.teamcity/README.md)：TeamCity 三平台商用构建与发布
 - [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)、[TRADEMARK.md](TRADEMARK.md)、[CLA.md](CLA.md)
 
 ## 声明

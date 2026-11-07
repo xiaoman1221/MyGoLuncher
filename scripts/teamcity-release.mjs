@@ -50,12 +50,20 @@ function command(name) {
 }
 
 function run(name, argv, options = {}) {
-  const result = spawnSync(command(name), argv, {
-    cwd: options.cwd ?? root,
-    stdio: options.quiet ? 'pipe' : 'inherit',
-    encoding: 'utf8',
-    env: { ...env, ...(options.env ?? {}) },
-  });
+  const executable = command(name);
+  // Node cannot spawn .cmd files directly on Windows; route them through cmd.exe
+  // instead of using shell:true (which concatenates arguments).
+  const useCmd = isWindows && executable.toLowerCase().endsWith('.cmd');
+  const result = spawnSync(
+    useCmd ? (process.env.ComSpec ?? 'cmd.exe') : executable,
+    useCmd ? ['/d', '/s', '/c', executable, ...argv] : argv,
+    {
+      cwd: options.cwd ?? root,
+      stdio: options.quiet ? 'pipe' : 'inherit',
+      encoding: 'utf8',
+      env: { ...env, ...(options.env ?? {}) },
+    },
+  );
   if (result.error) throw new Error(`${name} 无法执行: ${result.error.message}`);
   if (result.status !== 0) {
     const detail = options.quiet ? `${result.stdout ?? ''}${result.stderr ?? ''}`.trim() : '';
