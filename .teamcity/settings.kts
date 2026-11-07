@@ -15,8 +15,8 @@ project {
 // builds also run the same script as a gate before compiling.
 object SecurityChecks : BuildType({
     id("MyGoLuncher_SecurityChecks")
-    name = "Security Checks"
-    description = "Secret scan, sensitive-file check, go vet, govulncheck and npm audit."
+    name = "Security Checks & Tests"
+    description = "Secret scan, sensitive-file check, go vet, govulncheck, npm audit, backend tests and frontend build."
 
     requirements {
         contains("teamcity.agent.jvm.os.name", "Linux")
@@ -30,6 +30,14 @@ object SecurityChecks : BuildType({
         script {
             name = "Security checks"
             scriptContent = "node scripts/teamcity-security.mjs"
+        }
+        script {
+            name = "Backend tests"
+            scriptContent = "go test -count=1 ./..."
+        }
+        script {
+            name = "Frontend build"
+            scriptContent = "npm ci --prefix frontend && npm run build --prefix frontend"
         }
     }
 

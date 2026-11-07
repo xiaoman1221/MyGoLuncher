@@ -1,4 +1,9 @@
-# TeamCity 三平台商用构建
+# TeamCity 内部检查（方案 C）
+
+当前分工：
+
+- **TeamCity**：安全检查、后端测试、前端构建
+- **GitHub Actions**：三平台官方签名发布，工作流为 [`.github/workflows/release.yml`](../.github/workflows/release.yml)
 
 版本化配置：
 
@@ -6,14 +11,14 @@
 .teamcity/settings.kts
 ```
 
-包含一个自动安全检查构建和三个**手动触发**的商用发布构建：
-
-| 构建类型 | 触发 | 代理要求 | 产物 |
+| 构建类型 | 触发 | 代理要求 | 用途 |
 | --- | --- | --- | --- |
-| Security Checks | master 提交 | Linux | 无（失败即阻断） |
-| Windows Commercial Release | 手动 | Windows | `windows/MyGoLuncher-<版本>-windows-<arch>.exe` |
-| macOS Commercial Release | 手动 | macOS | `macos/MyGoLuncher-<版本>-macos-<arch>.zip` |
-| Linux Commercial Release | 手动 | Linux | `linux/MyGoLuncher-<版本>-linux-<arch>.tar.gz` |
+| Security Checks & Tests | master 提交 | Linux | 安全扫描、`go test`、前端构建 |
+| Windows Commercial Release | 手动 | Windows | 旧的手动发布回退 |
+| macOS Commercial Release | 手动 | macOS | 旧的手动发布回退 |
+| Linux Commercial Release | 手动 | Linux | 旧的手动发布回退 |
+
+> 三平台正式发布以 GitHub Actions 为主；TeamCity 的三个 Release 构建仅作为内网应急回退，不应与 GitHub Release 同时开启。
 
 安全检查脚本为：
 
@@ -29,8 +34,10 @@ scripts/teamcity-security.mjs
 4. `go vet ./...`
 5. `govulncheck ./...`（未安装时自动安装）
 6. `npm audit --omit=dev --audit-level=high`
+7. `go test -count=1 ./...`
+8. `npm ci --prefix frontend` + `npm run build --prefix frontend`
 
-三个商用发布构建在执行构建前也会运行同一套安全检查，任何一项失败都会中止发布。
+安全检查构建失败会阻断该分支的后续发布准备。三个 TeamCity Release 仅作为手动回退，仍会先运行安全检查。
 
 三个构建都调用同一个跨平台脚本：
 
@@ -127,23 +134,64 @@ macOS 构建生成 `.app` 并压缩为 zip。设置签名身份后执行 hardene
 
 Linux 构建生成 tar.gz，内含可执行文件、`LICENSE`、`NOTICE` 与 `README.md`。
 
-## 发布版本
+## 发布版本（方案 C）
+
+正式发布以 GitHub Actions 为准。
 
 先在本地提升版本并推送：
 
-```powershell
+```bash
 node scripts/set-version.mjs 1.0.4
 git add .
-git commit -m "release: v1.0.4"
+git commit -m "发布 v1.0.4"
 git push origin master
 ```
 
-然后在 TeamCity 中分别运行三个构建类型。每次 Run 都会完成构建、打包/签名，并把对应平台产物提交回 `master`。
+然后到 GitHub Actions：
+
+```text
+Official release -> Run workflow
+version: 1.0.4
+publish: true
+```
+
+工作流会：
+
+1. 校验版本
+2. 后端测试与前端构建
+3. 三平台官方编译
+4. Windows Authenticode / macOS codesign / Linux GPG
+5. 上传 artifacts
+6. 创建 GitHub Release
+
+### GitHub Actions Secrets
+
+```text
+MGL_PRODUCT_API_KEY
+MGL_PRODUCT_SERVER_URL
+WINDOWS_PFX_BASE64
+WINDOWS_PFX_PASSWORD
+MACOS_CERTIFICATE_BASE64
+MACOS_CERTIFICATE_PASSWORD
+MACOS_SIGNING_IDENTITY
+LINUX_GPG_PRIVATE_KEY_BASE64
+LINUX_GPG_PASSPHRASE
+```
+
+可选 Repository Variables：
+
+```text
+MGL_PRODUCT_NAME
+MGL_PRODUCT_SLUG
+```
+
+### TeamCity 手动回退
+
+内网应急时仍可手动运行 TeamCity 的三个 Release 构建。它们会提交 `releases/` 到内部 Git 仓库，不应与 GitHub Release 并行使用。
 
 ## 注意事项
 
-- 商用构建不会自动触发，避免普通提交意外发布已签名二进制。
-- macOS 产物架构取决于代理架构（`arm64` 或 `amd64`），不是通用二进制。
+- GitHub Actions 发布是手动触发，避免普通提交自动发布已签名二进制。
+- macOS 产物是 GitHub `macos-14` Runner 生成的 universal 包，实际架构以工作流日志为准。
 - UPX 可能触发杀毒软件误报，并可能破坏 macOS 代码签名；macOS 默认关闭。
-- 仓库会随二进制产物增长；建议只保留最近几个版本或改用外部制品仓库。
-- 如果 `master` 启用分支保护，需要允许 TeamCity 使用的账号或令牌直接推送。
+- TeamCity 三个 Release 仅作为手动回退，优先使用 GitHub Actions。
