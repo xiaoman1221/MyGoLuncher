@@ -38,7 +38,7 @@
 
 ## 快速开始
 
-依赖：Go 1.25+、Node.js 20+、Wails CLI v2.17。
+依赖：Go 1.25+、Node.js 22+、Wails CLI v2.17。
 
 ```bash
 go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0

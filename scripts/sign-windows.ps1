@@ -1,7 +1,8 @@
 ﻿param(
   [Parameter(Mandatory = $false)][string]$Exe = "",
   [Parameter(Mandatory = $true)][string]$PfxPath,
-  [string]$TimestampUrl = "http://timestamp.digicert.com"
+  [string]$TimestampUrl = "",
+  [switch]$TrustSelfSigned
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +21,19 @@ $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurs
   Sort-Object FullName -Descending |
   Select-Object -First 1
 if (-not $signtool) { throw "找不到 Windows SDK signtool.exe" }
+
+
+if ($TrustSelfSigned) {
+  $secure = ConvertTo-SecureString $env:MGL_SIGN_PFX_PASSWORD -AsPlainText -Force
+  $cert = Import-PfxCertificate -FilePath $PfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $secure
+  if ($cert.Subject -eq $cert.Issuer) {
+    $cer = Join-Path $env:TEMP ("mgl-sign-" + [guid]::NewGuid().ToString("N") + ".cer")
+    Export-Certificate -Cert $cert -FilePath $cer | Out-Null
+    Import-Certificate -FilePath $cer -CertStoreLocation Cert:\CurrentUser\Root | Out-Null
+    Import-Certificate -FilePath $cer -CertStoreLocation Cert:\CurrentUser\TrustedPublisher | Out-Null
+    Remove-Item -LiteralPath $cer -Force -ErrorAction SilentlyContinue
+  }
+}
 
 Write-Host "签名: $Exe"
 $signArgs = @("sign", "/fd", "SHA256", "/f", $PfxPath, "/p", $env:MGL_SIGN_PFX_PASSWORD)

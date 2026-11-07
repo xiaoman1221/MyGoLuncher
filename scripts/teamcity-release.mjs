@@ -90,17 +90,6 @@ function writeJSON(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
 }
 
-function lastCommitMessage() {
-  return capture('git', ['log', '-1', '--pretty=%s']);
-}
-
-function changedFiles() {
-  return capture('git', ['show', '--name-only', '--pretty=format:', 'HEAD'])
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
 function resolveUpx() {
   if (env.MGL_UPX_PATH) {
     if (!existsSync(env.MGL_UPX_PATH)) fail(`env.MGL_UPX_PATH 指向的文件不存在: ${env.MGL_UPX_PATH}`);
@@ -175,15 +164,8 @@ function pushWithRetry(remote, token, user) {
 let branchName = branch.trim();
 if (branchName === '<default>' || branchName === 'default') branchName = 'master';
 if (branchName.includes('%')) branchName = '';
-
-const isReleaseCommit = lastCommitMessage().startsWith('[teamcity release]');
-if (isReleaseCommit) {
-  const files = changedFiles();
-  if (files.length > 0 && files.every((file) => file.startsWith('releases/'))) {
-    console.log('检测到 TeamCity 发布提交，跳过重复构建。');
-    process.exit(0);
-  }
-}
+if (!branchName) branchName = capture('git', ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+if (!branchName || branchName === 'HEAD') branchName = 'unknown';
 
 const productKey = (env.MGL_PRODUCT_API_KEY ?? '').trim();
 const productServer = (env.MGL_PRODUCT_SERVER_URL ?? '').trim();
@@ -255,13 +237,17 @@ if (platform === 'windows') {
     packExecutable(exe, true);
     packed = true;
   }
-  run('powershell.exe', [
+  const signArgs = [
     '-NoProfile', '-ExecutionPolicy', 'Bypass',
     '-File', join(root, 'scripts', 'sign-windows.ps1'),
     '-Exe', exe,
     '-PfxPath', pfxPath,
-    '-TimestampUrl', 'https://timestamp.digicert.com',
-  ]);
+    '-TimestampUrl', String(env.MGL_WINDOWS_TIMESTAMP_URL ?? '').trim(),
+  ];
+  if (String(env.MGL_WINDOWS_TRUST_SELF_SIGNED ?? 'true').toLowerCase() !== 'false') {
+    signArgs.push('-TrustSelfSigned');
+  }
+  run('powershell.exe', signArgs);
   signed = true;
   signatureStatus = 'signed';
   artifactName = `MyGoLuncher-${version}-windows-${arch}.exe`;
@@ -278,7 +264,8 @@ if (platform === 'windows') {
   }
   if (macIdentity) {
     const signArgs = ['--force', '--deep', '--options', 'runtime'];
-    if (String(env.MGL_MACOS_TIMESTAMP ?? 'true').toLowerCase() !== 'false') signArgs.push('--timestamp');
+    if (String(env.MGL_MACOS_TIMESTAMP ?? 'false').toLowerCase() !== 'false') signArgs.push('--timestamp');
+    else signArgs.push('--timestamp=none');
     signArgs.push('--sign', macIdentity, app);
     run('codesign', signArgs);
     run('codesign', ['--verify', '--deep', '--strict', '--verbose=2', app]);

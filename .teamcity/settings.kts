@@ -62,6 +62,8 @@ object WindowsCommercialRelease : BuildType({
         param("env.MGL_PFX_PATH", "")
         password("env.MGL_SIGN_PFX_PASSWORD", "")
         param("env.MGL_UPX_PATH", "")
+        param("env.MGL_WINDOWS_TIMESTAMP_URL", "")
+        param("env.MGL_WINDOWS_TRUST_SELF_SIGNED", "true")
 
         password("env.GIT_PUSH_TOKEN", "")
         param("env.GIT_PUSH_USER", "xiaoman1221")
@@ -105,7 +107,7 @@ object MacOSCommercialRelease : BuildType({
         // Codesign identity from `security find-identity -v -p codesigning`.
         // Leave empty to build an unsigned artifact.
         param("env.MGL_MACOS_SIGN_IDENTITY", "")
-        param("env.MGL_MACOS_TIMESTAMP", "true")
+        param("env.MGL_MACOS_TIMESTAMP", "false")
         // Disabled by default: UPX on Mach-O can invalidate code signatures.
         param("env.MGL_UPX", "false")
 

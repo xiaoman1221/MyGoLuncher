@@ -52,9 +52,9 @@ scripts/teamcity-release.mjs
    ```
 
 4. 准备三个代理：
-   - **Windows**：Go 1.25+、Node.js 20+、Git、UPX、Windows SDK（`signtool.exe`）。
-   - **macOS**：Go 1.25+、Node.js 20+、Git、Xcode Command Line Tools（`codesign`、`ditto`）、可选 UPX。
-   - **Linux**：Go 1.25+、Node.js 20+、Git、`tar`、UPX、Wails 构建依赖（GTK3 + WebKit2GTK）、可选 `gpg`、可选 `gitleaks`。
+   - **Windows**：Go 1.25+、Node.js 22+、Git、UPX、Windows SDK（`signtool.exe`）。
+   - **macOS**：Go 1.25+、Node.js 22+、Git、Xcode Command Line Tools（`codesign`、`ditto`）、可选 UPX。
+   - **Linux**：Go 1.25+、Node.js 22+、Git、`tar`、UPX、Wails 构建依赖（GTK3 + WebKit2GTK）、可选 `gpg`、可选 `gitleaks`。
 
 安全检查需要访问 Go 模块代理与 npm registry，用于安装 `govulncheck` 和执行 `npm audit`。
 
@@ -64,7 +64,7 @@ Wails CLI 由发布脚本自动安装。
 
 每个平台构建都会：
 
-1. 校验 `wails.json`、`package.json`、`app.go` 等版本字段。
+1. 校验 `wails.json`、`package.json`、`internal/app/app.go` 等版本字段。
 2. 强制要求官方产品配置，通过 `-tags mgl_private` 注入产品 Key 与授权服务地址。
 3. `-trimpath`、`-s -w`、启用调试器检测。
 4. 按平台加壳/签名/打包。
@@ -102,15 +102,17 @@ Wails CLI 由发布脚本自动安装。
 | `env.MGL_PFX_PATH` | 是 | Authenticode PFX 路径 |
 | `env.MGL_SIGN_PFX_PASSWORD` | 是 | PFX 密码（Password） |
 | `env.MGL_UPX_PATH` | 否 | `upx.exe` 路径；默认自动查找 |
+| `env.MGL_WINDOWS_TIMESTAMP_URL` | 否 | 默认空；自签名证书留空，使用受信任证书时可填 `https://timestamp.digicert.com` |
+| `env.MGL_WINDOWS_TRUST_SELF_SIGNED` | 否 | 默认 `true`；自签名证书会导入当前用户 Root/TrustedPublisher 以便 verify |
 
-Windows 构建**强制** UPX 加壳，并在加壳后执行 Authenticode 签名与验证。
+Windows 构建**强制** UPX 加壳，并在加壳后执行 Authenticode 签名与验证。`env.MGL_WINDOWS_TIMESTAMP_URL` 为空时不请求公网时间戳，避免自签名证书构建卡住或失败。
 
 ### macOS
 
 | 参数 | 必填 | 说明 |
 | --- | --- | --- |
 | `env.MGL_MACOS_SIGN_IDENTITY` | 否 | `codesign` 身份名称；留空则产物未签名 |
-| `env.MGL_MACOS_TIMESTAMP` | 否 | 默认 `true`；自签名证书无法联网时间戳时可设为 `false` |
+| `env.MGL_MACOS_TIMESTAMP` | 否 | 默认 `false`；使用自签名证书时保持关闭，使用受信任 Apple 身份时可设为 `true` |
 | `env.MGL_UPX` | 否 | 默认 `false`；设为 `true` 会在签名前对主二进制加壳 |
 
 macOS 构建生成 `.app` 并压缩为 zip。设置签名身份后执行 hardened runtime 深度签名与验证。
