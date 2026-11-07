@@ -184,7 +184,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for name in MACOS_CERTIFICATE_BASE64 MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY; do
+          for name in MACOS_CERTIFICATE_BASE64 MACOS_SIGNING_IDENTITY; do
             if [ -z "${!name:-}" ]; then
               echo "::error::$name secret is missing"
               exit 1
@@ -196,14 +196,19 @@ jobs:
             echo "::error::macOS app bundle is missing: $APP"
             exit 1
           fi
-          CERT="$RUNNER_TEMP/macos-cert.p12"
-          printf '%s' "$MACOS_CERTIFICATE_BASE64" | python3 -c 'import base64,sys;sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' > "$CERT"
+          PEM="$RUNNER_TEMP/macos-signing.pem"
+          KEY="$RUNNER_TEMP/macos-signing-key.pem"
+          CERT_ONLY="$RUNNER_TEMP/macos-signing-cert.pem"
+          printf '%s' "$MACOS_CERTIFICATE_BASE64" | python3 -c 'import base64,sys;sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' > "$PEM"
+          openssl pkey -in "$PEM" -out "$KEY"
+          openssl x509 -in "$PEM" -out "$CERT_ONLY"
           KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
           KC_PASS="$(openssl rand -hex 16)"
           security create-keychain -p "$KC_PASS" "$KEYCHAIN"
           security set-keychain-settings -lut 21600 "$KEYCHAIN"
           security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
-          security import "$CERT" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security import "$KEY" -k "$KEYCHAIN" -f pem -T /usr/bin/codesign
+          security import "$CERT_ONLY" -k "$KEYCHAIN" -f pem
           security set-key-partition-list -S apple-tool:,apple: -s -k "$KC_PASS" "$KEYCHAIN" >/dev/null
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
@@ -222,7 +227,7 @@ jobs:
         shell: bash
         run: |
           if [ -n "${KEYCHAIN:-}" ]; then security delete-keychain "$KEYCHAIN" || true; fi
-          rm -f "$RUNNER_TEMP/macos-cert.p12"
+          rm -f "$RUNNER_TEMP/macos-signing.pem" "$RUNNER_TEMP/macos-signing-key.pem" "$RUNNER_TEMP/macos-signing-cert.pem"
 
       - name: Package Linux
         if: runner.os == 'Linux'
