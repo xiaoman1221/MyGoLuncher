@@ -85,7 +85,7 @@ jobs:
           - os: windows-latest
             platform: windows/amd64
             artifact: windows-amd64
-          - os: macos-14
+          - os: macos-15
             platform: darwin/universal
             artifact: macos-universal
           - os: ubuntu-22.04
@@ -152,6 +152,7 @@ jobs:
 
       - name: Sign and package Windows
         if: runner.os == 'Windows'
+        timeout-minutes: 10
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -163,7 +164,7 @@ jobs:
           $pfx = Join-Path $env:RUNNER_TEMP 'code-signing.pfx'
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
           $env:MGL_SIGN_PFX_PASSWORD = $env:WINDOWS_PFX_PASSWORD
-          & .\scripts\sign-windows.ps1 -Exe $exe -PfxPath $pfx -TimestampUrl "" -TrustSelfSigned
+          & .\scripts\sign-windows.ps1 -Exe $exe -PfxPath $pfx -TimestampUrl "" -SkipVerify
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item -LiteralPath $exe -Destination "dist/MyGoLuncher-$version-windows-amd64.exe" -Force
           $stage = Join-Path $env:RUNNER_TEMP 'windows-package'

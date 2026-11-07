@@ -1,8 +1,9 @@
-﻿param(
+param(
   [Parameter(Mandatory = $false)][string]$Exe = "",
   [Parameter(Mandatory = $true)][string]$PfxPath,
   [string]$TimestampUrl = "",
-  [switch]$TrustSelfSigned
+  [switch]$TrustSelfSigned,
+  [switch]$SkipVerify
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,9 +42,15 @@ if (-not [string]::IsNullOrWhiteSpace($TimestampUrl)) {
   $signArgs += @("/tr", $TimestampUrl, "/td", "SHA256")
 }
 $signArgs += $Exe
+Write-Host "调用 signtool sign"
 & $signtool.FullName @signArgs
 if ($LASTEXITCODE -ne 0) { throw "signtool sign 失败，退出码 $LASTEXITCODE" }
+Write-Host "signtool sign 完成"
 
-& $signtool.FullName verify /pa /v $Exe
-if ($LASTEXITCODE -ne 0) { throw "签名验证失败，退出码 $LASTEXITCODE" }
-Write-Host "签名并验证完成"
+if (-not $SkipVerify) {
+  & $signtool.FullName verify /pa /v $Exe
+  if ($LASTEXITCODE -ne 0) { throw "签名验证失败，退出码 $LASTEXITCODE" }
+  Write-Host "签名并验证完成"
+} else {
+  Write-Host "已跳过 signtool verify（自签名证书）"
+}
