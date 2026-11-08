@@ -1,6 +1,6 @@
 # OTA 自动发布
 
-GitHub Actions 在三个平台构建完成后，会登录 LicensingGo、上传安装包，并更新产品的 OTA 清单。清单中的下载地址指向授权系统/CDN，**不依赖私有 GitHub Release 链接**。
+GitHub Actions 在三个平台构建完成后，会用产品 API Key 上传安装包，再用管理员会话更新 OTA 清单。清单中的下载地址指向授权系统/CDN，**不依赖私有 GitHub Release 链接**。
 
 流程定义在 `.github/workflows/release.yml` 的 `publish-ota` job，脚本为 `scripts/publish-ota.mjs`。
 
@@ -32,12 +32,13 @@ GitHub Actions 在三个平台构建完成后，会登录 LicensingGo、上传�
 | Secret | 说明 |
 | --- | --- |
 | `MGL_PRODUCT_SERVER_URL` | LicensingGo 服务地址，HTTPS |
+| `MGL_PRODUCT_API_KEY` | 产品 API Key，用于 `POST /api/v1/update/packages` 上传 |
 | `MGL_LICENSE_ADMIN_USERNAME` | 控制台管理员用户名 |
 | `MGL_LICENSE_ADMIN_PASSWORD` | 控制台管理员密码 |
 
 也可以用 `MGL_LICENSE_ADMIN_TOKEN` 直接提供控制台会话令牌；令牌优先于用户名密码。
 
-管理员账号只需要能访问产品、上传 OTA 和保存 OTA 清单，建议使用专用账号。
+产品 Key 负责上传；管理员会话只用于查找产品和保存 OTA 清单，建议使用专用账号。
 
 ## 可选 Variables
 
@@ -62,10 +63,10 @@ GitHub Actions 在三个平台构建完成后，会登录 LicensingGo、上传�
 | `MyGoLuncher-<version>-linux-amd64.tar.gz` | `app.linux.x64` |
 | `MyGoLuncher-<version>-web.zip`（如果存在） | `web.any.any` |
 
-- 每次都通过 `POST /api/v1/uploads/ota` 上传文件，服务端返回 URL、SHA-256 与大小。
+- 每次都通过 `POST /api/v1/update/packages` 上传文件（`X-API-Key` 产品 Key），并带上 `kind`、`os`、`arch`。
 - 上传后脚本会再次校验服务端返回的哈希和大小。
 - 脚本保留旧清单中的 `web` 和未重新上传的平台包，只替换本次上传的 OS/架构。
-- 最后调用 `PUT /api/v1/products/:id/ota` 保存清单。
+- 最后用管理员会话调用 `PUT /api/v1/products/:id/ota` 保存清单。
 
 ## 前提条件
 
@@ -73,7 +74,7 @@ GitHub Actions 在三个平台构建完成后，会登录 LicensingGo、上传�
 - `uploads.allowed_extensions` 包含 `.exe`、`.zip`、`.tar.gz`。
 - `uploads.public_base_url` / S3 CDN 地址是 HTTPS，客户端才能下载。
 - 产品已存在；如果不知道产品 ID，请设置 `MGL_PRODUCT_SLUG` 或 `MGL_PRODUCT_ID`。
-- 管理员账号可以访问 `/api/v1/products` 与 `/api/v1/uploads/ota`。
+- 产品 API Key 对应目标产品；管理员账号可以访问 `/api/v1/products` 与 `/api/v1/products/:id/ota`。
 
 ## 回滚
 
@@ -83,4 +84,4 @@ GitHub Actions 在三个平台构建完成后，会登录 LicensingGo、上传�
 DELETE /api/v1/products/:id/ota
 ```
 
-上传过的文件不会自动删除，可保留用于回滚。
+LicensingGo 会以清单作为保留策略：保存新清单后，不再被引用的上传文件会被自动清理。要保留旧版本用于回滚，请把旧包复制到自有 CDN 并使用外部 URL，或在发布前另行备份。

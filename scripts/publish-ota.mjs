@@ -22,9 +22,22 @@ function envValue(...names) {
 }
 
 function fail(message) {
+  const text = String(message).replace(/\r?\n/g, ' ');
+  if (process.env.GITHUB_ACTIONS === 'true') {
+    // Surface the real reason as a GitHub Actions annotation instead of only
+    // "Process completed with exit code 1".
+    console.log(`::error::${text}`);
+  }
   console.error(`ERROR: ${message}`);
   process.exit(1);
 }
+
+process.on('unhandledRejection', (reason) => {
+  fail(reason instanceof Error ? reason.message : String(reason));
+});
+process.on('uncaughtException', (error) => {
+  fail(error instanceof Error ? error.message : String(error));
+});
 
 const version = (argValue('--version') || envValue('MGL_OTA_VERSION') || '').replace(/^v/, '').trim();
 if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
@@ -42,6 +55,9 @@ try {
 if (parsed.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(parsed.hostname)) {
   fail('授权系统地址必须使用 HTTPS');
 }
+
+const productAPIKey = envValue('MGL_PRODUCT_API_KEY');
+if (!productAPIKey) fail('缺少 MGL_PRODUCT_API_KEY（用于上传 OTA 安装包）');
 
 const productID = envValue('MGL_PRODUCT_ID', 'LICENSINGGO_PRODUCT_ID');
 const productSlug = envValue('MGL_PRODUCT_SLUG') || 'MyGo';
@@ -138,6 +154,34 @@ function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
+// Upload through the product-key endpoint. The admin session is only needed
+// later to write the manifest, so CI does not need to store an admin token for
+// the upload step itself.
+async function uploadPackage(artifact, expectedProductID) {
+  const data = readFileSync(artifact.file);
+  const form = new FormData();
+  form.append('kind', artifact.kind);
+  form.append('os', artifact.os);
+  form.append('arch', artifact.arch);
+  form.append('product_id', expectedProductID);
+  form.append('file', new Blob([data], { type: 'application/octet-stream' }), basename(artifact.file));
+  const response = await fetch(`${server}/api/v1/update/packages`, {
+    method: 'POST',
+    headers: { 'X-API-Key': productAPIKey, Accept: 'application/json' },
+    body: form,
+  });
+  const text = await response.text();
+  let body = null;
+  if (text) {
+    try { body = JSON.parse(text); } catch { body = text; }
+  }
+  if (!response.ok) {
+    const detail = typeof body === 'string' ? body : JSON.stringify(body);
+    throw new Error(`POST /api/v1/update/packages -> HTTP ${response.status}: ${String(detail).slice(0, 600)}`);
+  }
+  return body;
+}
+
 const artifacts = [
   {
     kind: 'app', os: 'windows', arch: 'x64', required: true,
@@ -195,12 +239,7 @@ console.log(`版本: ${version}`);
 for (const artifact of present) {
   const localHash = sha256(artifact.file);
   const localSize = statSync(artifact.file).size;
-  const form = new FormData();
-  form.append('product_id', resolvedProductID);
-  form.append('kind', artifact.kind);
-  form.append('file', new Blob([readFileSync(artifact.file)], { type: 'application/octet-stream' }), basename(artifact.file));
-
-  const uploaded = await request('/api/v1/uploads/ota', { method: 'POST', body: form });
+  const uploaded = await uploadPackage(artifact, resolvedProductID);
   if (!uploaded?.url || !uploaded?.sha256 || !uploaded?.size) {
     fail(`上传 ${basename(artifact.file)} 后服务端返回不完整`);
   }

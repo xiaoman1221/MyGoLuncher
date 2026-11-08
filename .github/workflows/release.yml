@@ -391,6 +391,7 @@ jobs:
     env:
       VERSION: ${{ needs.meta.outputs.version }}
       MGL_PRODUCT_SERVER_URL: ${{ secrets.MGL_PRODUCT_SERVER_URL }}
+      MGL_PRODUCT_API_KEY: ${{ secrets.MGL_PRODUCT_API_KEY }}
       MGL_PRODUCT_NAME: ${{ vars.MGL_PRODUCT_NAME }}
       MGL_PRODUCT_SLUG: ${{ vars.MGL_PRODUCT_SLUG }}
       MGL_PRODUCT_ID: ${{ vars.MGL_PRODUCT_ID }}
@@ -415,6 +416,30 @@ jobs:
           pattern: release-*
           merge-multiple: true
           path: dist
+
+      - name: Validate OTA publishing configuration
+        shell: bash
+        run: |
+          set -u
+          missing=0
+          if [ -z "${MGL_PRODUCT_SERVER_URL:-}" ]; then
+            echo "::error::Missing secret MGL_PRODUCT_SERVER_URL"
+            missing=1
+          fi
+          if [ -z "${MGL_PRODUCT_API_KEY:-}" ]; then
+            echo "::error::Missing secret MGL_PRODUCT_API_KEY"
+            missing=1
+          fi
+          if [ -z "${MGL_PRODUCT_ID:-}" ] && [ -z "${MGL_PRODUCT_SLUG:-}" ]; then
+            echo "::warning::MGL_PRODUCT_ID and MGL_PRODUCT_SLUG are empty; falling back to MyGo"
+          fi
+          if [ -z "${MGL_LICENSE_ADMIN_TOKEN:-}" ]; then
+            if [ -z "${MGL_LICENSE_ADMIN_USERNAME:-}" ] || [ -z "${MGL_LICENSE_ADMIN_PASSWORD:-}" ]; then
+              echo "::error::Set MGL_LICENSE_ADMIN_TOKEN or both MGL_LICENSE_ADMIN_USERNAME and MGL_LICENSE_ADMIN_PASSWORD"
+              missing=1
+            fi
+          fi
+          exit "$missing"
 
       - name: Upload files and update OTA
         shell: bash
