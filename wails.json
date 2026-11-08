@@ -13,7 +13,7 @@
   "info": {
     "companyName": "MyGoLuncher",
     "productName": "MyGoLuncher",
-    "productVersion": "1.0.5",
+    "productVersion": "1.5.1",
     "copyright": "Not affiliated with Mojang Studios or Microsoft.",
     "comments": "A cross-platform Minecraft launcher built with Go and Wails."
   }

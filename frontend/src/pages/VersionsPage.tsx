@@ -204,6 +204,9 @@ export function VersionsPage() {
         ...current,
         versions: current.versions.map((entry) => entry.id === version.id ? { ...entry, installed: true } : entry),
       } : current);
+      // Re-fetch from the backend so the installed state is authoritative and
+      // other rows (snapshots, shared versions) are refreshed too.
+      setReloadKey((value) => value + 1);
       pushToast('success', t('versions.installDone'), t('versions.installDoneDetail', { id: version.id }));
     } catch (reason) {
       pushToast('error', t('versions.installFailed'), (reason as Error).message);

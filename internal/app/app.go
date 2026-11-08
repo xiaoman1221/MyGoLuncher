@@ -41,7 +41,7 @@ import (
 	"MyMinecraftGoLuncher/internal/tray"
 )
 
-const appVersion = "1.0.5"
+const appVersion = "1.5.1"
 
 // App binds backend services to the Wails frontend.
 type App struct {
