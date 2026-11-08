@@ -38,6 +38,8 @@ GitHub Actions 在三个平台构建完成后，会用产品 API Key 上传安�
 
 也可以用 `MGL_LICENSE_ADMIN_TOKEN` 直接提供控制台会话令牌；令牌优先于用户名密码。
 
+> `MGL_LICENSE_ADMIN_TOKEN` 必须是 `POST /api/v1/auth/login` 返回的控制台 JWT，**不能填写 `MGL_PRODUCT_API_KEY`**。`PUT /api/v1/products/:id/ota` 只接受控制台 JWT + admin 角色，产品 Key 仅用于上传安装包。JWT 会过期，CI 推荐使用 `MGL_LICENSE_ADMIN_USERNAME` + `MGL_LICENSE_ADMIN_PASSWORD` 自动登录。
+
 产品 Key 负责上传；管理员会话只用于查找产品和保存 OTA 清单，建议使用专用账号。
 
 ## 可选 Variables

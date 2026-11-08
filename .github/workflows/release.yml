@@ -433,6 +433,10 @@ jobs:
           if [ -z "${MGL_PRODUCT_ID:-}" ] && [ -z "${MGL_PRODUCT_SLUG:-}" ]; then
             echo "::warning::MGL_PRODUCT_ID and MGL_PRODUCT_SLUG are empty; falling back to MyGo"
           fi
+          if [ -n "${MGL_LICENSE_ADMIN_TOKEN:-}" ] && [ "${MGL_LICENSE_ADMIN_TOKEN:-}" = "${MGL_PRODUCT_API_KEY:-}" ]; then
+            echo "::error::MGL_LICENSE_ADMIN_TOKEN must be a console JWT, not MGL_PRODUCT_API_KEY"
+            missing=1
+          fi
           if [ -z "${MGL_LICENSE_ADMIN_TOKEN:-}" ]; then
             if [ -z "${MGL_LICENSE_ADMIN_USERNAME:-}" ] || [ -z "${MGL_LICENSE_ADMIN_PASSWORD:-}" ]; then
               echo "::error::Set MGL_LICENSE_ADMIN_TOKEN or both MGL_LICENSE_ADMIN_USERNAME and MGL_LICENSE_ADMIN_PASSWORD"

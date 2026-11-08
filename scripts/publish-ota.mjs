@@ -75,6 +75,9 @@ if (updateTag && ![...forceTags, ...mandatoryTags, ...optionalTags].includes(upd
 let token = envValue('MGL_LICENSE_ADMIN_TOKEN', 'LICENSINGGO_CONSOLE_TOKEN');
 const username = envValue('MGL_LICENSE_ADMIN_USERNAME', 'LICENSINGGO_ADMIN_USERNAME', 'MGL_ADMIN_USERNAME');
 const password = envValue('MGL_LICENSE_ADMIN_PASSWORD', 'LICENSINGGO_ADMIN_PASSWORD', 'MGL_ADMIN_PASSWORD');
+if (token && productAPIKey && token === productAPIKey) {
+  fail('MGL_LICENSE_ADMIN_TOKEN 不能与 MGL_PRODUCT_API_KEY 相同：产品 Key 不能用于 PUT /products/:id/ota，请使用管理员用户名/密码或控制台登录得到的 JWT');
+}
 if (!token && (!username || !password)) {
   fail('缺少管理员凭据：请配置 MGL_LICENSE_ADMIN_USERNAME / MGL_LICENSE_ADMIN_PASSWORD 或 MGL_LICENSE_ADMIN_TOKEN');
 }
