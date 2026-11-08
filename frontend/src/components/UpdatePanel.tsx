@@ -1,14 +1,30 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Download, LoaderCircle, RefreshCw, RotateCcw, Sparkles, TriangleAlert, Zap } from 'lucide-react';
 import { api } from '../lib/api';
 import { useApp } from '../lib/app-context';
-import type { UpdateInfo } from '../lib/types';
+import { onEvent } from '../lib/events';
+import type { UpdateInfo, UpdateProgress } from '../lib/types';
+import { UpdateProgressBar } from './UpdateProgressBar';
 
 export function UpdatePanel({ className = '' }: { className?: string }) {
   const { bootstrap, t, pushToast, confirm } = useApp();
   const [info, setInfo] = useState<UpdateInfo | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState('');
+  const [progress, setProgress] = useState<UpdateProgress | null>(null);
+
+  useEffect(() => onEvent<UpdateProgress>('update:progress', (next) => {
+    setProgress(next);
+  }), []);
+
+  // Show the current cloud policy without requiring an extra click.
+  useEffect(() => {
+    let alive = true;
+    api.checkForUpdates()
+      .then((next) => { if (alive) setInfo(next); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   const runningGames = (bootstrap?.instances ?? []).filter((instance) => instance.running).length;
   const canUpdate = () => {
@@ -22,9 +38,11 @@ export function UpdatePanel({ className = '' }: { className?: string }) {
   const run = async (action: string, task: () => Promise<string | void>) => {
     setBusy(action);
     setError('');
+    setProgress(null);
     try {
       await task();
     } catch (reason) {
+      setProgress(null);
       setError((reason as Error).message);
     } finally {
       setBusy(null);
@@ -136,6 +154,8 @@ export function UpdatePanel({ className = '' }: { className?: string }) {
             </button>
           </div>
         )}
+
+        {progress && <UpdateProgressBar progress={progress} />}
 
         {info?.mandatory && <p className="license-message">{t('settings.updateMandatory')}</p>}
         {info?.force && <p className="license-message">{t('settings.updateForce')}</p>}

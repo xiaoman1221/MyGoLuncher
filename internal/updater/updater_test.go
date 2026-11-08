@@ -10,10 +10,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -223,7 +227,7 @@ func TestCheckAndApplyWebUpdateFromAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.Configured || !info.Available || !info.HasWeb || !info.Force {
+	if !info.Configured || !info.Available || !info.HasWeb || !info.Force || info.Tag != "force" {
 		t.Fatalf("unexpected API update info: %#v", info)
 	}
 	root := t.TempDir()
@@ -252,5 +256,33 @@ func TestAPINoUpdateIsNotAnError(t *testing.T) {
 	}
 	if !info.Configured || info.Available {
 		t.Fatalf("unexpected no-update info: %#v", info)
+	}
+}
+
+func TestApplyUpdateScriptHasUTF8BOMAndHashCheck(t *testing.T) {
+	content := applyUpdateScriptContent()
+	if !strings.HasPrefix(content, "\ufeff") {
+		t.Fatal("update script must start with a UTF-8 BOM for Windows PowerShell 5.1")
+	}
+	for _, required := range []string{"ExpectedSHA256", "Get-FileHash", "Start-Process"} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("update script is missing %q", required)
+		}
+	}
+}
+
+func TestApplyUpdateScriptParsesWithWindowsPowerShell(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows PowerShell is only available on Windows")
+	}
+	path := filepath.Join(t.TempDir(), "apply-update.ps1")
+	if err := os.WriteFile(path, []byte(applyUpdateScriptContent()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	quoted := strings.ReplaceAll(path, "'", "''")
+	script := fmt.Sprintf("$e=$null; [System.Management.Automation.Language.Parser]::ParseFile('%s',[ref]$null,[ref]$e)|Out-Null; if($e.Count){$e|%%{$_.Message}; exit 1}", quoted)
+	output, err := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("Windows PowerShell could not parse the update helper: %v\n%s", err, output)
 	}
 }

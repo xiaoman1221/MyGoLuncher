@@ -6,11 +6,23 @@ on:
       version:
         description: 'Release version without the v prefix'
         required: true
-        default: '1.0.4'
+        default: '1.4.1'
       publish:
         description: 'Create the GitHub Release after all builds succeed'
         type: boolean
         default: false
+      update_ota:
+        description: 'Upload artifacts and update the LicensingGo OTA manifest'
+        type: boolean
+        default: true
+      ota_tag:
+        description: 'Update policy tag'
+        type: choice
+        options:
+          - optional
+          - mandatory
+          - force
+        default: optional
 
 permissions:
   contents: write
@@ -62,6 +74,19 @@ jobs:
         run: |
           go test -count=1 ./...
           go vet ./...
+
+      - name: Package web hot update
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          (cd frontend/dist && zip -r -q "$GITHUB_WORKSPACE/dist/MyGoLuncher-$VERSION-web.zip" .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-web
+          path: dist/MyGoLuncher-$VERSION-web.zip
+          if-no-files-found: error
 
   build:
     name: Build ${{ matrix.artifact }}
@@ -150,6 +175,22 @@ jobs:
         shell: bash
         run: rm -f internal/license/product_private.go
 
+      - name: Install UPX (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $upx = 'C:\ProgramData\chocolatey\bin\upx.exe'
+          if (-not (Test-Path -LiteralPath $upx)) {
+            choco install upx -y --no-progress
+          }
+          if (-not (Test-Path -LiteralPath $upx)) {
+            $command = Get-Command upx.exe -ErrorAction SilentlyContinue
+            if ($command) { $upx = $command.Source }
+          }
+          if (-not (Test-Path -LiteralPath $upx)) { throw 'UPX installation failed' }
+          "MGL_UPX_PATH=$upx" >> $env:GITHUB_ENV
+
       - name: Sign and package Windows
         if: runner.os == 'Windows'
         timeout-minutes: 10
@@ -161,6 +202,17 @@ jobs:
           $version = $env:VERSION
           $exe = 'build/bin/MyMinecraftGoLuncher.exe'
           if (-not (Test-Path -LiteralPath $exe)) { throw "build output missing: $exe" }
+          $upx = $env:MGL_UPX_PATH
+          if ([string]::IsNullOrWhiteSpace($upx) -or -not (Test-Path -LiteralPath $upx)) {
+            throw 'UPX is required to compress the Windows artifact'
+          }
+          & $upx --best --lzma --backup $exe
+          if ($LASTEXITCODE -ne 0) { throw "UPX packing failed with exit code $LASTEXITCODE" }
+          & $upx -t $exe
+          if ($LASTEXITCODE -ne 0) { throw "UPX integrity test failed with exit code $LASTEXITCODE" }
+          if (-not ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($exe))).Contains('UPX!')) {
+            throw 'Windows artifact is not UPX-packed'
+          }
           $pfx = Join-Path $env:RUNNER_TEMP 'code-signing.pfx'
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_PFX_BASE64))
           $env:MGL_SIGN_PFX_PASSWORD = $env:WINDOWS_PFX_PASSWORD
@@ -263,6 +315,45 @@ jobs:
           name: release-${{ matrix.artifact }}
           path: dist
           if-no-files-found: error
+
+  publish-ota:
+    name: Upload artifacts and update LicensingGo OTA
+    needs: [build]
+    if: ${{ inputs.update_ota }}
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ inputs.version }}
+      MGL_PRODUCT_SERVER_URL: ${{ secrets.MGL_PRODUCT_SERVER_URL }}
+      MGL_PRODUCT_NAME: ${{ vars.MGL_PRODUCT_NAME }}
+      MGL_PRODUCT_SLUG: ${{ vars.MGL_PRODUCT_SLUG }}
+      MGL_PRODUCT_ID: ${{ vars.MGL_PRODUCT_ID }}
+      MGL_LICENSE_ADMIN_USERNAME: ${{ secrets.MGL_LICENSE_ADMIN_USERNAME }}
+      MGL_LICENSE_ADMIN_PASSWORD: ${{ secrets.MGL_LICENSE_ADMIN_PASSWORD }}
+      MGL_LICENSE_ADMIN_TOKEN: ${{ secrets.MGL_LICENSE_ADMIN_TOKEN }}
+      MGL_OTA_TAG: ${{ inputs.ota_tag }}
+      MGL_OTA_MIN_VERSION: ${{ vars.MGL_OTA_MIN_VERSION }}
+      MGL_OTA_NOTES: ${{ vars.MGL_OTA_NOTES }}
+      MGL_OTA_MANDATORY: ${{ vars.MGL_OTA_MANDATORY }}
+      MGL_OTA_FORCE: ${{ vars.MGL_OTA_FORCE }}
+      MGL_OTA_ALLOW_PARTIAL: ${{ vars.MGL_OTA_ALLOW_PARTIAL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Upload files and update OTA
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/publish-ota.mjs --version "$VERSION"
 
   release:
     name: Publish GitHub Release

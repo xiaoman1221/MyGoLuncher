@@ -98,6 +98,7 @@ MyGoLuncher 的功能清单、免费/付费边界与已知限制。快速开始�
 ### 更新
 
 - 官方构建通过 LicensingGo 的 `GET /api/v1/update` 查询 OTA 清单，校验 URL、SHA256 与大小。
+- 启动时自动检查更新：`force` 全局阻断并要求更新，`mandatory` 显示一次普通提示，`optional` 仅在关于页显示。
 - 前端热更新解压到 `MGL/web`，旧版本保留为 `MGL/web.old` 可回滚。
 - 完整更新在退出后替换 exe，旧文件保留为 `.bak`。
 - 社区构建没有产品 Key 与授权服务地址，付费入口显示 PRO 提示。

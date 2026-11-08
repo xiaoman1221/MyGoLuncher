@@ -13,6 +13,7 @@ interface ModalProps {
   footer?: ReactNode;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   closeable?: boolean;
+  overlayClassName?: string;
 }
 
 export function Modal({
@@ -25,6 +26,7 @@ export function Modal({
   footer,
   size = 'md',
   closeable = true,
+  overlayClassName = '',
 }: ModalProps) {
   const { t } = useApp();
   const titleId = useId();
@@ -70,7 +72,7 @@ export function Modal({
   if (!open) return null;
 
   return createPortal(
-    <div className="modal-layer" onMouseDown={(event) => {
+    <div className={`modal-layer ${overlayClassName}`.trim()} onMouseDown={(event) => {
       if (event.target === event.currentTarget && closeable) onClose();
     }}>
       <div

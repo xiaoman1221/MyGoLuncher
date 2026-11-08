@@ -164,6 +164,11 @@
   animation: fadeIn 0.18s ease;
 }
 
+/* Forced OTA updates must stay above the launch overlay and console. */
+.modal-layer-forced {
+  z-index: 2000;
+}
+
 .modal-card {
   position: relative;
   display: flex;

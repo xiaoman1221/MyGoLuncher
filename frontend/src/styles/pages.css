@@ -2436,6 +2436,51 @@
   gap: 8px;
 }
 
+.forced-update-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.update-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--input-bg);
+}
+
+.update-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-soft);
+  font-size: 12.5px;
+}
+
+.update-progress-head strong {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.update-progress-track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+
+.update-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2, var(--accent)));
+  transition: width 0.15s linear;
+}
+
 
 /* ---- Elevated/root warning ---- */
 .elevation-icon {

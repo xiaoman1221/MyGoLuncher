@@ -140,6 +140,14 @@ export interface LicenseStatus {
   trialEndsAt?: string;
 }
 
+export interface UpdateProgress {
+  kind: 'app' | 'web';
+  stage: 'download' | 'verify' | 'extract' | 'prepare' | 'restart' | 'done' | string;
+  current: number;
+  total: number;
+  percent: number;
+}
+
 export interface UpdateInfo {
   configured: boolean;
   currentVersion: string;
@@ -148,6 +156,7 @@ export interface UpdateInfo {
   notes?: string;
   mandatory: boolean;
   force?: boolean;
+  tag?: 'force' | 'mandatory' | 'optional';
   available: boolean;
   hasWeb: boolean;
   hasApp: boolean;

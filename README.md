@@ -87,6 +87,7 @@ cd frontend && npm run build
 
 - [Function.md](Function.md)：功能说明、免费/付费边界与已知限制
 - [.github/workflows/release.yml](.github/workflows/release.yml)：GitHub Actions 三平台官方签名发布
+- [docs/OTA_PUBLISH.md](docs/OTA_PUBLISH.md)：构建完成后上传安装包并更新授权系统 OTA
 - [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)、[TRADEMARK.md](TRADEMARK.md)、[CLA.md](CLA.md)
 
 ## 声明

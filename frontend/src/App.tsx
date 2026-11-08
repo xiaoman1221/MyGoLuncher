@@ -30,6 +30,7 @@ import type {
   PageKey,
   Settings,
   Theme,
+  UpdateInfo,
 } from './lib/types';
 import { Sidebar } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
@@ -47,6 +48,7 @@ import { LaunchOverlay } from './components/LaunchOverlay';
 import { LicenseGate } from './components/LicenseGate';
 import { ElevationGate } from './components/ElevationGate';
 import { ExitConfirmModal } from './components/ExitConfirmModal';
+import { ForcedUpdateModal } from './components/ForcedUpdateModal';
 import { PaidFeaturePage } from './components/PaidFeaturePage';
 import { HomePage } from './pages/HomePage';
 import { VersionsPage } from './pages/VersionsPage';
@@ -85,6 +87,7 @@ export default function App() {
   const [launchPhase, setLaunchPhase] = useState<'preparing' | 'waiting'>('preparing');
   const [licenseOpen, setLicenseOpen] = useState(false);
   const [exitOpen, setExitOpen] = useState(false);
+  const [forcedUpdate, setForcedUpdate] = useState<UpdateInfo | null>(null);
   const [confirmOptions, setConfirmOptions] = useState<ConfirmOptions | null>(null);
   const confirmResolver = useRef<((value: boolean) => void) | null>(null);
   const licenseActive = ['active', 'grace', 'trial'].includes(bootstrap?.license?.state ?? '');
@@ -93,6 +96,7 @@ export default function App() {
   const toastId = useRef(0);
   const toastTimers = useRef(new Map<number, number>());
   const settingsRef = useRef<Settings | null>(null);
+  const startupUpdateChecked = useRef(false);
   const instancesRef = useRef<InstanceView[]>([]);
 
   useEffect(() => {
@@ -400,6 +404,36 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [launchingId]);
 
+  // Startup OTA check. License validation already runs in the backend; this
+  // adds the cloud update policy check. force -> global modal, mandatory ->
+  // non-blocking toast, optional -> only the About update panel.
+  useEffect(() => {
+    if (!bootstrap || bootError || elevationBlocked || startupUpdateChecked.current) return;
+    startupUpdateChecked.current = true;
+    let alive = true;
+    api.checkForUpdates()
+      .then((next) => {
+        if (!alive || !next.available) return;
+        if (next.force) {
+          setForcedUpdate(next);
+          return;
+        }
+        if (next.mandatory) {
+          const version = next.version ?? next.appVersion ?? next.webVersion ?? '';
+          const noticeKey = `mgl-update-notice-${version}`;
+          if (!window.localStorage.getItem(noticeKey)) {
+            window.localStorage.setItem(noticeKey, '1');
+            pushToast('info', t('settings.updateAvailable', { version }), next.notes || undefined, {
+              label: t('settings.updateView'),
+              onClick: () => setPage('about'),
+            });
+          }
+        }
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [Boolean(bootstrap), Boolean(bootError), elevationBlocked, pushToast, t]);
+
   const instances = bootstrap?.instances ?? [];
   const settings = bootstrap?.settings ?? null;
   const accounts = bootstrap?.accounts ?? [];
@@ -574,6 +608,7 @@ export default function App() {
       )}
 
       <ExitConfirmModal open={exitOpen} onClose={() => setExitOpen(false)} />
+      {forcedUpdate && <ForcedUpdateModal info={forcedUpdate} />}
     </AppContext.Provider>
   );
 }

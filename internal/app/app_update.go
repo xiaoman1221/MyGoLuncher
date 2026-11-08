@@ -84,7 +84,9 @@ func (a *App) ApplyWebUpdate() (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(a.context(), 30*time.Minute)
 	defer cancel()
-	path, err := updater.ApplyWeb(ctx, a.paths.Root)
+	path, err := updater.ApplyWebWithProgress(ctx, a.paths.Root, func(progress updater.Progress) {
+		a.emitUpdateProgress("web", progress)
+	})
 	if err != nil {
 		return "", err
 	}
@@ -92,6 +94,18 @@ func (a *App) ApplyWebUpdate() (string, error) {
 		runtime.WindowReload(a.ctx)
 	}
 	return path, nil
+}
+
+type updateProgressEvent struct {
+	Kind string `json:"kind"`
+	updater.Progress
+}
+
+func (a *App) emitUpdateProgress(kind string, progress updater.Progress) {
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "update:progress", updateProgressEvent{Kind: kind, Progress: progress})
 }
 
 // ApplyAppUpdate downloads a signed executable and starts the detached
@@ -109,7 +123,9 @@ func (a *App) ApplyAppUpdate() (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(a.context(), 30*time.Minute)
 	defer cancel()
-	script, err := updater.ApplyAppWithGuard(ctx, a.paths.Root, exe, appVersion, a.ensureNoRunningGames)
+	script, err := updater.ApplyAppWithGuardProgress(ctx, a.paths.Root, exe, appVersion, a.ensureNoRunningGames, func(progress updater.Progress) {
+		a.emitUpdateProgress("app", progress)
+	})
 	if err != nil {
 		return "", err
 	}

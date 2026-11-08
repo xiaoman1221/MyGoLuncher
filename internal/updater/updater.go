@@ -64,6 +64,31 @@ func (a Artifact) Valid() bool {
 	return strings.TrimSpace(a.URL) != "" && strings.TrimSpace(a.SHA256) != ""
 }
 
+// Progress reports update download/apply progress to the UI.
+type Progress struct {
+	Stage   string  `json:"stage"`
+	Current int64   `json:"current"`
+	Total   int64   `json:"total"`
+	Percent float64 `json:"percent"`
+}
+
+// ProgressFunc receives throttled update progress callbacks.
+type ProgressFunc func(Progress)
+
+func reportProgress(progress ProgressFunc, stage string, current, total int64) {
+	if progress == nil {
+		return
+	}
+	percent := -1.0
+	if total > 0 {
+		percent = float64(current) / float64(total) * 100
+		if percent > 100 {
+			percent = 100
+		}
+	}
+	progress(Progress{Stage: stage, Current: current, Total: total, Percent: percent})
+}
+
 // ArtifactFamily is the LicensingGo platform map:
 // OS -> architecture -> artifact. It also accepts the legacy single-artifact
 // shape returned by older manifests.
@@ -191,12 +216,14 @@ type Info struct {
 	Notes          string `json:"notes,omitempty"`
 	Mandatory      bool   `json:"mandatory"`
 	Force          bool   `json:"force"`
-	Available      bool   `json:"available"`
-	HasWeb         bool   `json:"hasWeb"`
-	HasApp         bool   `json:"hasApp"`
-	WebVersion     string `json:"webVersion,omitempty"`
-	AppVersion     string `json:"appVersion,omitempty"`
-	Published      string `json:"publishedAt,omitempty"`
+	// Tag summarizes the update policy: "force", "mandatory" or "optional".
+	Tag        string `json:"tag"`
+	Available  bool   `json:"available"`
+	HasWeb     bool   `json:"hasWeb"`
+	HasApp     bool   `json:"hasApp"`
+	WebVersion string `json:"webVersion,omitempty"`
+	AppVersion string `json:"appVersion,omitempty"`
+	Published  string `json:"publishedAt,omitempty"`
 }
 
 // ErrNotConfigured is returned when no release manifest URL was baked in.
@@ -236,6 +263,14 @@ func Check(ctx context.Context, currentVersion, currentWebVersion string) (Info,
 	result.Notes = manifest.Notes
 	result.Mandatory = manifest.Mandatory
 	result.Force = manifest.Force
+	switch {
+	case manifest.Force:
+		result.Tag = "force"
+	case manifest.Mandatory:
+		result.Tag = "mandatory"
+	default:
+		result.Tag = "optional"
+	}
 	result.Published = manifest.Published
 	if compareVersions(manifest.Version, currentVersion) > 0 {
 		result.Available = true
@@ -376,6 +411,11 @@ func fetchSignature(ctx context.Context, client *http.Client, header string) ([]
 // ApplyWeb downloads, verifies and swaps the front-end web package. The
 // previous directory is kept as web.old for manual rollback.
 func ApplyWeb(ctx context.Context, root string) (string, error) {
+	return ApplyWebWithProgress(ctx, root, nil)
+}
+
+// ApplyWebWithProgress is ApplyWeb with download/apply progress callbacks.
+func ApplyWebWithProgress(ctx context.Context, root string, progress ProgressFunc) (string, error) {
 	if !configured() {
 		return "", ErrNotConfigured
 	}
@@ -395,9 +435,10 @@ func ApplyWeb(ctx context.Context, root string) (string, error) {
 		return "", err
 	}
 	zipPath := filepath.Join(cache, "web-"+safeVersion(artifact.Version)+".zip")
-	if err := download(ctx, artifact, zipPath); err != nil {
+	if err := download(ctx, artifact, zipPath, progress); err != nil {
 		return "", err
 	}
+	reportProgress(progress, "extract", 0, 0)
 	staging, err := os.MkdirTemp(cache, "web-staging-*")
 	if err != nil {
 		return "", err
@@ -422,19 +463,25 @@ func ApplyWeb(ctx context.Context, root string) (string, error) {
 		_ = os.Rename(backup, dest)
 		return "", fmt.Errorf("应用前端热更新失败: %w", err)
 	}
+	reportProgress(progress, "done", 1, 1)
 	return dest, nil
 }
 
 // ApplyApp downloads and verifies a new executable, then starts a detached
 // PowerShell helper that waits for this process to exit before replacing it.
 func ApplyApp(ctx context.Context, root, currentExe, currentVersion string) (string, error) {
-	return ApplyAppWithGuard(ctx, root, currentExe, currentVersion, nil)
+	return ApplyAppWithGuardProgress(ctx, root, currentExe, currentVersion, nil, nil)
 }
 
 // ApplyAppWithGuard is ApplyApp with a final guard invoked after the download
-// completes and before the detached replacement helper is started. The launcher
-// uses it to abort if a Minecraft process started during the download.
+// completes and before the detached replacement helper is started.
 func ApplyAppWithGuard(ctx context.Context, root, currentExe, currentVersion string, guard func() error) (string, error) {
+	return ApplyAppWithGuardProgress(ctx, root, currentExe, currentVersion, guard, nil)
+}
+
+// ApplyAppWithGuardProgress is ApplyAppWithGuard with download progress
+// callbacks for the UI.
+func ApplyAppWithGuardProgress(ctx context.Context, root, currentExe, currentVersion string, guard func() error, progress ProgressFunc) (string, error) {
 	if runtime.GOOS != "windows" {
 		return "", errors.New("自动替换当前仅支持 Windows")
 	}
@@ -460,7 +507,7 @@ func ApplyAppWithGuard(ctx context.Context, root, currentExe, currentVersion str
 		return "", err
 	}
 	newExe := filepath.Join(cache, "MyMinecraftGoLuncher-"+safeVersion(artifact.Version)+".exe")
-	if err := download(ctx, artifact, newExe); err != nil {
+	if err := download(ctx, artifact, newExe, progress); err != nil {
 		return "", err
 	}
 	if guard != nil {
@@ -468,59 +515,162 @@ func ApplyAppWithGuard(ctx context.Context, root, currentExe, currentVersion str
 			return "", err
 		}
 	}
+	reportProgress(progress, "prepare", 0, 0)
 	script := filepath.Join(cache, "apply-update.ps1")
-	content := fmt.Sprintf(`param([int]$TargetPid, [string]$NewExe, [string]$TargetExe)
-$ErrorActionPreference = 'Stop'
-$targetDir = Split-Path -Parent $TargetExe
-$backup = $TargetExe + '.bak'
-$log = Join-Path $targetDir 'update-error.log'
-try {
-  Wait-Process -Id $TargetPid -Timeout 120 -ErrorAction SilentlyContinue
-  Start-Sleep -Milliseconds 500
-  if (Get-Process -Id $TargetPid -ErrorAction SilentlyContinue) {
-    throw '启动器仍在运行，已取消替换'
-  }
-  Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
-  Copy-Item -LiteralPath $TargetExe -Destination $backup -Force -ErrorAction Stop
-  $copied = $false
-  for ($i = 0; $i -lt 80; $i++) {
-    try {
-      Copy-Item -LiteralPath $NewExe -Destination $TargetExe -Force
-      $copied = $true
-      break
-    } catch {
-      Start-Sleep -Milliseconds 250
-    }
-  }
-  if (-not $copied) {
-    throw '无法替换程序文件，目标文件仍被占用'
-  }
-  Start-Process -FilePath $TargetExe -WorkingDirectory $targetDir
-} catch {
-  Add-Content -LiteralPath $log -Value ('[' + (Get-Date).ToString('s') + '] ' + $_.Exception.Message) -ErrorAction SilentlyContinue
-  if (Test-Path -LiteralPath $backup) {
-    Copy-Item -LiteralPath $backup -Destination $TargetExe -Force -ErrorAction SilentlyContinue
-  }
-  Start-Process -FilePath $TargetExe -WorkingDirectory $targetDir -ErrorAction SilentlyContinue
-} finally {
-  Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
-}
-`)
+	// Windows PowerShell 5.1 reads BOM-less scripts as ANSI; the Chinese log
+	// messages below would then break parsing. Always write a UTF-8 BOM.
+	content := applyUpdateScriptContent()
 	if err := os.WriteFile(script, []byte(content), 0o600); err != nil {
 		return "", err
 	}
 	cmd := exec.Command("powershell.exe",
-		"-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
 		"-File", script, "-TargetPid", strconv.Itoa(os.Getpid()),
 		"-NewExe", newExe, "-TargetExe", currentExe,
+		"-ExpectedSHA256", strings.TrimSpace(artifact.SHA256),
 	)
 	sysutil.HideWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("启动更新助手失败: %w", err)
 	}
 	_ = cmd.Process.Release()
+	reportProgress(progress, "restart", 1, 1)
 	return script, nil
 }
+
+// applyUpdateScriptContent prefixes the helper with a UTF-8 BOM so Windows
+// PowerShell 5.1 does not parse the Chinese log strings as ANSI.
+func applyUpdateScriptContent() string {
+	return "\ufeff" + applyUpdateScript
+}
+
+const applyUpdateScript = `param(
+  [int]$TargetPid,
+  [string]$NewExe,
+  [string]$TargetExe,
+  [string]$ExpectedSHA256 = ''
+)
+$ErrorActionPreference = 'Stop'
+$targetDir = Split-Path -Parent $TargetExe
+$backup = $TargetExe + '.bak'
+$errorLog = Join-Path $targetDir 'update-error.log'
+$fallbackLog = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'MyGoLuncher/update-error.log'
+
+function Write-UpdateLog([string]$Message) {
+  $line = '[' + (Get-Date).ToString('s') + '] ' + $Message
+  try {
+    Add-Content -LiteralPath $errorLog -Value $line -ErrorAction Stop
+  } catch {
+    try {
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fallbackLog) | Out-Null
+      Add-Content -LiteralPath $fallbackLog -Value $line -ErrorAction SilentlyContinue
+    } catch {}
+  }
+}
+
+function Test-ProcessAlive([int]$ProcessId) {
+  try { return [bool](Get-Process -Id $ProcessId -ErrorAction Stop) } catch { return $false }
+}
+
+function Test-Writable([string]$Path) {
+  $probe = Join-Path $Path '.mgl-update-write-test'
+  try {
+    [IO.File]::WriteAllText($probe, 'ok')
+    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+function Test-Elevated {
+  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+# Program Files installs need elevation to replace the executable. Relaunch the
+# same helper through UAC once; if the prompt is cancelled, restart the old app.
+if (-not (Test-Writable $targetDir)) {
+  if (-not (Test-Elevated)) {
+    try {
+      Write-UpdateLog "目标目录不可写，正在请求管理员权限: $targetDir"
+      $quote = { param([string]$value) '"' + $value.Replace('"', '\"') + '"' }
+      $argLine = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ' +
+        (& $quote $PSCommandPath) + ' -TargetPid ' + $TargetPid +
+        ' -NewExe ' + (& $quote $NewExe) +
+        ' -TargetExe ' + (& $quote $TargetExe) +
+        ' -ExpectedSHA256 ' + (& $quote $ExpectedSHA256)
+      Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argLine
+      exit
+    } catch {
+      Write-UpdateLog ('无法请求管理员权限: ' + $_.Exception.Message)
+      Start-Process -FilePath $TargetExe -WorkingDirectory $targetDir -ErrorAction SilentlyContinue
+      exit 1
+    }
+  }
+}
+
+try {
+  Write-UpdateLog "等待启动器退出: $TargetPid"
+  $deadline = (Get-Date).AddSeconds(180)
+  while ((Test-ProcessAlive $TargetPid) -and ((Get-Date) -lt $deadline)) {
+    Start-Sleep -Milliseconds 250
+  }
+  if (Test-ProcessAlive $TargetPid) {
+    throw '启动器仍在运行，已取消替换'
+  }
+  Start-Sleep -Milliseconds 800
+
+  if (-not (Test-Path -LiteralPath $NewExe)) {
+    throw "新版本文件不存在: $NewExe"
+  }
+  if (-not (Test-Path -LiteralPath $TargetExe)) {
+    throw "目标程序不存在: $TargetExe"
+  }
+
+  $probe = Join-Path $targetDir '.mgl-update-write-test'
+  try {
+    [IO.File]::WriteAllText($probe, 'ok')
+    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+  } catch {
+    throw "目标目录不可写，请将启动器移动到用户目录，或以管理员身份运行更新: $targetDir"
+  }
+
+  Copy-Item -LiteralPath $TargetExe -Destination $backup -Force -ErrorAction Stop
+  $copied = $false
+  $lastError = $null
+  for ($i = 0; $i -lt 120; $i++) {
+    try {
+      Copy-Item -LiteralPath $NewExe -Destination $TargetExe -Force -ErrorAction Stop
+      $copied = $true
+      break
+    } catch {
+      $lastError = $_.Exception.Message
+      Start-Sleep -Milliseconds 250
+    }
+  }
+  if (-not $copied) {
+    throw "无法替换程序文件: $lastError"
+  }
+
+  if (-not [string]::IsNullOrWhiteSpace($ExpectedSHA256)) {
+    $actual = (Get-FileHash -LiteralPath $TargetExe -Algorithm SHA256).Hash
+    if ($actual -ne $ExpectedSHA256.ToUpperInvariant()) {
+      throw "替换后 SHA256 校验失败: $actual"
+    }
+  }
+
+  Write-UpdateLog '替换完成，正在重启启动器'
+  Start-Process -FilePath $TargetExe -WorkingDirectory $targetDir
+} catch {
+  Write-UpdateLog ('ERROR: ' + $_.Exception.Message)
+  if (Test-Path -LiteralPath $backup) {
+    Copy-Item -LiteralPath $backup -Destination $TargetExe -Force -ErrorAction SilentlyContinue
+  }
+  Start-Process -FilePath $TargetExe -WorkingDirectory $targetDir -ErrorAction SilentlyContinue
+}
+`
 
 func validateRemoteURL(raw string) error {
 	parsed, err := url.Parse(raw)
@@ -536,7 +686,7 @@ func validateRemoteURL(raw string) error {
 	return errors.New("更新地址必须使用 HTTPS")
 }
 
-func download(ctx context.Context, artifact Artifact, dest string) error {
+func download(ctx context.Context, artifact Artifact, dest string, progress ProgressFunc) error {
 	if err := validateRemoteURL(artifact.URL); err != nil {
 		return err
 	}
@@ -553,13 +703,26 @@ func download(ctx context.Context, artifact Artifact, dest string) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("更新包返回 HTTP %d", resp.StatusCode)
 	}
+	total := artifact.Size
+	if total <= 0 {
+		total = resp.ContentLength
+	}
+	if total < 0 {
+		total = 0
+	}
 	file, err := os.Create(dest)
 	if err != nil {
 		return err
 	}
 	hash := sha256.New()
 	limit := int64(1 << 30)
-	written, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(resp.Body, limit))
+	reportProgress(progress, "download", 0, total)
+	writer := &progressWriter{
+		writer: io.MultiWriter(file, hash),
+		total:  total,
+		report: func(done, total int64) { reportProgress(progress, "download", done, total) },
+	}
+	written, copyErr := io.Copy(writer, io.LimitReader(resp.Body, limit))
 	closeErr := file.Close()
 	if copyErr != nil {
 		_ = os.Remove(dest)
@@ -569,16 +732,38 @@ func download(ctx context.Context, artifact Artifact, dest string) error {
 		_ = os.Remove(dest)
 		return closeErr
 	}
+	reportProgress(progress, "download", written, total)
 	if artifact.Size > 0 && written != artifact.Size {
 		_ = os.Remove(dest)
 		return fmt.Errorf("更新包大小不匹配: %d != %d", written, artifact.Size)
 	}
+	reportProgress(progress, "verify", written, written)
 	got := hex.EncodeToString(hash.Sum(nil))
 	if !strings.EqualFold(got, strings.TrimSpace(artifact.SHA256)) {
 		_ = os.Remove(dest)
 		return errors.New("更新包 SHA256 校验失败")
 	}
 	return nil
+}
+
+type progressWriter struct {
+	writer io.Writer
+	done   int64
+	total  int64
+	report func(done, total int64)
+	last   time.Time
+}
+
+func (w *progressWriter) Write(data []byte) (int, error) {
+	n, err := w.writer.Write(data)
+	w.done += int64(n)
+	now := time.Now()
+	// Emit at most ~10 progress events per second.
+	if w.report != nil && (now.Sub(w.last) >= 100*time.Millisecond || (w.total > 0 && w.done >= w.total)) {
+		w.report(w.done, w.total)
+		w.last = now
+	}
+	return n, err
 }
 
 // CurrentWebVersion reads the version marker left by ApplyWeb.
