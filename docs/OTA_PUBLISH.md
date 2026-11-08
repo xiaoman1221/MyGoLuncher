@@ -10,7 +10,7 @@ GitHub Actions 在三个平台构建完成后，会登录 LicensingGo、上传�
 
 | 输入 | 默认 | 说明 |
 | --- | --- | --- |
-| `version` | `1.4.1` | 发布版本，必须与仓库版本字段一致 |
+| `version` | `1.0.5` | 发布版本，必须与仓库版本字段一致 |
 | `publish` | `false` | 是否创建 GitHub Release |
 | `update_ota` | `true` | 是否上传产物并更新 LicensingGo OTA |
 | `ota_tag` | `optional` | 更新策略：`optional` / `mandatory` / `force` |
