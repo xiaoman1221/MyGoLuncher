@@ -13,6 +13,7 @@ import (
 
 	apppkg "MyMinecraftGoLuncher/internal/app"
 	"MyMinecraftGoLuncher/internal/store"
+	updaterpkg "MyMinecraftGoLuncher/internal/updater"
 )
 
 //go:embed all:frontend/dist
@@ -50,6 +51,11 @@ func webRoot() fs.FS {
 }
 
 func main() {
+	// The downloaded new executable doubles as the detached update helper.
+	// This avoids PowerShell, execution policies and script encoding issues.
+	if updaterpkg.RunHelperIfRequested(os.Args[1:]) {
+		return
+	}
 	application := apppkg.NewApp()
 	err := wails.Run(&options.App{
 		Title:            "MyGoLuncher",

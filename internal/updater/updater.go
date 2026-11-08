@@ -516,161 +516,28 @@ func ApplyAppWithGuardProgress(ctx context.Context, root, currentExe, currentVer
 		}
 	}
 	reportProgress(progress, "prepare", 0, 0)
-	script := filepath.Join(cache, "apply-update.ps1")
-	// Windows PowerShell 5.1 reads BOM-less scripts as ANSI; the Chinese log
-	// messages below would then break parsing. Always write a UTF-8 BOM.
-	content := applyUpdateScriptContent()
-	if err := os.WriteFile(script, []byte(content), 0o600); err != nil {
-		return "", err
-	}
-	cmd := exec.Command("powershell.exe",
-		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-		"-File", script, "-TargetPid", strconv.Itoa(os.Getpid()),
-		"-NewExe", newExe, "-TargetExe", currentExe,
-		"-ExpectedSHA256", strings.TrimSpace(artifact.SHA256),
+	// Old versions used a PowerShell helper; remove it so stale scripts cannot
+	// be run by mistake.
+	_ = os.Remove(filepath.Join(cache, "apply-update.ps1"))
+	// Launch the verified new executable in helper mode. It waits for this
+	// process to exit, replaces the target, verifies the hash and restarts it.
+	// This avoids PowerShell, execution policies and script encoding issues.
+	cmd := exec.Command(newExe,
+		"--mgl-apply-update",
+		"--pid", strconv.Itoa(os.Getpid()),
+		"--target", currentExe,
+		"--source", newExe,
+		"--sha256", strings.TrimSpace(artifact.SHA256),
 	)
+	cmd.Dir = filepath.Dir(currentExe)
 	sysutil.HideWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("启动更新助手失败: %w", err)
 	}
 	_ = cmd.Process.Release()
 	reportProgress(progress, "restart", 1, 1)
-	return script, nil
+	return newExe, nil
 }
-
-// applyUpdateScriptContent prefixes the helper with a UTF-8 BOM so Windows
-// PowerShell 5.1 does not parse the Chinese log strings as ANSI.
-func applyUpdateScriptContent() string {
-	return "\ufeff" + applyUpdateScript
-}
-
-const applyUpdateScript = `param(
-  [int]$TargetPid,
-  [string]$NewExe,
-  [string]$TargetExe,
-  [string]$ExpectedSHA256 = ''
-)
-$ErrorActionPreference = 'Stop'
-$targetDir = Split-Path -Parent $TargetExe
-$backup = $TargetExe + '.bak'
-$errorLog = Join-Path $targetDir 'update-error.log'
-$fallbackLog = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'MyGoLuncher/update-error.log'
-
-function Write-UpdateLog([string]$Message) {
-  $line = '[' + (Get-Date).ToString('s') + '] ' + $Message
-  try {
-    Add-Content -LiteralPath $errorLog -Value $line -ErrorAction Stop
-  } catch {
-    try {
-      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $fallbackLog) | Out-Null
-      Add-Content -LiteralPath $fallbackLog -Value $line -ErrorAction SilentlyContinue
-    } catch {}
-  }
-}
-
-function Test-ProcessAlive([int]$ProcessId) {
-  try { return [bool](Get-Process -Id $ProcessId -ErrorAction Stop) } catch { return $false }
-}
-
-function Test-Writable([string]$Path) {
-  $probe = Join-Path $Path '.mgl-update-write-test'
-  try {
-    [IO.File]::WriteAllText($probe, 'ok')
-    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
-    return $true
-  } catch {
-    return $false
-  }
-}
-
-function Test-Elevated {
-  $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-  $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-  return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
-# Program Files installs need elevation to replace the executable. Relaunch the
-# same helper through UAC once; if the prompt is cancelled, restart the old app.
-if (-not (Test-Writable $targetDir)) {
-  if (-not (Test-Elevated)) {
-    try {
-      Write-UpdateLog "目标目录不可写，正在请求管理员权限: $targetDir"
-      $quote = { param([string]$value) '"' + $value.Replace('"', '\"') + '"' }
-      $argLine = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ' +
-        (& $quote $PSCommandPath) + ' -TargetPid ' + $TargetPid +
-        ' -NewExe ' + (& $quote $NewExe) +
-        ' -TargetExe ' + (& $quote $TargetExe) +
-        ' -ExpectedSHA256 ' + (& $quote $ExpectedSHA256)
-      Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argLine
-      exit
-    } catch {
-      Write-UpdateLog ('无法请求管理员权限: ' + $_.Exception.Message)
-      Start-Process -FilePath $TargetExe -WorkingDirectory $targetDir -ErrorAction SilentlyContinue
-      exit 1
-    }
-  }
-}
-
-try {
-  Write-UpdateLog "等待启动器退出: $TargetPid"
-  $deadline = (Get-Date).AddSeconds(180)
-  while ((Test-ProcessAlive $TargetPid) -and ((Get-Date) -lt $deadline)) {
-    Start-Sleep -Milliseconds 250
-  }
-  if (Test-ProcessAlive $TargetPid) {
-    throw '启动器仍在运行，已取消替换'
-  }
-  Start-Sleep -Milliseconds 800
-
-  if (-not (Test-Path -LiteralPath $NewExe)) {
-    throw "新版本文件不存在: $NewExe"
-  }
-  if (-not (Test-Path -LiteralPath $TargetExe)) {
-    throw "目标程序不存在: $TargetExe"
-  }
-
-  $probe = Join-Path $targetDir '.mgl-update-write-test'
-  try {
-    [IO.File]::WriteAllText($probe, 'ok')
-    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
-  } catch {
-    throw "目标目录不可写，请将启动器移动到用户目录，或以管理员身份运行更新: $targetDir"
-  }
-
-  Copy-Item -LiteralPath $TargetExe -Destination $backup -Force -ErrorAction Stop
-  $copied = $false
-  $lastError = $null
-  for ($i = 0; $i -lt 120; $i++) {
-    try {
-      Copy-Item -LiteralPath $NewExe -Destination $TargetExe -Force -ErrorAction Stop
-      $copied = $true
-      break
-    } catch {
-      $lastError = $_.Exception.Message
-      Start-Sleep -Milliseconds 250
-    }
-  }
-  if (-not $copied) {
-    throw "无法替换程序文件: $lastError"
-  }
-
-  if (-not [string]::IsNullOrWhiteSpace($ExpectedSHA256)) {
-    $actual = (Get-FileHash -LiteralPath $TargetExe -Algorithm SHA256).Hash
-    if ($actual -ne $ExpectedSHA256.ToUpperInvariant()) {
-      throw "替换后 SHA256 校验失败: $actual"
-    }
-  }
-
-  Write-UpdateLog '替换完成，正在重启启动器'
-  Start-Process -FilePath $TargetExe -WorkingDirectory $targetDir
-} catch {
-  Write-UpdateLog ('ERROR: ' + $_.Exception.Message)
-  if (Test-Path -LiteralPath $backup) {
-    Copy-Item -LiteralPath $backup -Destination $TargetExe -Force -ErrorAction SilentlyContinue
-  }
-  Start-Process -FilePath $TargetExe -WorkingDirectory $targetDir -ErrorAction SilentlyContinue
-}
-`
 
 func validateRemoteURL(raw string) error {
 	parsed, err := url.Parse(raw)
