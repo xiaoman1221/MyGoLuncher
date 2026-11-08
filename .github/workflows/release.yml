@@ -151,7 +151,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-web
-          path: dist/MyGoLuncher-$VERSION-web.zip
+          path: dist/MyGoLuncher-${{ needs.meta.outputs.version }}-web.zip
           if-no-files-found: error
 
   build:
